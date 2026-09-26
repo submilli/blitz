@@ -42,6 +42,7 @@ pub mod mutations;
 /// The nodes themsleves, and their data.
 pub mod node;
 
+mod clock;
 mod config;
 /// CSSOM stylesheet access (`document.styleSheets`, `CSSStyleSheet`, `CSSRule`)
 mod cssom;
@@ -95,6 +96,9 @@ pub use crate::node::Widget;
 pub use blitz_traits::node_id::NodeId;
 // Re-export taffy: it is part of blitz-dom's public API (e.g. `Node::style`,
 // `Node::final_layout`)
+pub use clock::{Clock, FrozenClock};
+#[cfg(feature = "system-clock")]
+pub use clock::SystemClock;
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{BaseDocument, DocGuard, DocGuardMut, Document, PlainDocument};
 pub use markup5ever::{

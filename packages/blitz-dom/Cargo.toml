@@ -17,7 +17,8 @@ default = [
     "accessibility",
     "system-fonts",
     "file-input",
-    "custom-widget"
+    "custom-widget",
+    "system-clock"
 ]
 custom-widget = ["dep:anyrender", "accessibility"]
 tracing = ["dep:tracing"]
@@ -26,6 +27,9 @@ svg = ["dep:usvg", "dep:svgtypes"]
 woff = ["dep:wuff"]
 accessibility = ["accesskit"]
 system-fonts = ["parley/system"]
+# `SystemClock`, the default document clock. Without it, documents default to
+# a `FrozenClock` unless the embedder supplies one.
+system-clock = ["dep:web-time"]
 # complex-scripts: enable dictionary-based line-breaking
 complex-scripts = ["parley/complex-scripts"]
 autofocus = []
@@ -92,7 +96,7 @@ cursor-icon = { workspace = true }
 thread_local = { workspace = true }
 
 # WASM
-web-time = { workspace = true }
+web-time = { workspace = true, optional = true }
 
 # HACK: Blitz doesn't need to depend on objc2 directly. But this feature flag is necessary
 # to prevent debug builds from panicking.

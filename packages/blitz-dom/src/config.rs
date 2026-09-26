@@ -1,5 +1,6 @@
 use crate::HtmlParserProvider;
 use blitz_traits::{
+    clock::Clock,
     navigation::NavigationProvider,
     net::{AbortSignal, NetProvider},
     shell::{ShellProvider, Viewport},
@@ -63,6 +64,10 @@ pub struct DocumentConfig {
     /// document will carry this signal. Aborting it cancels every in-flight
     /// fetch tied to this document.
     pub abort_signal: Option<AbortSignal>,
+    /// Where the document reads the current time from. Defaults to
+    /// [`SystemClock`](crate::SystemClock) with the `system-clock` feature,
+    /// and to a [`FrozenClock`](blitz_traits::clock::FrozenClock) without it.
+    pub clock: Option<Arc<dyn Clock>>,
     /// How deeply this document is nested within other documents
     /// (0 for a root document). Used to limit `<iframe>` nesting depth.
     pub subdocument_depth: usize,

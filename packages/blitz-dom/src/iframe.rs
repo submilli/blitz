@@ -71,6 +71,7 @@ impl BaseDocument {
             style_threading: self.style_threading,
             incremental: Some(self.incremental_layout),
             abort_signal: Some(abort_signal),
+            clock: Some(self.clock.clone()),
             subdocument_depth: self.subdocument_depth + 1,
         }
     }

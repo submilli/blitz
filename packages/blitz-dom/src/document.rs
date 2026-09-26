@@ -19,6 +19,7 @@ use crate::{
     EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, StyleThreading,
     TextNodeData,
 };
+use crate::clock::{Clock, default_clock};
 use blitz_traits::devtools::DevtoolSettings;
 use blitz_traits::events::{DomEvent, HitResult, UiEvent};
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
@@ -68,7 +69,6 @@ use style::{
 use style_dom::ElementState;
 use thin_vec::ThinVec;
 use url::Url;
-use web_time::Instant;
 
 #[cfg(feature = "parallel-construct")]
 use thread_local::ThreadLocal;
@@ -268,7 +268,7 @@ pub struct BaseDocument {
     /// The node which recieved a mousedown event (if any)
     pub(crate) mousedown_node_id: Option<NodeId>,
     /// The last time a mousedown was made (for double-click detection)
-    pub(crate) last_mousedown_time: Option<Instant>,
+    pub(crate) last_mousedown_time: Option<f64>,
     /// The position where mousedown occurred (for selection drags and double-click detection)
     pub(crate) mousedown_position: taffy::Point<f32>,
     /// How many clicks have been made in quick succession
@@ -279,7 +279,7 @@ pub struct BaseDocument {
     pub(crate) hovered_scrollbar: Option<crate::node::ScrollbarRef>,
     /// When each scroll container's overlay scrollbars were last shown
     /// (scrolled, or the pointer left the thumb); drives their fade-out
-    pub(crate) scrollbar_activity: HashMap<NodeId, Instant>,
+    pub(crate) scrollbar_activity: HashMap<NodeId, f64>,
     /// Whether and what kind of scroll animation is currently in progress
     pub(crate) scroll_animation: ScrollAnimationState,
 
@@ -365,6 +365,8 @@ pub struct BaseDocument {
     pub shell_provider: Arc<dyn ShellProvider>,
     /// HTML parser provider. Used to parse HTML for setInnerHTML
     pub html_parser_provider: Arc<dyn HtmlParserProvider>,
+    /// Where "now" comes from. Set via [`DocumentConfig::clock`].
+    pub clock: Arc<dyn Clock>,
     /// Carried on every sub-resource `Request` this document issues; aborting
     /// it cancels all in-flight fetches tied to this document. Set via
     /// [`DocumentConfig::abort_signal`].
@@ -438,6 +440,7 @@ impl BaseDocument {
         let shell_provider = config
             .shell_provider
             .unwrap_or_else(|| Arc::new(DummyShellProvider));
+        let clock = config.clock.unwrap_or_else(default_clock);
         let html_parser_provider = config
             .html_parser_provider
             .unwrap_or_else(|| Arc::new(DummyHtmlParserProvider));
@@ -506,6 +509,7 @@ impl BaseDocument {
             navigation_provider,
             shell_provider,
             html_parser_provider,
+            clock,
             abort_signal: config.abort_signal,
             last_mousedown_time: None,
             mousedown_position: taffy::Point::ZERO,
@@ -1807,8 +1811,8 @@ impl BaseDocument {
         {
             return 1.0;
         }
-        self.scrollbar_activity.get(&node_id).map_or(0.0, |last| {
-            crate::node::scrollbar::opacity_at(last.elapsed())
+        self.scrollbar_activity.get(&node_id).map_or(0.0, |&last| {
+            crate::node::scrollbar::opacity_at(self.elapsed_since(last))
         })
     }
 
@@ -1816,7 +1820,8 @@ impl BaseDocument {
     /// fade-out delay.
     pub(crate) fn show_scrollbars(&mut self, node_id: NodeId) {
         if cfg!(feature = "scrollbars") {
-            self.scrollbar_activity.insert(node_id, Instant::now());
+            let now = self.now_ms();
+            self.scrollbar_activity.insert(node_id, now);
         }
     }
 
@@ -1826,7 +1831,17 @@ impl BaseDocument {
         use crate::node::scrollbar::{FADE_DELAY, FADE_DURATION};
         self.scrollbar_activity
             .values()
-            .any(|last| last.elapsed() < FADE_DELAY + FADE_DURATION)
+            .any(|&last| self.elapsed_since(last) < FADE_DELAY + FADE_DURATION)
+    }
+
+    /// The current time on the document's [`Clock`], in milliseconds.
+    pub fn now_ms(&self) -> f64 {
+        self.clock.now_ms()
+    }
+
+    /// Time since `earlier` (a [`now_ms`](Self::now_ms) reading).
+    pub(crate) fn elapsed_since(&self, earlier: f64) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(((self.now_ms() - earlier) / 1000.0).max(0.0))
     }
 
     /// [`hit`](Self::hit), also resolving the innermost overlay scrollbar

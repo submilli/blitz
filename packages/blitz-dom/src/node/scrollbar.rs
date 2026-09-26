@@ -5,7 +5,7 @@
 use blitz_traits::node_id::NodeId;
 use kurbo::Rect as KurboRect;
 use taffy::AbsoluteAxis;
-use web_time::Duration;
+use std::time::Duration;
 
 use super::Node;
 

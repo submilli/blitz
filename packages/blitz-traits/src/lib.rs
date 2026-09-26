@@ -1,6 +1,7 @@
 //! Types and traits to enable interoperability between the other Blitz crates without
 //! circular or unnecessary dependencies.
 
+pub mod clock;
 pub mod devtools;
 pub mod events;
 pub mod navigation;
