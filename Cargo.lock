@@ -978,6 +978,7 @@ dependencies = [
 name = "blitz-html"
 version = "0.3.0-beta.2"
 dependencies = [
+ "accesskit",
  "blitz-dom",
  "blitz-traits",
  "html5ever",
