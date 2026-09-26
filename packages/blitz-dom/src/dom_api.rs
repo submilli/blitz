@@ -20,6 +20,8 @@ pub enum DomError {
     NotFound,
     NotSupported,
     InvalidCharacter,
+    Syntax,
+    NoModificationAllowed,
 }
 
 impl DomError {
@@ -30,6 +32,8 @@ impl DomError {
             Self::NotFound => "NotFoundError",
             Self::NotSupported => "NotSupportedError",
             Self::InvalidCharacter => "InvalidCharacterError",
+            Self::Syntax => "SyntaxError",
+            Self::NoModificationAllowed => "NoModificationAllowedError",
         }
     }
 }
@@ -46,6 +50,58 @@ pub mod node_type {
 }
 
 impl BaseDocument {
+    /// Evaluate a media query list (`matchMedia`) against the document's
+    /// current device (viewport, media type).
+    pub fn evaluate_media_query(&mut self, query: &str) -> bool {
+        use style::media_queries::MediaList;
+        use style::parser::ParserContext;
+        use style::stylesheets::{CssRuleType, Origin};
+        use style_traits::ParsingMode;
+        let url_data = self.url.url_extra_data();
+        let mut input = cssparser::ParserInput::new(query);
+        let mut parser = cssparser::Parser::new(&mut input);
+        let mut context = ParserContext::new(
+            Origin::Author,
+            &url_data,
+            Some(CssRuleType::Media),
+            ParsingMode::DEFAULT,
+            selectors::matching::QuirksMode::NoQuirks,
+            Default::default(),
+            None,
+            None,
+            Default::default(),
+        );
+        let list = MediaList::parse(&mut context, &mut parser);
+        let device = self.stylist_device();
+        list.evaluate(
+            device,
+            selectors::matching::QuirksMode::NoQuirks,
+            &mut style::stylesheets::CustomMediaEvaluator::none(),
+        )
+    }
+
+    /// Serialize a media query list as `MediaQueryList.media` does.
+    pub fn serialize_media_query(&self, query: &str) -> String {
+        use style::media_queries::MediaList;
+        use style::parser::ParserContext;
+        use style::stylesheets::{CssRuleType, Origin};
+        use style_traits::{ParsingMode, ToCss};
+        let url_data = self.url.url_extra_data();
+        let mut input = cssparser::ParserInput::new(query);
+        let mut parser = cssparser::Parser::new(&mut input);
+        let mut context = ParserContext::new(
+            Origin::Author,
+            &url_data,
+            Some(CssRuleType::Media),
+            ParsingMode::DEFAULT,
+            selectors::matching::QuirksMode::NoQuirks,
+            Default::default(),
+            None,
+            None,
+            Default::default(),
+        );
+        MediaList::parse(&mut context, &mut parser).to_css_string()
+    }
 
     /// `Node.nodeType`
     pub fn node_type(&self, id: NodeId) -> u16 {
@@ -650,6 +706,48 @@ impl DocumentMutator<'_> {
             .html_parser_provider
             .clone()
             .parse_inner_html(self, target, html);
+    }
+
+    /// `Element.insertAdjacentHTML(position, html)`: parse `html` as a
+    /// fragment in the right context element and insert the result.
+    pub fn insert_adjacent_html(&mut self, id: NodeId, position: &str, html: &str) -> Result<(), DomError> {
+        let parent = self.doc.nodes[id].parent;
+        let (context, target_parent, anchor) = match position.to_ascii_lowercase().as_str() {
+            "beforebegin" | "afterend" => {
+                let parent = parent.ok_or(DomError::NoModificationAllowed)?;
+                if self.doc.node_type(parent) == node_type::DOCUMENT {
+                    return Err(DomError::NoModificationAllowed);
+                }
+                let anchor = if position.eq_ignore_ascii_case("beforebegin") {
+                    Some(id)
+                } else {
+                    self.next_sibling_id(id)
+                };
+                (parent, parent, anchor)
+            }
+            "afterbegin" => (id, id, self.doc.nodes[id].children.first().copied()),
+            "beforeend" => (id, id, None),
+            _ => return Err(DomError::Syntax),
+        };
+        // Parse into a detached element named like the context element.
+        let context_name = self.doc.nodes[context]
+            .element_data()
+            .map(|el| el.name.clone())
+            .unwrap_or_else(|| QualName::new(None, ns!(html), markup5ever::local_name!("body")));
+        let scratch = self.create_element(context_name, Vec::new());
+        self.doc
+            .html_parser_provider
+            .clone()
+            .parse_inner_html(self, scratch, html);
+        let parsed = self.doc.nodes[scratch].children.to_vec();
+        if !parsed.is_empty() {
+            match anchor {
+                Some(anchor) => self.insert_nodes_before(anchor, &parsed),
+                None => self.append_children(target_parent, &parsed),
+            }
+        }
+        self.remove_and_drop_node(scratch);
+        Ok(())
     }
 
     /// `Node.cloneNode(deep)`: the clone is detached.
