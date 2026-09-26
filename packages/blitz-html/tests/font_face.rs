@@ -27,8 +27,7 @@ fn requested_fonts(css: &str) -> Vec<String> {
     let mut doc = BaseDocument::new(config);
     DocumentHtmlParser::parse_into_mutator(&mut doc.mutate(), &format!("<style>{css}</style>"));
     doc.resolve(0.0);
-    let urls = net.0.lock().unwrap().clone();
-    urls
+    net.0.lock().unwrap().clone()
 }
 
 #[test]
