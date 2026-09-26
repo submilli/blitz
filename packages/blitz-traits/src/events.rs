@@ -145,6 +145,7 @@ pub enum DomEventKind {
     KeyDown,
     KeyUp,
     Input,
+    Change,
     Ime,
 
     Focus,
@@ -196,6 +197,7 @@ impl FromStr for DomEventKind {
             "keydown" => Ok(Self::KeyDown),
             "keyup" => Ok(Self::KeyUp),
             "input" => Ok(Self::Input),
+            "change" => Ok(Self::Change),
             "composition" => Ok(Self::Ime),
 
             "focus" => Ok(Self::Focus),
@@ -243,6 +245,8 @@ pub enum DomEventData {
     KeyDown(BlitzKeyEvent),
     KeyUp(BlitzKeyEvent),
     Input(BlitzInputEvent),
+    /// A committed change to a form control's value (`change`).
+    Change(BlitzInputEvent),
     Ime(BlitzImeEvent),
 
     Focus(BlitzFocusEvent),
@@ -298,6 +302,7 @@ impl DomEventData {
             Self::KeyDown { .. } => "keydown",
             Self::KeyUp { .. } => "keyup",
             Self::Input { .. } => "input",
+            Self::Change { .. } => "change",
             Self::Ime { .. } => "composition",
 
             Self::Focus { .. } => "focus",
@@ -344,6 +349,7 @@ impl DomEventData {
             Self::KeyDown { .. } => DomEventKind::KeyDown,
             Self::KeyUp { .. } => DomEventKind::KeyUp,
             Self::Input { .. } => DomEventKind::Input,
+            Self::Change { .. } => DomEventKind::Change,
             Self::Ime { .. } => DomEventKind::Ime,
 
             Self::Focus { .. } => DomEventKind::Focus,
@@ -391,6 +397,7 @@ impl DomEventData {
             Self::KeyPress { .. } => true,
             Self::Ime { .. } => true,
             Self::Input { .. } => false,
+            Self::Change { .. } => false,
 
             Self::Focus { .. } => false,
             Self::Blur { .. } => false,
@@ -437,6 +444,7 @@ impl DomEventData {
             Self::KeyPress { .. } => true,
             Self::Ime { .. } => true,
             Self::Input { .. } => true,
+            Self::Change { .. } => true,
 
             Self::Focus { .. } => false,
             Self::Blur { .. } => false,

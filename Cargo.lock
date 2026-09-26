@@ -981,6 +981,7 @@ dependencies = [
  "blitz-dom",
  "blitz-traits",
  "html5ever",
+ "keyboard-types 0.7.0",
  "tracing",
  "xml5ever",
 ]

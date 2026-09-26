@@ -1,9 +1,12 @@
 //! Form control value and checkedness (the HTML dirty value/checkedness
-//! model).
+//! model), and the `input`/`change` events of checkable inputs.
 
 mod common;
 
+use blitz_dom::{Document, EventDriver, EventHandler, NodeId};
+use blitz_traits::events::{DomEvent, EventState};
 use common::{parse, q};
+use keyboard_types::Modifiers;
 
 #[test]
 fn value_defaults_to_the_attribute_until_dirty() {
@@ -47,4 +50,24 @@ fn checking_a_radio_unchecks_its_group() {
 fn select_value_is_the_selected_option() {
     let doc = parse("<select id=s><option value=a>A</option><option selected>  B  </option></select>");
     assert_eq!(doc.form_value(q(&doc, "#s")).as_deref(), Some("B"));
+}
+
+struct Recorder(Vec<String>);
+
+impl EventHandler for &mut Recorder {
+    fn handle_event(&mut self, _: &[NodeId], event: &mut DomEvent, _: &mut dyn Document, _: &mut EventState) {
+        self.0.push(event.name().to_string());
+    }
+}
+
+#[test]
+fn clicking_a_checkbox_toggles_it_and_fires_input_then_change() {
+    let mut doc = parse("<input id=c type=checkbox>");
+    let c = q(&doc, "#c");
+    let click = DomEvent::new(c, doc.get_node(c).unwrap().synthetic_click_event(Modifiers::empty()));
+    let mut recorder = Recorder(Vec::new());
+    EventDriver::new(&mut doc, &mut recorder).handle_dom_event(click);
+    // (Focus events follow: clicking also focuses the checkbox.)
+    assert_eq!(recorder.0[..3], ["click", "input", "change"]);
+    assert!(doc.checkedness(c), "toggled even before layout");
 }
