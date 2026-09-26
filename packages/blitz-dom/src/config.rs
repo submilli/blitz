@@ -48,6 +48,11 @@ pub struct DocumentConfig {
     pub html_parser_provider: Option<Arc<dyn HtmlParserProvider>>,
     /// Parley `FontContext`
     pub font_ctx: Option<FontContext>,
+    /// Fonts for text inside SVG images. Defaults to the system fonts with
+    /// the `system-fonts` feature, and to none without it. See
+    /// [`build_svg_font_db`](crate::build_svg_font_db).
+    #[cfg(feature = "svg")]
+    pub svg_fonts: Option<crate::SvgFontDb>,
     /// The CSS media type used to evaluate `@media` rules.
     /// Defaults to [`MediaType::screen`].
     pub media_type: Option<MediaType>,

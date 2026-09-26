@@ -26,4 +26,6 @@ xml5ever = { workspace = true }
 tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
+# SVG images (with WOFF2 test fonts) for tests/svg_fonts.rs
+blitz-dom = { workspace = true, features = ["svg", "woff"] }
 keyboard-types = { workspace = true }

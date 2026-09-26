@@ -131,11 +131,6 @@ pub use events::{EventDriver, EventHandler, NoopEventHandler};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};
 pub use util::{Point, decode_font_bytes};
 
-/// Convenience builder for the one-font case: produces a [`FontContext`] with
-/// system-font discovery disabled and the supplied font registered as the
-/// fallback for every generic family. The standard setup for WASM, where
-/// browsers don't expose system fonts. WOFF/WOFF2 inputs are decoded
-/// automatically.
 /// The role a supplied font plays for CSS generic families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontRole {
@@ -196,6 +191,11 @@ pub fn build_font_ctx(fonts: &[(FontRole, &[u8])]) -> FontContext {
     ctx
 }
 
+/// Convenience builder for the one-font case: produces a [`FontContext`] with
+/// system-font discovery disabled and the supplied font registered as the
+/// fallback for every generic family. The standard setup for WASM, where
+/// browsers don't expose system fonts. WOFF/WOFF2 inputs are decoded
+/// automatically.
 pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
     use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
     use std::sync::Arc;
@@ -222,6 +222,53 @@ pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
             .append_generic_families(generic, family_ids.iter().copied());
     }
     ctx
+}
+
+/// Fonts for text inside SVG images, which usvg lays out itself.
+#[cfg(feature = "svg")]
+pub type SvgFontDb = std::sync::Arc<usvg::fontdb::Database>;
+
+/// Build the SVG font database from the same supplied fonts as
+/// [`build_font_ctx`], so text in SVG images uses only those fonts too. Pass
+/// it as [`DocumentConfig::svg_fonts`]. Generic families with no font of
+/// their role fall back to the first supplied font.
+#[cfg(feature = "svg")]
+pub fn build_svg_font_db(fonts: &[(FontRole, &[u8])]) -> SvgFontDb {
+    let mut db = usvg::fontdb::Database::new();
+    let mut families: Vec<(FontRole, String)> = Vec::new();
+    for &(role, data) in fonts {
+        let before = db.len();
+        db.load_font_data(decode_font_bytes(data).into_owned());
+        let family = db
+            .faces()
+            .skip(before)
+            .find_map(|face| face.families.first().map(|(name, _)| name.clone()));
+        if let Some(family) = family
+            && !families.iter().any(|(r, _)| *r == role)
+        {
+            families.push((role, family));
+        }
+    }
+    let family_for = |role: FontRole| {
+        families
+            .iter()
+            .find(|(r, _)| *r == role)
+            .or_else(|| families.iter().find(|(r, _)| *r == FontRole::SansSerif))
+            .or(families.first())
+            .map(|(_, family)| family.clone())
+    };
+    if let Some(family) = family_for(FontRole::SansSerif) {
+        db.set_sans_serif_family(family.clone());
+        db.set_cursive_family(family.clone());
+        db.set_fantasy_family(family);
+    }
+    if let Some(family) = family_for(FontRole::Serif) {
+        db.set_serif_family(family);
+    }
+    if let Some(family) = family_for(FontRole::Monospace) {
+        db.set_monospace_family(family);
+    }
+    std::sync::Arc::new(db)
 }
 
 #[cfg(test)]

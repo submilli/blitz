@@ -1312,7 +1312,7 @@ impl<'doc> DocumentMutator<'doc> {
                         self.doc.id(),
                         None, // Don't pass node_id, we'll handle it via pending_images
                         self.doc.shell_provider.clone(),
-                        ImageHandler::new(ImageType::Image),
+                        ImageHandler::new(ImageType::Image, self.doc.svg_fonts.clone()),
                     ),
                 );
             }

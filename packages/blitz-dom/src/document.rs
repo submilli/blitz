@@ -243,6 +243,8 @@ pub struct BaseDocument {
     // Parley contexts
     /// A Parley font context
     pub(crate) font_ctx: Arc<Mutex<parley::FontContext>>,
+    /// Fonts for text inside SVG images
+    pub(crate) svg_fonts: crate::util::SvgFonts,
     #[cfg(feature = "parallel-construct")]
     /// Thread-and-document-local copies to the font context
     pub(crate) thread_font_contexts: ThreadLocal<RefCell<Box<FontContext>>>,
@@ -471,6 +473,10 @@ impl BaseDocument {
             nodes_to_stylesheet: BTreeMap::new(),
             stylesheet_generation: 0,
             font_ctx,
+            #[cfg(feature = "svg")]
+            svg_fonts: config.svg_fonts.unwrap_or_else(crate::util::default_svg_fonts),
+            #[cfg(not(feature = "svg"))]
+            svg_fonts: (),
             #[cfg(feature = "parallel-construct")]
             thread_font_contexts: ThreadLocal::new(),
             layout_ctx: parley::LayoutContext::new(),

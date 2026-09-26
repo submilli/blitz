@@ -561,10 +561,13 @@ impl NetHandler for ResourceHandler<DocumentSrcHandler> {
 
 pub struct ImageHandler {
     kind: ImageType,
+    #[cfg_attr(not(feature = "svg"), allow(dead_code))]
+    svg_fonts: crate::util::SvgFonts,
 }
 impl ImageHandler {
-    pub fn new(kind: ImageType) -> Self {
-        Self { kind }
+    /// `svg_fonts` is the document's, for text in SVG images.
+    pub(crate) fn new(kind: ImageType, svg_fonts: crate::util::SvgFonts) -> Self {
+        Self { kind, svg_fonts }
     }
 }
 
@@ -599,7 +602,7 @@ impl ImageHandler {
         #[cfg(feature = "svg")]
         let svg_err = {
             use crate::util::parse_svg_image;
-            match parse_svg_image(&bytes) {
+            match parse_svg_image(&bytes, &self.svg_fonts) {
                 Ok(svg) => return Ok(Resource::Svg(self.kind, svg)),
                 Err(e) => e.to_string(),
             }

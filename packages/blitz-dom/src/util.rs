@@ -43,12 +43,26 @@ pub fn decode_font_bytes(bytes: &[u8]) -> Cow<'_, [u8]> {
 use std::sync::{Arc, LazyLock};
 #[cfg(feature = "svg")]
 use usvg::fontdb;
+
+/// A document's fonts for SVG text; nothing without the `svg` feature.
 #[cfg(feature = "svg")]
-pub(crate) static FONT_DB: LazyLock<Arc<fontdb::Database>> = LazyLock::new(|| {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
-    Arc::new(db)
-});
+pub(crate) type SvgFonts = crate::SvgFontDb;
+#[cfg(not(feature = "svg"))]
+pub(crate) type SvgFonts = ();
+
+/// SVG fonts for documents whose embedder supplies none: the system fonts
+/// (loaded once per process), or none without the `system-fonts` feature.
+#[cfg(feature = "svg")]
+pub(crate) fn default_svg_fonts() -> crate::SvgFontDb {
+    static FONT_DB: LazyLock<Arc<fontdb::Database>> = LazyLock::new(|| {
+        #[allow(unused_mut)]
+        let mut db = fontdb::Database::new();
+        #[cfg(feature = "system-fonts")]
+        db.load_system_fonts();
+        Arc::new(db)
+    });
+    Arc::clone(&FONT_DB)
+}
 
 /// Which kind of CSS image layer list (`background-image` or `mask-image`) to
 /// flush from style to dedicated storage on the node.
@@ -158,9 +172,12 @@ pub fn walk_tree(indent: usize, node: &Node) {
 
 /// Parse an SVG image.
 #[cfg(feature = "svg")]
-pub(crate) fn parse_svg_image(source: &[u8]) -> Result<crate::node::SvgImageData, usvg::Error> {
+pub(crate) fn parse_svg_image(
+    source: &[u8],
+    fonts: &crate::SvgFontDb,
+) -> Result<crate::node::SvgImageData, usvg::Error> {
     let options = usvg::Options {
-        fontdb: Arc::clone(&*FONT_DB),
+        fontdb: Arc::clone(fonts),
         ..Default::default()
     };
     crate::node::SvgImageData::from_data(source, &options)
@@ -187,7 +204,7 @@ mod svg_tests {
     #[test]
     fn missing_height_is_computed_from_width_and_viewbox_ratio() {
         let src = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="200"><rect width="100%" height="100%" fill="green"/></svg>"#;
-        let svg = parse_svg_image(src).unwrap();
+        let svg = parse_svg_image(src, &super::default_svg_fonts()).unwrap();
         assert_eq!(svg.intrinsic_width(), Some(200.0));
         assert_eq!(svg.intrinsic_height(), None);
         assert_eq!(svg.viewbox_aspect_ratio(), Some(1.0));
@@ -198,7 +215,7 @@ mod svg_tests {
     #[test]
     fn viewbox_only_has_no_intrinsic_dimensions() {
         let src = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 485 58"></svg>"#;
-        let svg = parse_svg_image(src).unwrap();
+        let svg = parse_svg_image(src, &super::default_svg_fonts()).unwrap();
         assert_eq!(svg.intrinsic_width(), None);
         assert_eq!(svg.intrinsic_height(), None);
         // The aspect ratio is still available from the viewBox.
@@ -208,7 +225,7 @@ mod svg_tests {
     #[test]
     fn absolute_dimensions_are_intrinsic() {
         let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 48 32"></svg>"#;
-        let svg = parse_svg_image(src).unwrap();
+        let svg = parse_svg_image(src, &super::default_svg_fonts()).unwrap();
         assert_eq!(svg.intrinsic_width(), Some(24.0));
         assert_eq!(svg.intrinsic_height(), Some(16.0));
     }
@@ -216,7 +233,7 @@ mod svg_tests {
     #[test]
     fn percentage_dimensions_are_not_intrinsic() {
         let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="50%" viewBox="0 0 200 100"></svg>"#;
-        let svg = parse_svg_image(src).unwrap();
+        let svg = parse_svg_image(src, &super::default_svg_fonts()).unwrap();
         assert_eq!(svg.intrinsic_width(), None);
         assert_eq!(svg.intrinsic_height(), None);
     }
@@ -224,7 +241,7 @@ mod svg_tests {
     #[test]
     fn unit_lengths_are_intrinsic() {
         let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24px" height="1.5em" viewBox="0 0 48 32"></svg>"#;
-        let svg = parse_svg_image(src).unwrap();
+        let svg = parse_svg_image(src, &super::default_svg_fonts()).unwrap();
         assert!(svg.intrinsic_width().is_some());
         assert!(svg.intrinsic_height().is_some());
     }
@@ -232,7 +249,7 @@ mod svg_tests {
     #[test]
     fn non_numeric_dimensions_are_not_intrinsic() {
         let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="auto" height="foo" viewBox="0 0 200 100"></svg>"#;
-        let svg = parse_svg_image(src).unwrap();
+        let svg = parse_svg_image(src, &super::default_svg_fonts()).unwrap();
         assert_eq!(svg.intrinsic_width(), None);
         assert_eq!(svg.intrinsic_height(), None);
     }
