@@ -42,6 +42,19 @@ macro_rules! local_names {
     };
 }
 
+/// The HTML "dirty value flag" and "dirty checkedness flag" model: once a
+/// script or the user changes a control, its current state no longer
+/// follows the `value`/`checked` attributes.
+#[derive(Debug, Clone, Default)]
+pub struct FormControlState {
+    /// The current value while no text editor exists yet (before layout).
+    pub value: Option<String>,
+    pub value_dirty: bool,
+    /// The current checkedness while no checkbox state exists yet.
+    pub checked: Option<bool>,
+    pub checked_dirty: bool,
+}
+
 pub struct ElementData {
     /// The elements tag name, namespace and prefix
     pub name: QualName,
@@ -78,6 +91,10 @@ pub struct ElementData {
 
     /// The element's template contents (\<template\> elements only)
     pub template_contents: Option<NodeId>,
+
+    /// Form control value and checkedness, separate from the `value` and
+    /// `checked` attributes (which hold the defaults).
+    pub form_state: FormControlState,
     // /// Whether the node is a [HTML integration point] (https://html.spec.whatwg.org/multipage/#html-integration-point)
     // pub mathml_annotation_xml_integration_point: bool,
 
@@ -316,6 +333,7 @@ impl Clone for ElementData {
             before: None,
             after: None,
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
+            form_state: FormControlState::default(),
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
             transform: None,
@@ -423,6 +441,7 @@ impl ElementData {
             before: None,
             after: None,
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
+            form_state: FormControlState::default(),
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
             transform: None,

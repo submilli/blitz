@@ -280,7 +280,175 @@ impl BaseDocument {
     }
 }
 
+/// Form controls whose value is edited as text.
+fn is_text_control(el: &crate::node::ElementData) -> bool {
+    match &*el.name.local {
+        "textarea" => true,
+        "input" => !matches!(
+            el.attr(markup5ever::local_name!("type")).map(|t| t.to_ascii_lowercase()).as_deref(),
+            Some("checkbox" | "radio" | "file" | "button" | "submit" | "reset" | "image" | "hidden")
+        ),
+        _ => false,
+    }
+}
+
+fn is_checkable(el: &crate::node::ElementData) -> bool {
+    &*el.name.local == "input"
+        && matches!(
+            el.attr(markup5ever::local_name!("type")).map(|t| t.to_ascii_lowercase()).as_deref(),
+            Some("checkbox" | "radio")
+        )
+}
+
+impl BaseDocument {
+    /// The `value` IDL attribute of `input`, `textarea`, `select`, `option`
+    /// and `button`: the current value, falling back to the defaults.
+    pub fn form_value(&self, id: NodeId) -> Option<String> {
+        let el = self.nodes[id].element_data()?;
+        if el.name.ns != ns!(html) {
+            return None;
+        }
+        match &*el.name.local {
+            "input" | "textarea" => {
+                if let Some(editor) = el.text_input_data() {
+                    return Some(editor.editor.raw_text().to_string());
+                }
+                if el.form_state.value_dirty {
+                    return Some(el.form_state.value.clone().unwrap_or_default());
+                }
+                if &*el.name.local == "textarea" {
+                    return self.text_content_of(id);
+                }
+                // Checkboxes and radios default to "on".
+                let default = if is_checkable(el) { "on" } else { "" };
+                Some(el.attr(markup5ever::local_name!("value")).unwrap_or(default).to_string())
+            }
+            "option" => Some(match el.attr(markup5ever::local_name!("value")) {
+                Some(v) => v.to_string(),
+                None => self
+                    .text_content_of(id)
+                    .unwrap_or_default()
+                    .split_ascii_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            }),
+            "select" => {
+                let option = self.selected_option(id)?;
+                self.form_value(option)
+            }
+            "button" | "data" | "li" | "param" | "output" => {
+                Some(el.attr(markup5ever::local_name!("value")).unwrap_or("").to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// The first selected `<option>` of a `<select>` (the first option when
+    /// none has the `selected` attribute).
+    pub fn selected_option(&self, select: NodeId) -> Option<NodeId> {
+        let mut options = Vec::new();
+        self.collect_options(select, &mut options);
+        options
+            .iter()
+            .copied()
+            .find(|&o| self.nodes[o].element_data().is_some_and(|e| e.has_attr(markup5ever::local_name!("selected"))))
+            .or_else(|| options.first().copied())
+    }
+
+    fn collect_options(&self, id: NodeId, out: &mut Vec<NodeId>) {
+        for &child in &self.nodes[id].children {
+            if let Some(el) = self.nodes[child].element_data() {
+                match &*el.name.local {
+                    "option" => out.push(child),
+                    "optgroup" => self.collect_options(child, out),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// The `checked` IDL attribute (current checkedness).
+    pub fn checkedness(&self, id: NodeId) -> bool {
+        let Some(el) = self.nodes[id].element_data() else {
+            return false;
+        };
+        if let Some(checked) = el.checkbox_input_checked() {
+            return checked;
+        }
+        if el.form_state.checked_dirty {
+            return el.form_state.checked.unwrap_or(false);
+        }
+        el.has_attr(markup5ever::local_name!("checked"))
+    }
+}
+
 impl DocumentMutator<'_> {
+    /// `input.value = ...` / `textarea.value = ...`: sets the current value
+    /// and its dirty flag; the `value` attribute is untouched.
+    pub fn set_form_value(&mut self, id: NodeId, value: &str) {
+        let is_text = self.doc.nodes[id].element_data().is_some_and(is_text_control);
+        if !is_text {
+            // Other controls reflect `value` to the attribute.
+            let _ = self.set_attribute_by_name(id, "value", value);
+            return;
+        }
+        let doc = &mut *self.doc;
+        let font_ctx = &doc.font_ctx;
+        let layout_ctx = &mut doc.layout_ctx;
+        let Some(el) = doc.nodes[id].element_data_mut() else {
+            return;
+        };
+        el.form_state.value = Some(value.to_string());
+        el.form_state.value_dirty = true;
+        if let Some(input) = el.text_input_data_mut() {
+            input.set_text(&mut font_ctx.lock().unwrap(), layout_ctx, value);
+        }
+    }
+
+    /// `input.checked = ...`: sets the current checkedness and its dirty
+    /// flag. Checking a radio button unchecks the others in its group.
+    pub fn set_checkedness(&mut self, id: NodeId, checked: bool) {
+        let radio_group = self.doc.nodes[id].element_data().and_then(|el| {
+            (el.attr(markup5ever::local_name!("type")) == Some("radio"))
+                .then(|| el.attr(markup5ever::local_name!("name")).map(str::to_string))
+                .flatten()
+        });
+        if let (true, Some(group)) = (checked, radio_group) {
+            let others: Vec<NodeId> = self
+                .doc
+                .nodes
+                .iter()
+                .filter(|(i, node)| {
+                    *i != id
+                        && node.data.downcast_element().is_some_and(|el| {
+                            el.attr(markup5ever::local_name!("type")) == Some("radio")
+                                && el.attr(markup5ever::local_name!("name")) == Some(group.as_str())
+                        })
+                })
+                .map(|(i, _)| i)
+                .collect();
+            for other in others {
+                self.write_checkedness(other, false);
+            }
+        }
+        self.write_checkedness(id, checked);
+    }
+
+    fn write_checkedness(&mut self, id: NodeId, checked: bool) {
+        self.doc
+            .snapshot_node_and(id, style_dom::ElementState::CHECKED, |node| {
+                if let Some(el) = node.element_data_mut() {
+                    el.form_state.checked = Some(checked);
+                    el.form_state.checked_dirty = true;
+                    if el.checkbox_input_checked().is_some() {
+                        el.set_checkbox_input_checked(checked);
+                    } else {
+                        el.element_state.set(style_dom::ElementState::CHECKED, checked);
+                    }
+                }
+                node.mark_ancestors_dirty();
+            });
+    }
 
     /// `Element.setAttribute(name, value)`
     pub fn set_attribute_by_name(

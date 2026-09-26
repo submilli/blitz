@@ -670,13 +670,22 @@ impl BaseDocument {
         }
     }
 
+    /// Toggle a checkbox's checkedness (its click activation behaviour).
+    /// Works before layout too, when there is no checkbox state yet.
     pub fn toggle_checkbox(el: &mut ElementData) -> bool {
-        let Some(is_checked) = el.checkbox_input_checked() else {
-            return false;
+        let current = match el.checkbox_input_checked() {
+            Some(checked) => checked,
+            None if el.form_state.checked_dirty => el.form_state.checked.unwrap_or(false),
+            None => el.has_attr(local_name!("checked")),
         };
-        let checked = !is_checked;
-        el.set_checkbox_input_checked(checked);
-
+        let checked = !current;
+        el.form_state.checked = Some(checked);
+        el.form_state.checked_dirty = true;
+        if el.checkbox_input_checked().is_some() {
+            el.set_checkbox_input_checked(checked);
+        } else {
+            el.element_state.set(ElementState::CHECKED, checked);
+        }
         checked
     }
 
@@ -697,6 +706,7 @@ impl BaseDocument {
             self.snapshot_node_and(i, ElementState::CHECKED, |node| {
                 if let Some(el) = node.element_data_mut() {
                     el.set_checkbox_input_checked(checked);
+                    el.form_state.checked_dirty = true;
                 }
                 node.mark_ancestors_dirty();
             });

@@ -9,8 +9,11 @@ use crate::node::{CanvasData, NodeFlags, SpecialElementData};
 use crate::stylo_device::DeviceChanges;
 use crate::util::ImageType;
 use crate::{
-    Attribute, BaseDocument, Document, ElementData, Node, NodeData, QualName, local_name, qual_name,
+    Attribute, BaseDocument, Document, ElementData, Node, NodeData, QualName, local_name,
 };
+// Only the file-input widget and the tests construct names this way.
+#[cfg(any(feature = "file-input", test))]
+use crate::qual_name;
 use blitz_traits::shell::Viewport;
 use style::Atom;
 use style::invalidation::element::restyle_hints::RestyleHint;
@@ -363,7 +366,10 @@ impl DocumentMutator<'_> {
         }
 
         if *attr == local_name!("value") {
-            if let Some(input_data) = element.text_input_data_mut() {
+            // The attribute is the default value: it only shows while the
+            // value is not dirty.
+            let dirty = element.form_state.value_dirty;
+            if let Some(input_data) = element.text_input_data_mut().filter(|_| !dirty) {
                 // Update text input value
                 input_data.set_text(
                     &mut self.doc.font_ctx.lock().unwrap(),
@@ -392,7 +398,8 @@ impl DocumentMutator<'_> {
         }
 
         if (tag, attr) == tag_and_attr!("input", "checked") {
-            set_input_checked_state(element, value.to_string());
+            // Adding the attribute sets the default checkedness.
+            set_input_checked_state(element, true);
         } else if (tag, attr) == tag_and_attr!("img", "src") {
             self.load_image(node_id);
         } else if (tag, attr) == tag_and_attr!("canvas", "src") {
@@ -474,15 +481,22 @@ impl DocumentMutator<'_> {
             element.flush_link_state();
         }
 
-        // Update text input value
+        // Update text input value (unless the value is dirty)
         if name.local == local_name!("value") {
-            if let Some(input_data) = element.text_input_data_mut() {
+            let dirty = element.form_state.value_dirty;
+            if let Some(input_data) = element.text_input_data_mut().filter(|_| !dirty) {
                 input_data.set_text(
                     &mut self.doc.font_ctx.lock().unwrap(),
                     &mut self.doc.layout_ctx,
                     "",
                 );
             }
+        }
+
+        if element.name.local == local_name!("input") && name.local == local_name!("checked") {
+            // Removing the attribute clears the default checkedness.
+            set_input_checked_state(element, false);
+            return;
         }
 
         let tag = &element.name.local;
@@ -1296,22 +1310,19 @@ impl<'doc> DocumentMutator<'doc> {
     }
 }
 
-/// Set 'checked' state on an input based on given attributevalue
-fn set_input_checked_state(element: &mut ElementData, value: String) {
-    let Ok(checked) = value.parse() else {
+/// Apply a change to the default checkedness (the `checked` attribute):
+/// the current checkedness follows it unless the control is dirty.
+fn set_input_checked_state(element: &mut ElementData, checked: bool) {
+    if element.form_state.checked_dirty {
         return;
-    };
+    }
     match element.special_data {
         SpecialElementData::CheckboxInput(_) => element.set_checkbox_input_checked(checked),
-        // If we have just constructed the element, set the node attribute,
-        // and NodeSpecificData will be created from that later
-        // this simulates the checked attribute being set in html,
-        // and the element's checked property being set from that
-        SpecialElementData::None => element.attrs.push(Attribute {
-            name: qual_name!("checked", html),
-            value: checked.to_string(),
-        }),
-        _ => {}
+        // Not laid out yet: layout reads the attribute when it creates the
+        // checkbox state; keep `:checked` matching in sync meanwhile.
+        _ => element
+            .element_state
+            .set(style_dom::ElementState::CHECKED, checked),
     }
 }
 

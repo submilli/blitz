@@ -949,10 +949,14 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: NodeId, is_multi
         .map(|s| stylo_to_parley::text_align(s.clone_text_align()))
         .unwrap_or(parley::layout::Alignment::Start);
 
-    let initial_text = if is_multiline {
-        node.text_content()
-    } else {
-        node.attr(local_name!("value")).unwrap_or("").to_string()
+    let dirty_value = node
+        .element_data()
+        .filter(|el| el.form_state.value_dirty)
+        .and_then(|el| el.form_state.value.clone());
+    let initial_text = match dirty_value {
+        Some(value) => value,
+        None if is_multiline => node.text_content(),
+        None => node.attr(local_name!("value")).unwrap_or("").to_string(),
     };
     let element = &mut node.data.downcast_element_mut().unwrap();
     if !matches!(element.special_data, SpecialElementData::TextInput(_)) {
@@ -999,7 +1003,10 @@ fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: NodeId) {
 
     let element = &mut node.data.downcast_element_mut().unwrap();
     if !matches!(element.special_data, SpecialElementData::CheckboxInput(_)) {
-        let checked = element.has_attr(local_name!("checked"));
+        let checked = match element.form_state.checked_dirty {
+            true => element.form_state.checked.unwrap_or(false),
+            false => element.has_attr(local_name!("checked")),
+        };
         element.special_data = SpecialElementData::CheckboxInput(checked);
         element.set_checkbox_input_checked(checked);
     }

@@ -671,6 +671,7 @@ pub(crate) fn handle_click(
                         doc.snapshot_node_and(node_id, ElementState::CHECKED, |node| {
                             if let Some(el) = node.element_data_mut() {
                                 el.set_checkbox_input_checked(true);
+                                el.form_state.checked_dirty = true;
                             }
                             node.mark_ancestors_dirty();
                         });
