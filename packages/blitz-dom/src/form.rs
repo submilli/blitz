@@ -95,7 +95,10 @@ impl BaseDocument {
         )
         .unwrap_or_default();
 
-        let mut parsed_action = self.resolve_url(action);
+        // "Parse a URL given action... If this fails, return."
+        let Some(mut parsed_action) = self.resolve_url(action) else {
+            return;
+        };
 
         let scheme = parsed_action.scheme();
 
