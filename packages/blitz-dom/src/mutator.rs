@@ -5,6 +5,7 @@ use std::ops::{Deref, DerefMut};
 
 use crate::layout::damage::ALL_DAMAGE;
 use crate::net::{ImageHandler, ResourceHandler, StylesheetHandler};
+use crate::mutations::MutationRecord;
 use crate::node::{CanvasData, NodeFlags, SpecialElementData};
 use crate::stylo_device::DeviceChanges;
 use crate::util::ImageType;
@@ -224,6 +225,12 @@ impl DocumentMutator<'_> {
         };
 
         let changed = text.content != value;
+        if let Some(log) = &mut self.doc.mutation_log {
+            log.push(MutationRecord::CharacterData {
+                target: node_id,
+                old_value: text.content.clone(),
+            });
+        }
         if changed {
             self.mutations_occurred |= node_is_in_document;
             text.content.clear();
@@ -256,6 +263,12 @@ impl DocumentMutator<'_> {
         node.mark_ancestors_dirty();
         match node.text_data_mut() {
             Some(data) => {
+                if let Some(log) = &mut self.doc.mutation_log {
+                    log.push(MutationRecord::CharacterData {
+                        target: node_id,
+                        old_value: data.content.clone(),
+                    });
+                }
                 data.content += text;
                 self.mutations_occurred |= node_is_in_document;
                 Ok(())
@@ -284,6 +297,17 @@ impl DocumentMutator<'_> {
     }
 
     pub fn set_attribute(&mut self, node_id: NodeId, name: QualName, value: &str) {
+        if self.doc.is_recording_mutations() {
+            let old_value = self.doc.nodes[node_id]
+                .element_data()
+                .and_then(|el| el.attrs().iter().find(|a| a.name == name).map(|a| a.value.to_string()));
+            self.doc.record_mutation(MutationRecord::Attributes {
+                target: node_id,
+                name: name.local.to_string(),
+                namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
+                old_value,
+            });
+        }
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if node_is_in_document {
             self.doc.snapshot_node(node_id);
@@ -453,6 +477,18 @@ impl DocumentMutator<'_> {
         if !had_attr {
             return;
         }
+        if let Some(log) = &mut self.doc.mutation_log {
+            log.push(MutationRecord::Attributes {
+                target: node_id,
+                name: name.local.to_string(),
+                namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
+                old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
+            });
+        }
+        let node = &mut self.doc.nodes[node_id];
+        let Some(element) = node.element_data_mut() else {
+            return;
+        };
         self.mutations_occurred |= node_is_in_document;
 
         // If element is a CustomWidget, then call attribute_changed on it
@@ -560,6 +596,17 @@ impl DocumentMutator<'_> {
 
     /// Remove the node from it's parent but don't drop it
     pub fn remove_node(&mut self, node_id: NodeId) {
+        if self.doc.is_recording_mutations() {
+            if let Some((parent, previous_sibling, next_sibling)) = self.doc.position_in_parent(node_id) {
+                self.doc.record_mutation(MutationRecord::ChildList {
+                    target: parent,
+                    added: Vec::new(),
+                    removed: vec![node_id],
+                    previous_sibling,
+                    next_sibling,
+                });
+            }
+        }
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         // Process the subtree *before* severing the parent link so that
         // interaction state referencing removed nodes can retarget to the
@@ -698,6 +745,20 @@ impl DocumentMutator<'_> {
         // parent's child list, and anchor indices would be computed against a
         // child list that still contains the moved nodes.
         for child_id in child_ids.iter().copied() {
+            let removal = self
+                .doc
+                .is_recording_mutations()
+                .then(|| self.doc.position_in_parent(child_id))
+                .flatten();
+            if let Some((old_parent, previous_sibling, next_sibling)) = removal {
+                self.doc.record_mutation(MutationRecord::ChildList {
+                    target: old_parent,
+                    added: Vec::new(),
+                    removed: vec![child_id],
+                    previous_sibling,
+                    next_sibling,
+                });
+            }
             let child = &mut self.doc.nodes[child_id];
             let child_was_in_doc = child.flags.is_in_document();
             self.mutations_occurred |= child_was_in_doc;
@@ -750,6 +811,21 @@ impl DocumentMutator<'_> {
                 self.process_added_subtree(child_id);
             } else if !new_parent_is_in_document && child_was_in_doc {
                 self.process_removed_subtree(child_id);
+            }
+        }
+
+        if self.doc.is_recording_mutations() && !child_ids.is_empty() {
+            let siblings = &self.doc.nodes[parent_id].children;
+            if let Some(first) = siblings.iter().position(|&c| c == child_ids[0]) {
+                let previous_sibling = first.checked_sub(1).map(|i| siblings[i]);
+                let next_sibling = siblings.get(first + child_ids.len()).copied();
+                self.doc.record_mutation(MutationRecord::ChildList {
+                    target: parent_id,
+                    added: child_ids.to_vec(),
+                    removed: Vec::new(),
+                    previous_sibling,
+                    next_sibling,
+                });
             }
         }
 

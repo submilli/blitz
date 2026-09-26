@@ -628,6 +628,11 @@ impl DocumentMutator<'_> {
             self.set_node_text(id, value);
             return;
         }
+        let old = match &self.doc.nodes[id].data {
+            NodeData::Comment { contents } | NodeData::ProcessingInstruction { contents, .. } => contents.clone(),
+            _ => return,
+        };
+        self.doc.record_mutation(crate::mutations::MutationRecord::CharacterData { target: id, old_value: old });
         if let NodeData::Comment { contents } | NodeData::ProcessingInstruction { contents, .. } =
             &mut self.doc.nodes[id].data
         {

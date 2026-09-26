@@ -37,6 +37,7 @@ pub const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.otf");
 mod document;
 pub mod dom_api;
 pub mod dom_events;
+pub mod mutations;
 
 /// The nodes themsleves, and their data.
 pub mod node;
