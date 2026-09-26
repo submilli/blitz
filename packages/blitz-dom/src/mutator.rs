@@ -165,6 +165,15 @@ impl DocumentMutator<'_> {
         self.doc.create_text_node(text)
     }
 
+    /// Mark a `<script>` as created by the parser (which runs it itself) and,
+    /// for fragment parsing, as already started (so it never runs).
+    pub fn mark_script(&mut self, id: NodeId, parser_inserted: bool, already_started: bool) {
+        if let Some(el) = self.doc.nodes[id].element_data_mut() {
+            el.script_state.parser_inserted |= parser_inserted;
+            el.script_state.already_started |= already_started;
+        }
+    }
+
     pub fn create_element(&mut self, name: QualName, attrs: Vec<Attribute>) -> NodeId {
         let mut data = ElementData::new(name, attrs);
         data.flush_style_attribute(self.doc.guard(), &self.doc.url.url_extra_data());
@@ -1056,6 +1065,13 @@ impl<'doc> DocumentMutator<'doc> {
                     .push(SpecialOp::LoadCustomPaintSource(node_id)),
                 "style" => {
                     self.style_nodes.insert(node_id);
+                }
+                "script"
+                    if element.name.ns == markup5ever::ns!(html)
+                        && !element.script_state.already_started
+                        && !element.script_state.parser_inserted =>
+                {
+                    doc.connected_scripts.push(node_id);
                 }
                 "button" | "fieldset" | "input" | "select" | "textarea" | "object" | "output" => {
                     self.eager_op_queue

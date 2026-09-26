@@ -4,10 +4,11 @@ use html5ever::ParseOpts;
 use html5ever::tokenizer::TokenizerOpts;
 use html5ever::tree_builder::TreeBuilderOpts;
 use std::borrow::Cow;
-use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::cell::{Cell, Ref, RefCell};
+use std::rc::Rc;
 
 use blitz_dom::node::Attribute;
-use blitz_dom::{DocumentMutator, HtmlParserProvider, NodeId};
+use blitz_dom::{BaseDocument, DocumentMutator, HtmlParserProvider, NodeId};
 use html5ever::{
     QualName,
     tendril::{StrTendril, TendrilSink},
@@ -45,8 +46,56 @@ impl HtmlParserProvider for HtmlProvider {
     }
 }
 
-pub struct DocumentHtmlParser<'m, 'doc> {
-    document_mutator: RefCell<&'m mut DocumentMutator<'doc>>,
+/// How a tree sink reaches the document it builds.
+pub trait DocAccess {
+    /// Run `f` with a mutator. Implementations may create a fresh mutator
+    /// per call, so no borrow of the document outlives `f`.
+    fn with_mutator<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R;
+    /// The qualified name of element `id`.
+    fn element_name(&self, id: NodeId) -> Ref<'_, QualName>;
+}
+
+/// A mutator borrowed for the whole parse (one-shot parsing).
+pub struct BorrowedMutator<'m, 'doc>(RefCell<&'m mut DocumentMutator<'doc>>);
+
+impl DocAccess for BorrowedMutator<'_, '_> {
+    fn with_mutator<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
+        let mut guard = self.0.borrow_mut();
+        f(&mut guard)
+    }
+
+    fn element_name(&self, id: NodeId) -> Ref<'_, QualName> {
+        Ref::map(self.0.borrow(), |docm| {
+            docm.element_name(id)
+                .expect("TreeSink::elem_name called on a node which is not an element!")
+        })
+    }
+}
+
+/// A shared document, borrowed only per tree operation, so scripts can run
+/// (and mutate the document) while the parser is paused.
+pub struct SharedDocument(pub Rc<RefCell<BaseDocument>>);
+
+impl DocAccess for SharedDocument {
+    fn with_mutator<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
+        let mut doc = self.0.borrow_mut();
+        let mut mutator = doc.mutate();
+        f(&mut mutator)
+    }
+
+    fn element_name(&self, id: NodeId) -> Ref<'_, QualName> {
+        Ref::map(self.0.borrow(), |doc| {
+            &doc.get_node(id)
+                .and_then(|n| n.element_data())
+                .expect("TreeSink::elem_name called on a node which is not an element!")
+                .name
+        })
+    }
+}
+
+/// An html5ever tree sink building a Blitz document.
+pub struct HtmlSink<A: DocAccess> {
+    access: A,
 
     /// Errors that occurred during parsing.
     pub errors: RefCell<Vec<Cow<'static, str>>>,
@@ -54,24 +103,32 @@ pub struct DocumentHtmlParser<'m, 'doc> {
     /// The document's quirks mode.
     pub quirks_mode: Cell<QuirksMode>,
     pub is_xml: bool,
+    /// Fragment parsing (`innerHTML`): scripts are marked already started.
+    pub fragment: bool,
 }
 
-impl<'m, 'doc> DocumentHtmlParser<'m, 'doc> {
-    #[track_caller]
-    /// Get a mutable borrow of the DocumentMutator
-    fn mutr(&self) -> RefMut<'_, &'m mut DocumentMutator<'doc>> {
-        self.document_mutator.borrow_mut()
-    }
-}
+/// The one-shot parser over a borrowed mutator.
+pub type DocumentHtmlParser<'m, 'doc> = HtmlSink<BorrowedMutator<'m, 'doc>>;
 
-impl<'m, 'doc> DocumentHtmlParser<'m, 'doc> {
-    pub fn new(mutr: &'m mut DocumentMutator<'doc>) -> DocumentHtmlParser<'m, 'doc> {
-        DocumentHtmlParser {
-            document_mutator: RefCell::new(mutr),
+impl<A: DocAccess> HtmlSink<A> {
+    pub fn with_access(access: A) -> Self {
+        HtmlSink {
+            access,
             errors: RefCell::new(Vec::new()),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             is_xml: false,
+            fragment: false,
         }
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
+        self.access.with_mutator(f)
+    }
+}
+
+impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
+    pub fn new(mutr: &'m mut DocumentMutator<'doc>) -> Self {
+        Self::with_access(BorrowedMutator(RefCell::new(mutr)))
     }
 
     /// Detects documents without an XML or DOCTYPE declaration whose root `<html>` element
@@ -140,7 +197,8 @@ impl<'m, 'doc> DocumentHtmlParser<'m, 'doc> {
         element_id: NodeId,
         html: &str,
     ) {
-        let sink = DocumentHtmlParser::new(mutr);
+        let mut sink = DocumentHtmlParser::new(mutr);
+        sink.fragment = true;
 
         let opts = ParseOpts {
             tokenizer: TokenizerOpts::default(),
@@ -167,7 +225,7 @@ impl<'m, 'doc> DocumentHtmlParser<'m, 'doc> {
     }
 }
 
-impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
+impl<A: DocAccess> TreeSink for HtmlSink<A> {
     type Output = ();
 
     // we use the ID of the nodes in the tree as the handle
@@ -190,14 +248,11 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
     }
 
     fn get_document(&self) -> Self::Handle {
-        self.document_mutator.borrow().doc.root_node().id
+        self.with(|m| m.doc.root_node().id)
     }
 
     fn elem_name<'a>(&'a self, target: &'a Self::Handle) -> Self::ElemName<'a> {
-        Ref::map(self.document_mutator.borrow(), |docm| {
-            docm.element_name(*target)
-                .expect("TreeSink::elem_name called on a node which is not an element!")
-        })
+        self.access.element_name(*target)
     }
 
     fn create_element(
@@ -207,34 +262,44 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
         _flags: ElementFlags,
     ) -> Self::Handle {
         let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
-        self.mutr().create_element(name, attrs)
+        let is_script = name.local == html5ever::local_name!("script") && name.ns == html5ever::ns!(html);
+        let fragment = self.fragment;
+        self.with(|m| {
+            let id = m.create_element(name, attrs);
+            if is_script {
+                // The parser runs the scripts it creates; fragment parsing
+                // (innerHTML) never runs them.
+                m.mark_script(id, true, fragment);
+            }
+            id
+        })
     }
 
     fn create_comment(&self, text: StrTendril) -> Self::Handle {
-        self.mutr().create_comment_node(&text)
+        self.with(|m| m.create_comment_node(&text))
     }
 
     fn create_pi(&self, target: StrTendril, data: StrTendril) -> Self::Handle {
-        self.mutr().create_processing_instruction(&target, &data)
+        self.with(|m| m.create_processing_instruction(&target, &data))
     }
 
     fn append(&self, parent_id: &Self::Handle, child: NodeOrText<Self::Handle>) {
         match child {
-            NodeOrText::AppendNode(id) => self.mutr().append_children(*parent_id, &[id]),
+            NodeOrText::AppendNode(id) => self.with(|m| m.append_children(*parent_id, &[id])),
             // If content to append is text, first attempt to append it to the last child of parent.
             // Else create a new text node and append it to the parent
-            NodeOrText::AppendText(text) => {
-                let last_child_id = self.mutr().last_child_id(*parent_id);
+            NodeOrText::AppendText(text) => self.with(|m| {
+                let last_child_id = m.last_child_id(*parent_id);
                 let has_appended = if let Some(id) = last_child_id {
-                    self.mutr().append_text_to_node(id, &text).is_ok()
+                    m.append_text_to_node(id, &text).is_ok()
                 } else {
                     false
                 };
                 if !has_appended {
-                    let new_child_id = self.mutr().create_text_node(&text);
-                    self.mutr().append_children(*parent_id, &[new_child_id]);
+                    let new_child_id = m.create_text_node(&text);
+                    m.append_children(*parent_id, &[new_child_id]);
                 }
-            }
+            }),
         }
     }
 
@@ -242,22 +307,21 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
     // https://github.com/servo/html5ever/blob/main/rcdom/lib.rs#L338
     fn append_before_sibling(&self, sibling_id: &Self::Handle, new_node: NodeOrText<Self::Handle>) {
         match new_node {
-            NodeOrText::AppendNode(id) => self.mutr().insert_nodes_before(*sibling_id, &[id]),
+            NodeOrText::AppendNode(id) => self.with(|m| m.insert_nodes_before(*sibling_id, &[id])),
             // If content to append is text, first attempt to append it to the node before sibling_node
             // Else create a new text node and insert it before sibling_node
-            NodeOrText::AppendText(text) => {
-                let previous_sibling_id = self.mutr().previous_sibling_id(*sibling_id);
+            NodeOrText::AppendText(text) => self.with(|m| {
+                let previous_sibling_id = m.previous_sibling_id(*sibling_id);
                 let has_appended = if let Some(id) = previous_sibling_id {
-                    self.mutr().append_text_to_node(id, &text).is_ok()
+                    m.append_text_to_node(id, &text).is_ok()
                 } else {
                     false
                 };
                 if !has_appended {
-                    let new_child_id = self.mutr().create_text_node(&text);
-                    self.mutr()
-                        .insert_nodes_before(*sibling_id, &[new_child_id]);
+                    let new_child_id = m.create_text_node(&text);
+                    m.insert_nodes_before(*sibling_id, &[new_child_id]);
                 }
-            }
+            }),
         };
     }
 
@@ -267,7 +331,7 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
         prev_element: &Self::Handle,
         child: NodeOrText<Self::Handle>,
     ) {
-        if self.mutr().node_has_parent(*element) {
+        if self.with(|m| m.node_has_parent(*element)) {
             self.append_before_sibling(element, child);
         } else {
             self.append(prev_element, child);
@@ -280,16 +344,17 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
         public_id: StrTendril,
         system_id: StrTendril,
     ) {
-        let mut mutr = self.mutr();
-        let doctype = mutr.create_doctype(&name, &public_id, &system_id);
-        let root = mutr.doc.root_node().id;
-        mutr.append_children(root, &[doctype]);
+        let document = self.get_document();
+        self.with(|m| {
+            let doctype = m.create_doctype(&name, &public_id, &system_id);
+            m.append_children(document, &[doctype]);
+        });
     }
 
     fn get_template_contents(&self, target: &Self::Handle) -> Self::Handle {
         // Parse a template element's children into its (detached, inert)
         // "template contents" fragment node rather than into the element itself
-        self.mutr().template_contents(*target)
+        self.with(|m| m.template_contents(*target))
     }
 
     fn same_node(&self, x: &Self::Handle, y: &Self::Handle) -> bool {
@@ -302,16 +367,19 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
 
     fn add_attrs_if_missing(&self, target: &Self::Handle, attrs: Vec<html5ever::Attribute>) {
         let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
-        self.mutr().add_attrs_if_missing(*target, attrs);
+        self.with(|m| m.add_attrs_if_missing(*target, attrs));
     }
 
     fn remove_from_parent(&self, target: &Self::Handle) {
-        self.mutr().remove_node(*target);
+        self.with(|m| m.remove_node(*target));
+    }
+
+    fn mark_script_already_started(&self, node: &Self::Handle) {
+        self.with(|m| m.mark_script(*node, false, true));
     }
 
     fn reparent_children(&self, old_parent_id: &Self::Handle, new_parent_id: &Self::Handle) {
-        self.mutr()
-            .reparent_children(*old_parent_id, *new_parent_id);
+        self.with(|m| m.reparent_children(*old_parent_id, *new_parent_id));
     }
 }
 

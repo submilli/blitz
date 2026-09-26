@@ -55,6 +55,16 @@ pub struct FormControlState {
     pub checked_dirty: bool,
 }
 
+/// HTML script element flags.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScriptState {
+    /// "already started": the script has been prepared (or must never run,
+    /// e.g. it was created by `innerHTML`).
+    pub already_started: bool,
+    /// Created by the parser, which runs it itself at its end tag.
+    pub parser_inserted: bool,
+}
+
 pub struct ElementData {
     /// The elements tag name, namespace and prefix
     pub name: QualName,
@@ -95,6 +105,9 @@ pub struct ElementData {
     /// Form control value and checkedness, separate from the `value` and
     /// `checked` attributes (which hold the defaults).
     pub form_state: FormControlState,
+
+    /// `<script>` processing flags.
+    pub script_state: ScriptState,
     // /// Whether the node is a [HTML integration point] (https://html.spec.whatwg.org/multipage/#html-integration-point)
     // pub mathml_annotation_xml_integration_point: bool,
 
@@ -334,6 +347,7 @@ impl Clone for ElementData {
             after: None,
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
             form_state: FormControlState::default(),
+            script_state: ScriptState::default(),
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
             transform: None,
@@ -442,6 +456,7 @@ impl ElementData {
             after: None,
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
             form_state: FormControlState::default(),
+            script_state: ScriptState::default(),
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
             transform: None,

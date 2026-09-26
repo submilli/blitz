@@ -320,6 +320,9 @@ pub struct BaseDocument {
     /// tree or attribute changes). Lets embedders cache derived data such as
     /// live collections.
     pub(crate) dom_generation: u64,
+    /// `<script>` elements that became connected outside the parser and have
+    /// not been prepared yet; the embedder drains and runs them.
+    pub(crate) connected_scripts: Vec<NodeId>,
     /// Mutation records, while recording is on (see `mutations`).
     pub(crate) mutation_log: Option<Vec<crate::mutations::MutationRecord>>,
     /// DOM event listeners, per target.
@@ -491,6 +494,7 @@ impl BaseDocument {
 
             dom_generation: 0,
             event_listeners: Default::default(),
+            connected_scripts: Vec::new(),
             mutation_log: None,
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
@@ -1091,6 +1095,19 @@ impl BaseDocument {
     /// Changes after every batch of DOM mutations (see the field docs).
     pub fn dom_generation(&self) -> u64 {
         self.dom_generation
+    }
+
+    /// Script elements connected to the document since the last call that
+    /// still need to be prepared (inserted by script, not by the parser), in
+    /// insertion order. Each is marked "already started".
+    pub fn take_connected_scripts(&mut self) -> Vec<NodeId> {
+        let ids = std::mem::take(&mut self.connected_scripts);
+        for &id in &ids {
+            if let Some(el) = self.nodes.get_mut(id).and_then(|n| n.element_data_mut()) {
+                el.script_state.already_started = true;
+            }
+        }
+        ids
     }
 
     /// Resolve `raw` against the document's base URL. `None` when it cannot
