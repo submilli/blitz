@@ -320,6 +320,8 @@ pub struct BaseDocument {
     /// tree or attribute changes). Lets embedders cache derived data such as
     /// live collections.
     pub(crate) dom_generation: u64,
+    /// DOM event listeners, per target.
+    pub event_listeners: crate::dom_events::EventListeners,
     /// Set of changed nodes for updating the accessibility tree
     pub(crate) deferred_construction_nodes: Vec<ConstructionTask>,
 
@@ -486,6 +488,7 @@ impl BaseDocument {
             changed_nodes: HashSet::new(),
 
             dom_generation: 0,
+            event_listeners: Default::default(),
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
             pending_images: HashMap::new(),
