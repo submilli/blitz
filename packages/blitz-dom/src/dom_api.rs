@@ -399,6 +399,30 @@ impl BaseDocument {
         }
     }
 
+    /// The selected `<option>`s of a `<select>`: every option with the
+    /// `selected` attribute for a multiple select, otherwise the one
+    /// [`selected_option`](Self::selected_option).
+    pub fn selected_options(&self, select: NodeId) -> Vec<NodeId> {
+        let multiple = self.nodes[select].element_data().is_some_and(|e| e.attr(markup5ever::local_name!("multiple")).is_some());
+        if !multiple {
+            return self.selected_option(select).into_iter().collect();
+        }
+        // Options are children of the select or of its optgroups.
+        let is = |id: NodeId, tag: &str| self.nodes[id].element_data().is_some_and(|e| &*e.name.local == tag);
+        let mut options = Vec::new();
+        for &child in &self.nodes[select].children {
+            if is(child, "optgroup") {
+                options.extend(self.nodes[child].children.iter().copied().filter(|&c| is(c, "option")));
+            } else if is(child, "option") {
+                options.push(child);
+            }
+        }
+        options.retain(|&o| {
+            self.nodes[o].element_data().is_some_and(|e| e.attr(markup5ever::local_name!("selected")).is_some())
+        });
+        options
+    }
+
     /// The first selected `<option>` of a `<select>` (the first option when
     /// none has the `selected` attribute).
     pub fn selected_option(&self, select: NodeId) -> Option<NodeId> {

@@ -270,11 +270,20 @@ fn construct_entry_list(doc: &BaseDocument, form_id: NodeId, submitter_id: NodeI
             continue;
         };
 
-        // TODO: If the field element is a select element,
-        //  then for each option element in the select element's
-        //  list of options whose selectedness is true and that is not disabled,
-        //  create an entry with name and the value of the option element,
-        //  and append it to entry list.
+        // If the field element is a select element, then for each option
+        // element in the select element's list of options whose selectedness
+        // is true and that is not disabled, create an entry with name and the
+        // value of the option element, and append it to entry list.
+        if element.name.local == local_name!("select") {
+            for option in doc.selected_options(node.id) {
+                if doc.nodes[option].element_data().is_some_and(|o| o.attr(local_name!("disabled")).is_none())
+                    && let Some(value) = doc.form_value(option)
+                {
+                    create_entry(name, value.as_str().into());
+                }
+            }
+            continue;
+        }
 
         // Otherwise, if the field element is an input element whose type attribute is in the Checkbox state or the Radio Button state, then:
         if element.name.local == local_name!("input")
@@ -315,11 +324,11 @@ fn construct_entry_list(doc: &BaseDocument, form_id: NodeId, submitter_id: NodeI
             // Create an entry with name and charset, and append it to entry list.
             create_entry(name, charset.into());
         }
-        // Otherwise, create an entry with name and the value of the field element, and append it to entry list.
-        else if let Some(text) = element.text_input_data() {
-            create_entry(name, text.editor.text().to_string().as_str().into());
-        } else if let Some(value) = element.attr(local_name!("value")) {
-            create_entry(name, value.into());
+        // Otherwise, create an entry with name and the value of the field
+        // element (its current value, as script sees it), and append it to
+        // entry list.
+        else if let Some(value) = doc.form_value(node.id) {
+            create_entry(name, value.as_str().into());
         }
     }
     entry_list
