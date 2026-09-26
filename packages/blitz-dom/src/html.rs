@@ -9,6 +9,19 @@ pub trait HtmlParserProvider {
         html: &str,
     );
 
+    /// Parse `markup` as a whole document into the detached document node
+    /// `document` (see `DocumentMutator::create_document_node`). Scripts
+    /// in it never run. `xml` selects the XML parser.
+    fn parse_into_document_node<'m, 'doc>(
+        &self,
+        mutr: &'m mut DocumentMutator<'doc>,
+        document: NodeId,
+        markup: &str,
+        xml: bool,
+    ) {
+        let _ = (mutr, document, markup, xml);
+    }
+
     /// Parse a full HTML document (e.g. the contents of an `<iframe>`).
     ///
     /// The default implementation ignores the HTML and returns an empty document.

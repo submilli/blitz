@@ -142,6 +142,13 @@ impl DocumentMutator<'_> {
         })
     }
 
+    /// A detached, inert `Document` node (for `DOMParser`,
+    /// `createHTMLDocument`): it shares this tree's storage but is not the
+    /// browsing context's document, so it is never styled or rendered.
+    pub fn create_document_node(&mut self) -> NodeId {
+        self.doc.create_node(NodeData::Document(Box::default()))
+    }
+
     pub fn create_document_fragment(&mut self) -> NodeId {
         self.doc.create_node(NodeData::DocumentFragment)
     }

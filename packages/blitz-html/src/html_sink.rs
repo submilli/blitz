@@ -37,6 +37,16 @@ impl HtmlParserProvider for HtmlProvider {
         DocumentHtmlParser::parse_inner_html_into_mutator(mutr, element_id, html);
     }
 
+    fn parse_into_document_node<'m, 'doc>(
+        &self,
+        mutr: &'m mut DocumentMutator<'doc>,
+        document: NodeId,
+        markup: &str,
+        xml: bool,
+    ) {
+        DocumentHtmlParser::parse_into_document_node(mutr, document, markup, xml);
+    }
+
     fn parse_document(
         &self,
         html: &str,
@@ -105,6 +115,8 @@ pub struct HtmlSink<A: DocAccess> {
     pub is_xml: bool,
     /// Fragment parsing (`innerHTML`): scripts are marked already started.
     pub fragment: bool,
+    /// Build into this detached document node instead of the tree's root.
+    pub document_node: Option<NodeId>,
 }
 
 /// The one-shot parser over a borrowed mutator.
@@ -118,6 +130,7 @@ impl<A: DocAccess> HtmlSink<A> {
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             is_xml: false,
             fragment: false,
+            document_node: None,
         }
     }
 
@@ -174,6 +187,42 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
                 .read_from(&mut html.as_bytes())
                 .unwrap();
         }
+    }
+
+    /// Parse `markup` as a complete document into the detached document node
+    /// `document`. Scripting is disabled and scripts are marked already
+    /// started, as for `DOMParser`.
+    pub fn parse_into_document_node<'a, 'd>(
+        mutr: &'a mut DocumentMutator<'d>,
+        document: NodeId,
+        markup: &str,
+        xml: bool,
+    ) {
+        let mut sink = DocumentHtmlParser::new(mutr);
+        sink.document_node = Some(document);
+        sink.fragment = true;
+        if xml {
+            sink.is_xml = true;
+            xml5ever::driver::parse_document(sink, Default::default())
+                .from_utf8()
+                .read_from(&mut markup.as_bytes())
+                .unwrap();
+            return;
+        }
+        let opts = ParseOpts {
+            tokenizer: TokenizerOpts::default(),
+            tree_builder: TreeBuilderOpts {
+                exact_errors: false,
+                scripting_enabled: false,
+                iframe_srcdoc: false,
+                drop_doctype: false,
+                quirks_mode: QuirksMode::NoQuirks,
+            },
+        };
+        html5ever::parse_document(sink, opts)
+            .from_utf8()
+            .read_from(&mut markup.as_bytes())
+            .unwrap();
     }
 
     /// Parse the input as XML (XHTML), regardless of its content.
@@ -248,7 +297,10 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
     }
 
     fn get_document(&self) -> Self::Handle {
-        self.with(|m| m.doc.root_node().id)
+        match self.document_node {
+            Some(node) => node,
+            None => self.with(|m| m.doc.root_node().id),
+        }
     }
 
     fn elem_name<'a>(&'a self, target: &'a Self::Handle) -> Self::ElemName<'a> {
