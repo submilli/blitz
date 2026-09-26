@@ -447,16 +447,27 @@ pub(crate) fn fetch_font_face_rules<'a>(
                 .find_map(|url_source| {
                     let mut format = match &url_source.format_hint {
                         Some(FontFaceSourceFormat::Keyword(fmt)) => *fmt,
+                        // Quoted format strings (`format("woff")`) are common
+                        // in older stylesheets. A string naming a format we
+                        // do not support means this source must be skipped.
                         Some(FontFaceSourceFormat::String(str)) => match str.as_str() {
                             "woff2" => FontFaceSourceFormatKeyword::Woff2,
-                            "ttf" => FontFaceSourceFormatKeyword::Truetype,
-                            "otf" => FontFaceSourceFormatKeyword::Opentype,
-                            _ => FontFaceSourceFormatKeyword::None,
+                            "woff" => FontFaceSourceFormatKeyword::Woff,
+                            "truetype" | "ttf" => FontFaceSourceFormatKeyword::Truetype,
+                            "opentype" | "otf" => FontFaceSourceFormatKeyword::Opentype,
+                            "embedded-opentype" => FontFaceSourceFormatKeyword::EmbeddedOpentype,
+                            "svg" => FontFaceSourceFormatKeyword::Svg,
+                            _ => return None,
                         },
                         _ => FontFaceSourceFormatKeyword::None,
                     };
                     if format == FontFaceSourceFormatKeyword::None {
-                        let (_, end) = url_source.url.as_str().rsplit_once('.')?;
+                        // Guess from the file extension, ignoring any query or
+                        // fragment (`font.eot?#iefix`, possibly %-encoded).
+                        let path = url_source.url.as_str();
+                        let path = path.split(['?', '#']).next().unwrap_or(path);
+                        let path = path.strip_suffix("%3F").unwrap_or(path);
+                        let (_, end) = path.rsplit_once('.')?;
                         format = match end {
                             "woff2" => FontFaceSourceFormatKeyword::Woff2,
                             "woff" => FontFaceSourceFormatKeyword::Woff,
