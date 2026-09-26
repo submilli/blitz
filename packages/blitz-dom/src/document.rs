@@ -316,6 +316,10 @@ pub struct BaseDocument {
     pub(crate) iframe_loads: HashMap<NodeId, crate::iframe::IframeLoad>,
     /// Set of changed nodes for updating the accessibility tree
     pub(crate) changed_nodes: HashSet<NodeId>,
+    /// Bumped whenever a `DocumentMutator` is dropped (i.e. after any batch of
+    /// tree or attribute changes). Lets embedders cache derived data such as
+    /// live collections.
+    pub(crate) dom_generation: u64,
     /// Set of changed nodes for updating the accessibility tree
     pub(crate) deferred_construction_nodes: Vec<ConstructionTask>,
 
@@ -480,6 +484,8 @@ impl BaseDocument {
             pending_resource_deallocations: Vec::new(),
 
             changed_nodes: HashSet::new(),
+
+            dom_generation: 0,
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
             pending_images: HashMap::new(),
@@ -1064,6 +1070,11 @@ impl BaseDocument {
         }
 
         node
+    }
+
+    /// Changes after every batch of DOM mutations (see the field docs).
+    pub fn dom_generation(&self) -> u64 {
+        self.dom_generation
     }
 
     /// Resolve `raw` against the document's base URL. `None` when it cannot

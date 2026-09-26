@@ -69,6 +69,7 @@ pub struct DocumentMutator<'doc> {
 impl Drop for DocumentMutator<'_> {
     fn drop(&mut self) {
         self.flush(); // Defined at bottom of file
+        self.doc.dom_generation += 1;
         if self.mutations_occurred {
             self.doc.shell_provider.request_redraw();
         }
