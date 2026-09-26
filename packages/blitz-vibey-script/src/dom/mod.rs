@@ -74,8 +74,12 @@ pub(crate) fn node_wrapper(ctx: &DomCtx, node_id: NodeId, context: &mut Context)
         let node_data = doc.get_node(node_id).map(|node| &node.data);
         let proto = match node_data {
             Some(NodeData::Document(_)) => protos.document.clone(),
-            Some(NodeData::Element(_)) | Some(NodeData::AnonymousBlock(_)) => {
-                protos.element.clone()
+            // Fragments used to be modelled as elements here; keep their API
+            Some(NodeData::Element(_))
+            | Some(NodeData::AnonymousBlock(_))
+            | Some(NodeData::DocumentFragment) => protos.element.clone(),
+            Some(NodeData::Doctype { .. }) | Some(NodeData::ProcessingInstruction { .. }) => {
+                protos.node.clone()
             }
             Some(NodeData::Text(_)) | Some(NodeData::Comment { .. }) => {
                 protos.character_data.clone()

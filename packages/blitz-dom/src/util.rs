@@ -121,6 +121,9 @@ pub fn walk_tree(indent: usize, node: &Node) {
         }
 
         NodeData::Comment { .. } => println!("<!-- COMMENT {id} -->"),
+        NodeData::DocumentFragment => println!("#document-fragment {id}"),
+        NodeData::Doctype { name, .. } => println!("<!DOCTYPE {name}> {id}"),
+        NodeData::ProcessingInstruction { target, .. } => println!("<?{target}?> {id}"),
 
         NodeData::AnonymousBlock(_) => println!("{id} AnonymousBlock"),
 

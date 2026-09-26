@@ -839,6 +839,9 @@ pub enum NodeKind {
     AnonymousBlock,
     Text,
     Comment,
+    DocumentFragment,
+    Doctype,
+    ProcessingInstruction,
 }
 
 /// The different kinds of nodes in the DOM.
@@ -861,12 +864,22 @@ pub enum NodeData {
         /// The textual content of the comment
         contents: String,
     },
-    // /// A `DOCTYPE` with name, public id, and system id. See
-    // /// [document type declaration on wikipedia][https://en.wikipedia.org/wiki/Document_type_declaration]
-    // Doctype { name: String, public_id: String, system_id: String },
 
-    // /// A Processing instruction.
-    // ProcessingInstruction { target: String, contents: String },
+    /// A `DocumentFragment`: a parentless container whose children are moved
+    /// (not the fragment itself) when it is inserted. Also used for
+    /// `<template>` contents.
+    DocumentFragment,
+
+    /// A `DOCTYPE` with name, public id, and system id.
+    Doctype {
+        name: String,
+        public_id: String,
+        system_id: String,
+    },
+
+    /// A processing instruction (`<?target contents?>`), as produced by the
+    /// XML parser. The HTML parser turns these into comments.
+    ProcessingInstruction { target: String, contents: String },
 }
 
 impl NodeData {
@@ -913,6 +926,9 @@ impl NodeData {
             NodeData::AnonymousBlock(_) => NodeKind::AnonymousBlock,
             NodeData::Text(_) => NodeKind::Text,
             NodeData::Comment { .. } => NodeKind::Comment,
+            NodeData::DocumentFragment => NodeKind::DocumentFragment,
+            NodeData::Doctype { .. } => NodeKind::Doctype,
+            NodeData::ProcessingInstruction { .. } => NodeKind::ProcessingInstruction,
         }
     }
 }
@@ -1071,6 +1087,9 @@ impl Node {
                 )
             }
             NodeData::Comment { .. } => write!(s, "COMMENT"),
+            NodeData::DocumentFragment => write!(s, "FRAGMENT"),
+            NodeData::Doctype { name, .. } => write!(s, "DOCTYPE {name}"),
+            NodeData::ProcessingInstruction { target, .. } => write!(s, "PI {target}"),
             NodeData::AnonymousBlock(_) => write!(s, "AnonymousBlock"),
             NodeData::Element(data) => {
                 let name = &data.name;
@@ -1149,7 +1168,9 @@ impl Node {
             NodeData::Document(_) => {}
             NodeData::Comment { .. } => {}
             NodeData::AnonymousBlock(_) => {}
-            // NodeData::Doctype { name, .. } => write!(s, "DOCTYPE {name}"),
+            NodeData::DocumentFragment
+            | NodeData::Doctype { .. }
+            | NodeData::ProcessingInstruction { .. } => {}
             NodeData::Text(data) => {
                 if matches!(style, OutputStyle::Pretty) {
                     for _ in 0..nesting {

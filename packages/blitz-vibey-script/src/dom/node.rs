@@ -91,6 +91,9 @@ fn node_type(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<J
         Some(NodeData::Element(_)) | Some(NodeData::AnonymousBlock(_)) => 1,
         Some(NodeData::Text(_)) => 3,
         Some(NodeData::Comment { .. }) => 8,
+        Some(NodeData::DocumentFragment) => 11,
+        Some(NodeData::Doctype { .. }) => 10,
+        Some(NodeData::ProcessingInstruction { .. }) => 7,
         None => 0,
     };
     Ok(JsValue::from(node_type))
@@ -109,6 +112,9 @@ fn node_name(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<J
         }
         Some(NodeData::Text(_)) => "#text".to_string(),
         Some(NodeData::Comment { .. }) => "#comment".to_string(),
+        Some(NodeData::DocumentFragment) => "#document-fragment".to_string(),
+        Some(NodeData::Doctype { name, .. }) => name.clone(),
+        Some(NodeData::ProcessingInstruction { target, .. }) => target.clone(),
         None => String::new(),
     };
     Ok(js_str(&name))

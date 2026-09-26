@@ -137,6 +137,25 @@ impl DocumentMutator<'_> {
         })
     }
 
+    pub fn create_document_fragment(&mut self) -> NodeId {
+        self.doc.create_node(NodeData::DocumentFragment)
+    }
+
+    pub fn create_doctype(&mut self, name: &str, public_id: &str, system_id: &str) -> NodeId {
+        self.doc.create_node(NodeData::Doctype {
+            name: name.to_string(),
+            public_id: public_id.to_string(),
+            system_id: system_id.to_string(),
+        })
+    }
+
+    pub fn create_processing_instruction(&mut self, target: &str, contents: &str) -> NodeId {
+        self.doc.create_node(NodeData::ProcessingInstruction {
+            target: target.to_string(),
+            contents: contents.to_string(),
+        })
+    }
+
     pub fn create_text_node(&mut self, text: &str) -> NodeId {
         self.doc.create_text_node(text)
     }
@@ -169,12 +188,7 @@ impl DocumentMutator<'_> {
         if let Some(contents_id) = self.try_template_contents(template_id) {
             return contents_id;
         }
-        let name = QualName::new(
-            None,
-            markup5ever::ns!(html),
-            markup5ever::LocalName::from("#document-fragment"),
-        );
-        let contents_id = self.create_element(name, Vec::new());
+        let contents_id = self.create_document_fragment();
         if let Some(element) = self
             .doc
             .get_node_mut(template_id)

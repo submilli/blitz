@@ -670,6 +670,9 @@ impl PrintTree for BaseDocument {
             // NodeData::Doctype { .. } => return "DOCTYPE",
             NodeData::Text { .. } => node.node_debug_str().leak(),
             NodeData::Comment { .. } => "COMMENT",
+            NodeData::DocumentFragment => "FRAGMENT",
+            NodeData::Doctype { .. } => "DOCTYPE",
+            NodeData::ProcessingInstruction { .. } => "PI",
             NodeData::AnonymousBlock(_) => "ANONYMOUS BLOCK",
             NodeData::Element(_) => {
                 let style = node.layout_style();

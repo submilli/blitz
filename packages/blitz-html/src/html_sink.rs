@@ -108,7 +108,7 @@ impl<'m, 'doc> DocumentHtmlParser<'m, 'doc> {
                     exact_errors: false,
                     scripting_enabled: false, // Enables parsing of <noscript> tags
                     iframe_srcdoc: false,
-                    drop_doctype: true,
+                    drop_doctype: false,
                     quirks_mode: QuirksMode::NoQuirks,
                 },
             };
@@ -214,8 +214,8 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
         self.mutr().create_comment_node(&text)
     }
 
-    fn create_pi(&self, _target: StrTendril, _data: StrTendril) -> Self::Handle {
-        self.mutr().create_comment_node("")
+    fn create_pi(&self, target: StrTendril, data: StrTendril) -> Self::Handle {
+        self.mutr().create_processing_instruction(&target, &data)
     }
 
     fn append(&self, parent_id: &Self::Handle, child: NodeOrText<Self::Handle>) {
@@ -276,11 +276,14 @@ impl<'m, 'doc> TreeSink for DocumentHtmlParser<'m, 'doc> {
 
     fn append_doctype_to_document(
         &self,
-        _name: StrTendril,
-        _public_id: StrTendril,
-        _system_id: StrTendril,
+        name: StrTendril,
+        public_id: StrTendril,
+        system_id: StrTendril,
     ) {
-        // Ignore. We don't care about the DOCTYPE for now.
+        let mut mutr = self.mutr();
+        let doctype = mutr.create_doctype(&name, &public_id, &system_id);
+        let root = mutr.doc.root_node().id;
+        mutr.append_children(root, &[doctype]);
     }
 
     fn get_template_contents(&self, target: &Self::Handle) -> Self::Handle {
