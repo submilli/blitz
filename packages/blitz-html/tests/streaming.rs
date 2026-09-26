@@ -82,3 +82,18 @@ fn scripts_inserted_by_dom_manipulation_are_queued_once() {
     assert_eq!(d.take_connected_scripts(), vec![script]);
     assert!(d.take_connected_scripts().is_empty());
 }
+
+#[test]
+fn style_text_arriving_in_chunks_is_fully_applied() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let mut parser = StreamingParser::new(doc.clone());
+    // Network input arrives in pieces, splitting the style element's text.
+    parser.feed("<style>p { color: rgb(1, 2, 3); }");
+    parser.feed(" em { color: rgb(4, 5, 6); }</style><p id=p><em id=e>x</em></p>");
+    parser.end_of_input();
+    while let ParseStep::Script(_) = parser.run() {}
+    let mut doc = doc.borrow_mut();
+    doc.resolve(0.0);
+    let e = doc.query_selector("#e").unwrap().unwrap();
+    assert_eq!(doc.resolved_style_value(e, "color"), "rgb(4, 5, 6)");
+}

@@ -287,6 +287,10 @@ impl DocumentMutator<'_> {
                 }
                 data.content += text;
                 self.mutations_occurred |= node_is_in_document;
+                // A `<style>` (or `<title>`) whose text grew must be
+                // re-processed; the parser appends long text in chunks.
+                let parent_id = self.doc.nodes[node_id].parent;
+                self.maybe_record_node(parent_id);
                 Ok(())
             }
             None => Err(AppendTextErr::NotTextNode),
