@@ -132,6 +132,66 @@ pub use util::{Point, decode_font_bytes};
 /// fallback for every generic family. The standard setup for WASM, where
 /// browsers don't expose system fonts. WOFF/WOFF2 inputs are decoded
 /// automatically.
+/// The role a supplied font plays for CSS generic families.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontRole {
+    /// `sans-serif`, and the fallback for `system-ui`, `cursive`, `fantasy`
+    /// and unknown families.
+    SansSerif,
+    /// `serif`
+    Serif,
+    /// `monospace`
+    Monospace,
+}
+
+/// Build a font context from supplied font files only (no system font
+/// discovery), mapping CSS generic families to them by role. The bullet font
+/// used for list markers is always registered.
+///
+/// This lets an embedder control exactly which fonts a document can use,
+/// which is needed for deterministic rendering and for platforms without
+/// system fonts.
+pub fn build_font_ctx(fonts: &[(FontRole, &[u8])]) -> FontContext {
+    use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
+    use std::sync::Arc;
+
+    let mut ctx = FontContext {
+        source_cache: SourceCache::new_shared(),
+        collection: Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        }),
+    };
+    ctx.collection
+        .register_fonts(Blob::new(Arc::new(BULLET_FONT) as _), None);
+    for &(role, data) in fonts {
+        let decoded = decode_font_bytes(data).into_owned();
+        let families: Vec<_> = ctx
+            .collection
+            .register_fonts(Blob::new(Arc::new(decoded) as _), None)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        let generics: &[GenericFamily] = match role {
+            FontRole::SansSerif => &[
+                GenericFamily::SansSerif,
+                GenericFamily::SystemUi,
+                GenericFamily::UiSansSerif,
+                GenericFamily::Cursive,
+                GenericFamily::Fantasy,
+                GenericFamily::UiRounded,
+            ],
+            FontRole::Serif => &[GenericFamily::Serif, GenericFamily::UiSerif],
+            FontRole::Monospace => &[GenericFamily::Monospace, GenericFamily::UiMonospace],
+        };
+        for &generic in generics {
+            ctx.collection
+                .append_generic_families(generic, families.iter().copied());
+        }
+    }
+    ctx
+}
+
 pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
     use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
     use std::sync::Arc;
@@ -158,4 +218,31 @@ pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
             .append_generic_families(generic, family_ids.iter().copied());
     }
     ctx
+}
+
+#[cfg(test)]
+mod font_ctx_tests {
+    use super::{BULLET_FONT, FontRole, build_font_ctx};
+    use parley::fontique::GenericFamily;
+
+    #[test]
+    fn roles_map_to_css_generic_families() {
+        let mut ctx = build_font_ctx(&[(FontRole::Monospace, BULLET_FONT)]);
+        let has = |ctx: &mut crate::FontContext, g| ctx.collection.generic_families(g).next().is_some();
+        assert!(has(&mut ctx, GenericFamily::Monospace));
+        assert!(has(&mut ctx, GenericFamily::UiMonospace));
+        assert!(!has(&mut ctx, GenericFamily::Serif), "no serif font was supplied");
+
+        let mut ctx = build_font_ctx(&[(FontRole::SansSerif, BULLET_FONT)]);
+        for g in [GenericFamily::SansSerif, GenericFamily::SystemUi, GenericFamily::Cursive] {
+            assert!(has(&mut ctx, g), "{g:?} falls back to the sans-serif font");
+        }
+    }
+
+    #[test]
+    fn no_system_fonts_are_discovered() {
+        let mut ctx = build_font_ctx(&[]);
+        // Only the bundled bullet font is registered.
+        assert_eq!(ctx.collection.family_names().count(), 1);
+    }
 }
