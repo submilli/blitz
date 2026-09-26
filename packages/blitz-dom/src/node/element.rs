@@ -108,6 +108,9 @@ pub struct ElementData {
 
     /// `<script>` processing flags.
     pub script_state: ScriptState,
+
+    /// See [`crate::custom_elements`]; behind `:defined`.
+    pub custom_element_state: crate::custom_elements::CustomElementState,
     // /// Whether the node is a [HTML integration point] (https://html.spec.whatwg.org/multipage/#html-integration-point)
     // pub mathml_annotation_xml_integration_point: bool,
 
@@ -348,6 +351,8 @@ impl Clone for ElementData {
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
             form_state: FormControlState::default(),
             script_state: ScriptState::default(),
+            // A clone starts undefined; the embedder upgrades it.
+            custom_element_state: crate::custom_elements::CustomElementState::initial(&self.name),
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
             transform: None,
@@ -431,6 +436,7 @@ impl ElementData {
             .map(|attr| attr.value.as_ref())
             .map(|value: &str| Atom::from(value));
 
+        let custom_element_state = crate::custom_elements::CustomElementState::initial(&name);
         let mut data = ElementData {
             name,
             id: id_attr_atom,
@@ -457,6 +463,7 @@ impl ElementData {
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
             form_state: FormControlState::default(),
             script_state: ScriptState::default(),
+            custom_element_state,
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
             transform: None,

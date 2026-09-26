@@ -470,7 +470,7 @@ impl selectors::Element for BlitzNode<'_> {
             NonTSPseudoClass::Checked => self.element_state().contains(ElementState::CHECKED),
             NonTSPseudoClass::Valid => false,
             NonTSPseudoClass::Invalid => false,
-            NonTSPseudoClass::Defined => false,
+            NonTSPseudoClass::Defined => self.element_data().is_some_and(|el| el.custom_element_state.is_defined()),
             NonTSPseudoClass::Disabled => self.element_state().contains(ElementState::DISABLED),
             NonTSPseudoClass::Enabled => self.element_state().contains(ElementState::ENABLED),
             NonTSPseudoClass::Focus => self.element_state().contains(ElementState::FOCUS),

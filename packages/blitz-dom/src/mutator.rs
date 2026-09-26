@@ -5,6 +5,7 @@ use std::ops::{Deref, DerefMut};
 
 use crate::layout::damage::ALL_DAMAGE;
 use crate::net::{ImageHandler, ResourceHandler, StylesheetHandler};
+use crate::custom_elements::{CustomElementReaction, CustomElementState};
 use crate::mutations::MutationRecord;
 use crate::node::{CanvasData, NodeFlags, SpecialElementData};
 use crate::stylo_device::DeviceChanges;
@@ -317,6 +318,20 @@ impl DocumentMutator<'_> {
     }
 
     pub fn set_attribute(&mut self, node_id: NodeId, name: QualName, value: &str) {
+        if self.doc.custom_element_state(node_id) == CustomElementState::Custom
+            && self.doc.is_recording_custom_element_reactions()
+        {
+            let old_value = self.doc.nodes[node_id]
+                .element_data()
+                .and_then(|el| el.attrs().iter().find(|a| a.name == name).map(|a| a.value.to_string()));
+            self.doc.record_custom_element_reaction(CustomElementReaction::AttributeChanged {
+                element: node_id,
+                name: name.local.to_string(),
+                namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
+                old_value,
+                new_value: Some(value.to_string()),
+            });
+        }
         if self.doc.is_recording_mutations() {
             let old_value = self.doc.nodes[node_id]
                 .element_data()
@@ -503,6 +518,15 @@ impl DocumentMutator<'_> {
                 name: name.local.to_string(),
                 namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
                 old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
+            });
+        }
+        if self.doc.custom_element_state(node_id) == CustomElementState::Custom {
+            self.doc.record_custom_element_reaction(CustomElementReaction::AttributeChanged {
+                element: node_id,
+                name: name.local.to_string(),
+                namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
+                old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
+                new_value: None,
             });
         }
         let node = &mut self.doc.nodes[node_id];
@@ -831,6 +855,15 @@ impl DocumentMutator<'_> {
                 self.process_added_subtree(child_id);
             } else if !new_parent_is_in_document && child_was_in_doc {
                 self.process_removed_subtree(child_id);
+            } else if child_was_in_doc && self.doc.is_recording_custom_element_reactions() {
+                // A move within the document disconnects and reconnects.
+                for reaction in [CustomElementReaction::Disconnected, CustomElementReaction::Connected] {
+                    self.doc.iter_subtree_mut(child_id, |id, doc| {
+                        if doc.custom_element_state(id) != CustomElementState::Uncustomized {
+                            doc.record_custom_element_reaction(reaction(id));
+                        }
+                    });
+                }
             }
         }
 
@@ -1050,6 +1083,11 @@ impl<'doc> DocumentMutator<'doc> {
 
     fn process_added_subtree(&mut self, node_id: NodeId) {
         self.doc.iter_subtree_mut(node_id, |node_id, doc| {
+            if doc.is_recording_custom_element_reactions()
+                && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
+            {
+                doc.record_custom_element_reaction(CustomElementReaction::Connected(node_id));
+            }
             let node = &mut doc.nodes[node_id];
             node.flags.set(NodeFlags::IS_IN_DOCUMENT, true);
             node.insert_damage(ALL_DAMAGE);
@@ -1109,6 +1147,11 @@ impl<'doc> DocumentMutator<'doc> {
 
     fn process_removed_subtree(&mut self, node_id: NodeId) {
         self.doc.iter_subtree_mut(node_id, |node_id, doc| {
+            if doc.is_recording_custom_element_reactions()
+                && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
+            {
+                doc.record_custom_element_reaction(CustomElementReaction::Disconnected(node_id));
+            }
             doc.nodes[node_id]
                 .flags
                 .set(NodeFlags::IS_IN_DOCUMENT, false);

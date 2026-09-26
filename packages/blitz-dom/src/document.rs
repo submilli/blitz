@@ -327,6 +327,8 @@ pub struct BaseDocument {
     pub(crate) connected_scripts: Vec<NodeId>,
     /// Mutation records, while recording is on (see `mutations`).
     pub(crate) mutation_log: Option<Vec<crate::mutations::MutationRecord>>,
+    /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
+    pub(crate) custom_element_reactions: Option<Vec<crate::custom_elements::CustomElementReaction>>,
     /// DOM event listeners, per target.
     pub event_listeners: crate::dom_events::EventListeners,
     /// Set of changed nodes for updating the accessibility tree
@@ -505,6 +507,7 @@ impl BaseDocument {
             event_listeners: Default::default(),
             connected_scripts: Vec::new(),
             mutation_log: None,
+            custom_element_reactions: None,
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
             pending_images: HashMap::new(),
@@ -1466,6 +1469,27 @@ impl BaseDocument {
     /// Snapshot the node's pre-mutation state (element state and attributes) ahead of
     /// an attribute mutation, so that the next style traversal can diff selector matches
     /// then-vs-now and invalidate the affected elements.
+    /// Snapshot `node_id` and restyle it and its subtree, and its parent's
+    /// (its box may appear or disappear), as an attribute change does.
+    pub(crate) fn restyle_subtree_of(&mut self, node_id: NodeId) {
+        use style::invalidation::element::restyle_hints::RestyleHint;
+        self.snapshot_node(node_id);
+        let node = &mut self.nodes[node_id];
+        if let Some(mut data) = node.try_stylo_element_data_mut().and_then(|s| s.get_mut()) {
+            data.hint |= RestyleHint::restyle_subtree();
+            data.damage.insert(crate::layout::damage::ALL_DAMAGE);
+        }
+        node.mark_damaged();
+        if let Some(parent_id) = node.parent {
+            let parent = &mut self.nodes[parent_id];
+            parent.insert_damage(crate::layout::damage::ALL_DAMAGE);
+            if let Some(mut data) = parent.try_stylo_element_data_mut().and_then(|s| s.get_mut()) {
+                data.hint |= RestyleHint::restyle_subtree();
+            }
+        }
+        self.nodes[node_id].mark_ancestors_dirty();
+    }
+
     pub fn snapshot_node(&mut self, node_id: NodeId) {
         self.snapshot_node_impl(node_id, true)
     }
