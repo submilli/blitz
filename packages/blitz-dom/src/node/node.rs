@@ -42,6 +42,7 @@ use super::{Attribute, DocumentData, ElementData, LayoutData};
 
 #[derive(Clone, Copy)]
 enum OutputStyle {
+    #[cfg_attr(not(feature = "svg"), expect(dead_code))]
     Normal,
     Pretty,
 }
@@ -1114,16 +1115,26 @@ impl Node {
         s
     }
 
-    /// Renders the HTML of this node and all its children as a `String` without extra whitespace.
-    ///
-    /// Example output:
-    ///
-    /// ```text
-    /// <html><head /><body><main id="main"><div class="arbitrary-class" /></main></body></html>
-    /// ```
+    /// Serializes this node and its descendants per the HTML fragment
+    /// serialization algorithm (the `outerHTML` getter).
     pub fn outer_html(&self) -> String {
+        crate::serialize::outer_html(self)
+    }
+
+    /// Serializes this node's children per the HTML fragment serialization
+    /// algorithm (the `innerHTML` getter). For `<template>` this serializes
+    /// the template contents.
+    pub fn inner_html(&self) -> String {
+        crate::serialize::inner_html(self)
+    }
+
+    /// XML-flavoured markup (self-closing empty elements, `currentColor`
+    /// resolved) used to hand inline `<svg>` subtrees to usvg. Not HTML
+    /// serialization: use [`outer_html`](Self::outer_html) for that.
+    #[cfg(feature = "svg")]
+    pub(crate) fn svg_markup(&self) -> String {
         let mut output = String::new();
-        self.write_outer_html(&mut output);
+        self.write_outer_html_in_style(&mut output, OutputStyle::Normal, 0);
         output
     }
 
@@ -1146,10 +1157,6 @@ impl Node {
         let mut output = String::new();
         self.write_outer_html_pretty(&mut output);
         output
-    }
-
-    pub fn write_outer_html(&self, writer: &mut String) {
-        self.write_outer_html_in_style(writer, OutputStyle::Normal, 0);
     }
 
     pub fn write_outer_html_pretty(&self, writer: &mut String) {
