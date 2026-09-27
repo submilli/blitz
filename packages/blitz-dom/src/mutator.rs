@@ -659,25 +659,38 @@ impl DocumentMutator<'_> {
                 });
             }
         }
+        let Some(parent_id) = self.unlink(node_id) else {
+            return;
+        };
+        self.doc.nodes[parent_id]
+            .children
+            .retain(|id| *id != node_id);
+        self.detached_from(parent_id);
+    }
+
+    /// Process `node_id`'s subtree as removed and clear its parent link,
+    /// leaving the parent's child list to the caller. Returns the old
+    /// parent.
+    fn unlink(&mut self, node_id: NodeId) -> Option<NodeId> {
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         // Process the subtree *before* severing the parent link so that
         // interaction state referencing removed nodes can retarget to the
         // nearest surviving ancestor.
         self.process_removed_subtree(node_id);
-
         let node = &mut self.doc.nodes[node_id];
-
-        // Update child_idx values
         node.flat_parent.set(crate::node::FlatParent::Dom);
-        if let Some(parent_id) = node.parent.take() {
-            self.mutations_occurred |= node_is_in_document;
-            let parent = &mut self.doc.nodes[parent_id];
-            parent.insert_damage(ALL_DAMAGE);
-            // Mark ancestors dirty so the style traversal visits this subtree.
-            parent.mark_ancestors_dirty();
-            parent.children.retain(|id| *id != node_id);
-            self.maybe_record_node(parent_id);
-        }
+        let parent_id = node.parent.take()?;
+        self.mutations_occurred |= node_is_in_document;
+        Some(parent_id)
+    }
+
+    /// Mark `parent_id` changed once children have been unlinked from it.
+    fn detached_from(&mut self, parent_id: NodeId) {
+        let parent = &mut self.doc.nodes[parent_id];
+        parent.insert_damage(ALL_DAMAGE);
+        // Mark ancestors dirty so the style traversal visits this subtree.
+        parent.mark_ancestors_dirty();
+        self.maybe_record_node(parent_id);
     }
 
     /// Detach every child of `parent` without dropping them, clearing its
@@ -689,22 +702,11 @@ impl DocumentMutator<'_> {
         if children.is_empty() {
             return;
         }
-        for &child_id in &children {
-            self.mutations_occurred |= self.doc.nodes[child_id].flags.is_in_document();
-            // Before the parent link is severed, as in `remove_node`.
-            self.process_removed_subtree(child_id);
+        for child_id in children {
+            self.unlink(child_id);
         }
-        for &child_id in &children {
-            let child = &mut self.doc.nodes[child_id];
-            child.flat_parent.set(crate::node::FlatParent::Dom);
-            child.parent = None;
-        }
-        let parent = &mut self.doc.nodes[parent_id];
-        parent.insert_damage(ALL_DAMAGE);
-        // Mark ancestors dirty so the style traversal visits this subtree.
-        parent.mark_ancestors_dirty();
-        parent.children.clear();
-        self.maybe_record_node(parent_id);
+        self.doc.nodes[parent_id].children.clear();
+        self.detached_from(parent_id);
     }
 
     pub fn remove_and_drop_node(&mut self, node_id: NodeId) -> Option<Node> {

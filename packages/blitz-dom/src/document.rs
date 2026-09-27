@@ -295,11 +295,9 @@ pub struct BaseDocument {
     /// Whether there are subdocuments that are animating (so we should re-render every frame)
     pub(crate) subdoc_is_animating: bool,
 
-    /// Map of id attribute values to node IDs for fast lookups.
-    /// May contain multiple nodes for the same id: `get_element_by_id`
-    /// returns the first in tree order.
-    /// Every connected element by `id` attribute. A set, so pages with
-    /// many elements sharing an id stay linear to maintain.
+    /// Every connected element by `id` attribute, for `get_element_by_id`,
+    /// which returns the first in tree order. A set per id, so many
+    /// elements sharing an id stay linear to maintain.
     pub(crate) nodes_to_id: HashMap<String, HashSet<NodeId>>,
     /// Map of `<style>` and `<link>` node IDs to their associated stylesheet
     pub(crate) nodes_to_stylesheet: BTreeMap<NodeId, DocumentStyleSheet>,

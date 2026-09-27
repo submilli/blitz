@@ -189,30 +189,19 @@ fn deep_trees_serialize_clone_and_collect_text_without_recursion() {
     // stack, recursing once per level would overflow long before this
     // depth.
     const DEPTH: usize = 20_000;
-    let result = std::thread::Builder::new()
-        .stack_size(256 << 10)
-        .spawn(|| {
-            let mut doc = parse(PAGE);
-            let a = q(&doc, "#a");
-            let mut m = doc.mutate();
-            let mut deepest = a;
-            for _ in 0..DEPTH {
-                let child = m.create_element(html_name("i"), Vec::new());
-                m.append_children(deepest, &[child]);
-                deepest = child;
-            }
-            let leaf = m.create_text_node("leaf");
-            m.append_children(deepest, &[leaf]);
-            let copy = m.clone_node(a, true);
-            drop(m);
-            let html = doc.get_node(a).unwrap().inner_html();
-            let outer = doc.get_node(copy).unwrap().outer_html();
-            let text = doc.text_content_of(copy).unwrap();
-            (html.len(), outer.len(), text)
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let result = on_small_stack(|| {
+        let mut doc = parse(PAGE);
+        let a = q(&doc, "#a");
+        let mut m = doc.mutate();
+        let chain = deep_chain(&mut m, DEPTH, "leaf");
+        m.append_children(a, &[chain]);
+        let copy = m.clone_node(a, true);
+        drop(m);
+        let html = doc.get_node(a).unwrap().inner_html();
+        let outer = doc.get_node(copy).unwrap().outer_html();
+        let text = doc.text_content_of(copy).unwrap();
+        (html.len(), outer.len(), text)
+    });
     let inner_len =
         "<p id=\"p1\">one</p><p id=\"p2\">two</p>".len() + DEPTH * "<i></i>".len() + "leaf".len();
     assert_eq!(result.0, inner_len);
@@ -229,12 +218,7 @@ fn connecting_a_deep_subtree_takes_linear_time() {
     let mut doc = parse(PAGE);
     let a = q(&doc, "#a");
     let mut m = doc.mutate();
-    let mut top = m.create_element(html_name("i"), Vec::new());
-    for _ in 1..DEPTH {
-        let parent = m.create_element(html_name("i"), Vec::new());
-        m.append_children(parent, &[top]);
-        top = parent;
-    }
+    let top = deep_chain(&mut m, DEPTH, "leaf");
     let start = std::time::Instant::now();
     m.append_children(a, &[top]);
     drop(m);
@@ -274,36 +258,24 @@ fn deep_text_in_title_and_style_elements_collects_without_recursion() {
     // children change; on a small stack, recursing once per level would
     // overflow long before this depth.
     const DEPTH: usize = 20_000;
-    let texts = std::thread::Builder::new()
-        .stack_size(256 << 10)
-        .spawn(|| {
-            let mut doc = parse(PAGE);
-            let head = q(&doc, "head");
-            let mut m = doc.mutate();
-            let mut texts = Vec::new();
-            for tag in ["title", "style"] {
-                let element = m.create_element(html_name(tag), Vec::new());
-                m.append_children(head, &[element]);
-                let leaf = m.create_text_node("leaf");
-                let mut top = m.create_element(html_name("i"), Vec::new());
-                m.append_children(top, &[leaf]);
-                for _ in 1..DEPTH {
-                    let parent = m.create_element(html_name("i"), Vec::new());
-                    m.append_children(parent, &[top]);
-                    top = parent;
-                }
-                m.append_children(element, &[top]);
-                texts.push(element);
-            }
-            drop(m);
-            texts
-                .iter()
-                .map(|&id| doc.get_node(id).unwrap().text_content())
-                .collect::<Vec<_>>()
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let texts = on_small_stack(|| {
+        let mut doc = parse(PAGE);
+        let head = q(&doc, "head");
+        let mut m = doc.mutate();
+        let mut elements = Vec::new();
+        for tag in ["title", "style"] {
+            let element = m.create_element(html_name(tag), Vec::new());
+            m.append_children(head, &[element]);
+            let chain = deep_chain(&mut m, DEPTH, "leaf");
+            m.append_children(element, &[chain]);
+            elements.push(element);
+        }
+        drop(m);
+        elements
+            .iter()
+            .map(|&id| doc.get_node(id).unwrap().text_content())
+            .collect::<Vec<_>>()
+    });
     assert_eq!(texts, ["leaf", "leaf"]);
 }
 
@@ -375,4 +347,33 @@ fn html_name(local: &str) -> blitz_dom::QualName {
         blitz_dom::ns!(html),
         blitz_dom::LocalName::from(local),
     )
+}
+
+/// A detached chain of `depth` nested `<i>` elements with a `leaf` text
+/// node at the bottom, built bottom-up; returns the top.
+fn deep_chain(
+    m: &mut blitz_dom::DocumentMutator<'_>,
+    depth: usize,
+    leaf: &str,
+) -> blitz_dom::NodeId {
+    let text = m.create_text_node(leaf);
+    let mut top = m.create_element(html_name("i"), Vec::new());
+    m.append_children(top, &[text]);
+    for _ in 1..depth {
+        let parent = m.create_element(html_name("i"), Vec::new());
+        m.append_children(parent, &[top]);
+        top = parent;
+    }
+    top
+}
+
+/// Run `test` on a 256 KiB stack, where recursing once per tree level
+/// overflows at a few thousand levels.
+fn on_small_stack<T: Send + 'static>(test: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(256 << 10)
+        .spawn(test)
+        .unwrap()
+        .join()
+        .unwrap()
 }
