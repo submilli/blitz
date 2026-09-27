@@ -1108,6 +1108,7 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     fn process_added_subtree(&mut self, node_id: NodeId) {
+        let shadow_nodes = self.shadow_tree_nodes(node_id);
         self.doc
             .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
                 if doc.is_recording_custom_element_reactions()
@@ -1121,7 +1122,7 @@ impl<'doc> DocumentMutator<'doc> {
 
                 // If the node has an "id" attribute, store it in the ID map
                 // (the document's: ids in shadow trees are scoped to them).
-                let in_shadow_tree = doc.containing_shadow_root(node_id).is_some();
+                let in_shadow_tree = shadow_nodes.contains(&node_id);
                 if let Some(id_attr) = doc.nodes[node_id]
                     .attr(local_name!("id"))
                     .map(ToString::to_string)
@@ -1177,6 +1178,27 @@ impl<'doc> DocumentMutator<'doc> {
             });
 
         self.flush_eager_ops();
+    }
+
+    /// The nodes of `node_id`'s shadow-including subtree that are in a
+    /// shadow tree: all of them when `node_id` is, and everything under a
+    /// host's shadow root. One pass carrying the answer down, where asking
+    /// each node for its tree root would cost time in the depth per node.
+    fn shadow_tree_nodes(&self, node_id: NodeId) -> HashSet<NodeId> {
+        let root_in_shadow = self.doc.containing_shadow_root(node_id).is_some();
+        let mut stack = vec![(node_id, root_in_shadow)];
+        let mut nodes = HashSet::new();
+        while let Some((id, in_shadow)) = stack.pop() {
+            if in_shadow {
+                nodes.insert(id);
+            }
+            let node = &self.doc.nodes[id];
+            stack.extend(node.children.iter().map(|&child| (child, in_shadow)));
+            if let Some(root) = node.element_data().and_then(|el| el.shadow_root) {
+                stack.push((root, true));
+            }
+        }
+        nodes
     }
 
     fn process_removed_subtree(&mut self, node_id: NodeId) {

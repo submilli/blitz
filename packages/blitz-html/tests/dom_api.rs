@@ -227,3 +227,29 @@ fn html_name(local: &str) -> blitz_dom::QualName {
         blitz_dom::LocalName::from(local),
     )
 }
+
+#[test]
+fn connecting_a_deep_subtree_takes_linear_time() {
+    // Connecting each node used to walk to its tree root, so connecting a
+    // chain cost time in its depth squared: seconds at this depth, even
+    // optimized. One pass now carries whether a node is in a shadow tree.
+    const DEPTH: usize = 40_000;
+    let mut doc = parse(PAGE);
+    let a = q(&doc, "#a");
+    let mut m = doc.mutate();
+    let mut top = m.create_element(html_name("i"), Vec::new());
+    for _ in 1..DEPTH {
+        let parent = m.create_element(html_name("i"), Vec::new());
+        m.append_children(parent, &[top]);
+        top = parent;
+    }
+    let start = std::time::Instant::now();
+    m.append_children(a, &[top]);
+    drop(m);
+    let elapsed = start.elapsed();
+    assert!(doc.is_connected(top));
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "connecting took {elapsed:?}"
+    );
+}
