@@ -112,6 +112,7 @@ pub use node::{Attribute, DocumentData, ElementData, Node, NodeData, TextNodeDat
 /// The text engine, for embedders that shape text with the document's fonts.
 pub use parley;
 pub use parley::FontContext;
+pub use query_selector::MAX_SELECTOR_NESTING;
 pub use scrolling::{ScrollBehavior, ScrollLogicalPosition};
 pub use tree::NodeTree;
 

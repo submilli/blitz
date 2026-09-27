@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use blitz_traits::node_id::NodeId;
+use cssparser::{ParseErrorKind, SourceLocation};
 use selectors::SelectorList;
 use smallvec::SmallVec;
 use style::dom::{TDocument, TNode};
@@ -8,7 +9,7 @@ use style::dom_apis::{
     MayUseInvalidation, QueryAll, QueryFirst, element_closest, element_matches, query_selector,
 };
 use style::selector_parser::{SelectorImpl, SelectorParser};
-use style_traits::ParseError;
+use style_traits::{ParseError, StyleParseErrorKind};
 
 use crate::{BaseDocument, Node};
 
@@ -218,12 +219,85 @@ impl BaseDocument {
         Ok(self.nodes[node_id].closest_raw(&selector_list))
     }
 
+    /// Parse `input` as a selector list. A selector nested deeper than
+    /// [`MAX_SELECTOR_NESTING`] is a parse error: Stylo's parser and
+    /// matcher recurse once per level.
     pub fn try_parse_selector_list<'input>(
         &self,
         input: &'input str,
     ) -> Result<SelectorList<SelectorImpl>, ParseError<'input>> {
+        if nesting_exceeds(input, MAX_SELECTOR_NESTING) {
+            return Err(ParseError {
+                kind: ParseErrorKind::Custom(StyleParseErrorKind::UnspecifiedError),
+                location: SourceLocation { line: 0, column: 1 },
+            });
+        }
         let url_extra_data = self.url.url_extra_data();
         SelectorParser::parse_author_origin_no_namespace(input, &url_extra_data)
+    }
+}
+
+/// The deepest nesting of parentheses (`:is(`, `:not(`, `:has(`, …) a
+/// selector may have. Stylo's selector parser and matcher recurse once per
+/// level, and a few thousand levels overflow an 8 MiB stack (between
+/// 2,000 and 5,000 in an optimized native build), so a page's
+/// `querySelector` could abort the process. Real selectors nest a handful
+/// of levels.
+pub const MAX_SELECTOR_NESTING: usize = 128;
+
+/// Whether `css` nests parenthesized blocks (functions included) more
+/// than `limit` deep, not counting parentheses in strings, comments or
+/// escapes. It over-counts only for unbalanced input, which the parser
+/// rejects anyway.
+fn nesting_exceeds(css: &str, limit: usize) -> bool {
+    let mut depth = 0usize;
+    let mut bytes = css.bytes();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'\\' => {
+                bytes.next();
+            }
+            b'"' | b'\'' => skip_string(&mut bytes, byte),
+            b'/' if bytes.clone().next() == Some(b'*') => {
+                bytes.next();
+                skip_comment(&mut bytes);
+            }
+            b'(' => {
+                depth += 1;
+                if depth > limit {
+                    return true;
+                }
+            }
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Past the end of a string opened by `quote`: its closing quote, or the
+/// newline that ends a bad string.
+fn skip_string(bytes: &mut std::str::Bytes<'_>, quote: u8) {
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'\\' => {
+                bytes.next();
+            }
+            b'\n' => return,
+            _ if byte == quote => return,
+            _ => {}
+        }
+    }
+}
+
+/// Past the `*/` that closes a comment.
+fn skip_comment(bytes: &mut std::str::Bytes<'_>) {
+    let mut star = false;
+    for byte in bytes.by_ref() {
+        if star && byte == b'/' {
+            return;
+        }
+        star = byte == b'*';
     }
 }
 
