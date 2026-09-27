@@ -52,35 +52,56 @@ fn is_raw_text_parent(name: &markup5ever::LocalName) -> bool {
 /// `innerHTML`: serialize the children of `node` (the template contents for
 /// a `<template>` element).
 pub fn inner_html(node: &Node) -> String {
-    let mut out = String::new();
-    write_children(node, &mut out);
-    out
+    let mut steps = Vec::new();
+    push_children(node, &mut steps);
+    write_steps(steps, String::new())
 }
 
 /// `outerHTML`: serialize `node` itself followed by its descendants.
 pub fn outer_html(node: &Node) -> String {
-    let mut out = String::new();
-    write_node(node, &mut out);
+    write_steps(vec![Step::Node(node)], String::new())
+}
+
+/// Serialization work still to do, popped from the end: a node to write,
+/// or the end tag of an element whose children come first. An explicit
+/// stack, so a deep tree cannot overflow the native stack.
+enum Step<'a> {
+    Node(&'a Node),
+    EndTag(String),
+}
+
+fn write_steps(mut steps: Vec<Step<'_>>, mut out: String) -> String {
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Node(node) => write_node(node, &mut steps, &mut out),
+            Step::EndTag(tag) => {
+                out.push_str("</");
+                out.push_str(&tag);
+                out.push('>');
+            }
+        }
+    }
     out
 }
 
-fn write_children(node: &Node, out: &mut String) {
+/// Queue `node`'s children (the template contents for a `<template>`) so
+/// they are written in order.
+fn push_children<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>) {
     let tree = node.tree();
     let children = match node.element_data().and_then(|el| el.template_contents) {
         Some(contents) => &tree[contents].children,
         None => &node.children,
     };
-    for &child in children {
-        write_node(&tree[child], out);
-    }
+    steps.extend(children.iter().rev().map(|&child| Step::Node(&tree[child])));
 }
 
-fn write_node(node: &Node, out: &mut String) {
+/// Write `node`'s own markup, and queue its children and end tag.
+fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut String) {
     match &node.data {
         NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
             // AnonymousBlocks are layout artefacts, not part of the DOM.
             if matches!(node.data, NodeData::AnonymousBlock(_)) {
-                write_children(node, out);
+                push_children(node, steps);
                 return;
             }
             let tag = qualified_tag_name(&el.name);
@@ -97,10 +118,8 @@ fn write_node(node: &Node, out: &mut String) {
             if el.name.ns == ns!(html) && is_void(&el.name.local) {
                 return;
             }
-            write_children(node, out);
-            out.push_str("</");
-            out.push_str(&tag);
-            out.push('>');
+            steps.push(Step::EndTag(tag));
+            push_children(node, steps);
         }
         NodeData::Text(text) => {
             let raw = node
@@ -130,7 +149,7 @@ fn write_node(node: &Node, out: &mut String) {
             out.push_str(name);
             out.push('>');
         }
-        NodeData::Document(_) | NodeData::DocumentFragment => write_children(node, out),
+        NodeData::Document(_) | NodeData::DocumentFragment => push_children(node, steps),
     }
 }
 

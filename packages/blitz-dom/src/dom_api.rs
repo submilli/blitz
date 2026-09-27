@@ -156,12 +156,16 @@ impl BaseDocument {
         }
     }
 
+    /// Append the data of `id`'s descendant Text nodes, in tree order,
+    /// walking with an explicit stack so a deep tree cannot overflow the
+    /// native stack.
     fn collect_descendant_text(&self, id: NodeId, out: &mut String) {
-        for &child in &self.nodes[id].children {
-            match &self.nodes[child].data {
+        let mut stack: Vec<NodeId> = self.nodes[id].children.iter().rev().copied().collect();
+        while let Some(node) = stack.pop() {
+            match &self.nodes[node].data {
                 NodeData::Text(t) => out.push_str(&t.content),
                 NodeData::Element(_) | NodeData::AnonymousBlock(_) => {
-                    self.collect_descendant_text(child, out)
+                    stack.extend(self.nodes[node].children.iter().rev().copied());
                 }
                 _ => {}
             }
@@ -811,9 +815,21 @@ impl DocumentMutator<'_> {
     /// fragment in its context (the `innerHTML` setter). Old children are
     /// detached, not dropped. For `<template>`, replaces the template contents.
     pub fn set_inner_html_detaching(&mut self, id: NodeId, html: &str) {
-        let target = self.try_template_contents(id).unwrap_or(id);
-        // A shadow root parses in the context of its host.
-        let context = self.doc.shadow_host_of(target);
+        let is_template = self.doc.nodes[id].element_data().is_some_and(|el| {
+            el.name.ns == ns!(html) && el.name.local == markup5ever::local_name!("template")
+        });
+        let target = if is_template {
+            self.template_contents(id)
+        } else {
+            id
+        };
+        // The fragment parsing context is an element: a template parses in
+        // its own context into its contents, a shadow root in its host's.
+        let context = if is_template {
+            Some(id)
+        } else {
+            self.doc.shadow_host_of(target)
+        };
         self.with_one_child_list_record(target, |m| {
             m.replace_all(target, None);
             match context {
@@ -822,8 +838,12 @@ impl DocumentMutator<'_> {
                     .html_parser_provider
                     .clone()
                     .parse_inner_html(m, target, html),
-                Some(host) => {
-                    let name = m.doc.nodes[host].element_data().expect("host").name.clone();
+                Some(context) => {
+                    let name = m.doc.nodes[context]
+                        .element_data()
+                        .expect("a parsing context is an element")
+                        .name
+                        .clone();
                     let scratch = m.create_element(name, Vec::new());
                     m.doc
                         .html_parser_provider
@@ -884,25 +904,54 @@ impl DocumentMutator<'_> {
         Ok(())
     }
 
-    /// `Node.cloneNode(deep)`: the clone is detached.
+    /// `Node.cloneNode(deep)`: the clone is detached. A deep clone copies
+    /// the descendants (and template contents) with an explicit stack, so
+    /// a deep tree cannot overflow the native stack.
     pub fn clone_node(&mut self, id: NodeId, deep: bool) -> NodeId {
-        let copy = match self.doc.nodes[id].data.clone() {
+        // Cloning the document itself is not supported.
+        if matches!(self.doc.nodes[id].data, NodeData::Document(_)) {
+            return id;
+        }
+        let copy = self.clone_one(id);
+        if !deep {
+            return copy;
+        }
+        let mut pending = vec![(id, copy)];
+        while let Some((source, copy)) = pending.pop() {
+            let contents = self.doc.nodes[source]
+                .element_data()
+                .and_then(|el| el.template_contents);
+            if let Some(contents) = contents {
+                let copy_contents = self.template_contents(copy);
+                self.clone_children(contents, copy_contents, &mut pending);
+            }
+            self.clone_children(source, copy, &mut pending);
+        }
+        copy
+    }
+
+    /// Append copies of `source`'s children to `copy`, and queue each pair
+    /// so its own children are copied next.
+    fn clone_children(
+        &mut self,
+        source: NodeId,
+        copy: NodeId,
+        pending: &mut Vec<(NodeId, NodeId)>,
+    ) {
+        let children: Vec<NodeId> = self.doc.nodes[source].children.to_vec();
+        for child in children {
+            let child_copy = self.clone_one(child);
+            self.append_children(copy, &[child_copy]);
+            pending.push((child, child_copy));
+        }
+    }
+
+    /// A detached copy of `id` alone, without children.
+    fn clone_one(&mut self, id: NodeId) -> NodeId {
+        match self.doc.nodes[id].data.clone() {
             NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
                 let attrs: Vec<Attribute> = el.attrs().to_vec();
-                let copy = self.create_element(el.name.clone(), attrs);
-                // Template contents are cloned along with a deep clone.
-                if deep {
-                    if let Some(contents) = el.template_contents {
-                        let copy_contents = self.template_contents(copy);
-                        let children: Vec<NodeId> =
-                            self.doc.nodes[contents].children.iter().copied().collect();
-                        for child in children {
-                            let child_copy = self.clone_node(child, true);
-                            self.append_children(copy_contents, &[child_copy]);
-                        }
-                    }
-                }
-                copy
+                self.create_element(el.name.clone(), attrs)
             }
             NodeData::Text(t) => self.create_text_node(&t.content),
             NodeData::Comment { contents } => self.create_comment_node(&contents),
@@ -915,17 +964,8 @@ impl DocumentMutator<'_> {
                 system_id,
             } => self.create_doctype(&name, &public_id, &system_id),
             NodeData::DocumentFragment => self.create_document_fragment(),
-            // Cloning the document itself is not supported.
-            NodeData::Document(_) => return id,
-        };
-        if deep {
-            let children: Vec<NodeId> = self.doc.nodes[id].children.iter().copied().collect();
-            for child in children {
-                let child_copy = self.clone_node(child, true);
-                self.append_children(copy, &[child_copy]);
-            }
+            NodeData::Document(_) => self.create_document_node(),
         }
-        copy
     }
 }
 

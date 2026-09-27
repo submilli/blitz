@@ -158,3 +158,72 @@ fn dom_generation_changes_after_mutation() {
     doc.mutate().set_text_content(a, "x");
     assert!(doc.dom_generation() > before);
 }
+
+#[test]
+fn inner_html_setter_on_a_template_replaces_its_contents() {
+    // Parsed and script-created templates alike: the markup parses in the
+    // template's context into its contents, and children script gave the
+    // template element itself stay.
+    let mut doc = parse("<template id=t><i>old</i></template><div id=a></div>");
+    let (t, a) = (q(&doc, "#t"), q(&doc, "#a"));
+    let mut m = doc.mutate();
+    let own = m.create_comment_node("own");
+    m.append_children(t, &[own]);
+    m.set_inner_html_detaching(t, "<tr><td>row</td></tr>text");
+    let created = m.create_element(html_name("template"), Vec::new());
+    m.append_children(a, &[created]);
+    m.set_inner_html_detaching(created, "<b>new</b>");
+    drop(m);
+    assert_eq!(
+        doc.get_node(t).unwrap().inner_html(),
+        "<tr><td>row</td></tr>text"
+    );
+    assert_eq!(doc.get_node(t).unwrap().children.as_slice(), &[own]);
+    assert_eq!(doc.get_node(created).unwrap().inner_html(), "<b>new</b>");
+    assert!(doc.get_node(created).unwrap().children.is_empty());
+}
+
+#[test]
+fn deep_trees_serialize_clone_and_collect_text_without_recursion() {
+    // Scripts can nest nodes far deeper than the parser would. On a small
+    // stack, recursing once per level would overflow long before this
+    // depth.
+    const DEPTH: usize = 20_000;
+    let result = std::thread::Builder::new()
+        .stack_size(256 << 10)
+        .spawn(|| {
+            let mut doc = parse(PAGE);
+            let a = q(&doc, "#a");
+            let mut m = doc.mutate();
+            let mut deepest = a;
+            for _ in 0..DEPTH {
+                let child = m.create_element(html_name("i"), Vec::new());
+                m.append_children(deepest, &[child]);
+                deepest = child;
+            }
+            let leaf = m.create_text_node("leaf");
+            m.append_children(deepest, &[leaf]);
+            let copy = m.clone_node(a, true);
+            drop(m);
+            let html = doc.get_node(a).unwrap().inner_html();
+            let outer = doc.get_node(copy).unwrap().outer_html();
+            let text = doc.text_content_of(copy).unwrap();
+            (html.len(), outer.len(), text)
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    let inner_len =
+        "<p id=\"p1\">one</p><p id=\"p2\">two</p>".len() + DEPTH * "<i></i>".len() + "leaf".len();
+    assert_eq!(result.0, inner_len);
+    assert_eq!(result.1, inner_len + "<div id=\"a\"></div>".len());
+    assert_eq!(result.2, "onetwoleaf");
+}
+
+fn html_name(local: &str) -> blitz_dom::QualName {
+    blitz_dom::QualName::new(
+        None,
+        blitz_dom::ns!(html),
+        blitz_dom::LocalName::from(local),
+    )
+}
