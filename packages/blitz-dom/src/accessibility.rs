@@ -10,12 +10,13 @@ impl BaseDocument {
         let mut window = AccessKitNode::new(Role::Window);
         let mut hidden_nodes = std::collections::HashSet::new();
 
-        self.visit(|node_id, node| {
+        // The flat tree: shadow content where it renders.
+        self.visit_flat(|node_id, node| {
             // A collapsed `<select>`'s options are not rendered, but they are
             // its popup list: keep them.
             if (node.is_hidden_from_accessibility_tree() && !node.is_select_option())
                 || node
-                    .parent
+                    .flat_parent_id()
                     .map(|p| hidden_nodes.contains(&p))
                     .unwrap_or(false)
             {
@@ -23,7 +24,7 @@ impl BaseDocument {
                 return;
             }
             let parent = node
-                .parent
+                .flat_parent_id()
                 .and_then(|parent_id| nodes.get_mut(&parent_id))
                 .map(|(_, parent)| parent)
                 .unwrap_or(&mut window);
@@ -376,7 +377,7 @@ impl BaseDocument {
             }
         }
         let before = out.trim_end().len();
-        for &child in &node.children {
+        for &child in node.flat_children() {
             self.text_alternative_skipping(child, skip, out);
         }
         // An element that contributed no text contributes its tooltip

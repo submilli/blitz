@@ -5,14 +5,14 @@ use style::dom::TNode as _;
 
 use crate::{BaseDocument, Node};
 
+/// Iterate a node's children in the flat tree (layout's view: a shadow
+/// host's shadow content, a slot's assigned nodes).
 macro_rules! iter_children {
     ($node_expr:expr, $cb:expr) => {{
-        let node = &mut $node_expr;
-        let children = core::mem::take(&mut node.children);
+        let children = $node_expr.flat_children().to_vec();
         for child_id in children.iter().copied() {
             $cb(child_id)
         }
-        $node_expr.children = children;
     }};
 }
 pub(crate) use iter_children;
@@ -22,10 +22,10 @@ macro_rules! iter_children_and_pseudos {
         // Load node
         let node = &mut $node_expr;
 
-        // Copy before, after, and take children
+        // Copy before, after, and the (flat-tree) children
         let before = node.before();
         let after = node.after();
-        let children = core::mem::take(&mut node.children);
+        let children = node.flat_children().to_vec();
 
         if let Some(before) = before {
             $cb(before)
@@ -37,8 +37,6 @@ macro_rules! iter_children_and_pseudos {
             $cb(after)
         }
 
-        // Reload node and put children back
-        $node_expr.children = children;
     }};
 }
 pub(crate) use iter_children_and_pseudos;
@@ -117,6 +115,22 @@ impl BaseDocument {
         TreeTraverser::new(self).for_each(|node_id| visit(node_id, &self.nodes[node_id]));
     }
 
+    /// Visit the flat tree (shadow content in place of hosts' children,
+    /// slotted nodes under their slots) in pre-order.
+    pub fn visit_flat<F>(&self, mut visit: F)
+    where
+        F: FnMut(NodeId, &Node),
+    {
+        let mut stack = vec![self.root_node().id];
+        while let Some(id) = stack.pop() {
+            // Slots' composed children are recomputed at the next resolve; a
+            // node dropped since then is skipped.
+            let Some(node) = self.nodes.get(id) else { continue };
+            visit(id, node);
+            stack.extend(node.flat_children().iter().rev().copied());
+        }
+    }
+
     /// If the node is non-anonymous then returns the node's id
     /// Else find's the first non-anonymous ancester of the node
     pub fn non_anon_ancestor_if_anon(&self, mut node_id: NodeId) -> NodeId {
@@ -142,11 +156,11 @@ impl BaseDocument {
         node_id: NodeId,
         mut cb: impl FnMut(NodeId, &mut BaseDocument),
     ) {
-        let children = std::mem::take(&mut self.nodes[node_id].children);
+        // Layout's view: the flat tree.
+        let children = self.nodes[node_id].flat_children().to_vec();
         for child_id in children.iter().cloned() {
             cb(child_id, self);
         }
-        self.nodes[node_id].children = children;
     }
 
     pub fn iter_subtree_mut(
@@ -167,6 +181,25 @@ impl BaseDocument {
                 iter_subtree_mut_inner(doc, child_id, cb);
             }
             doc.nodes[node_id].children = children;
+        }
+    }
+
+    /// Like [`Self::iter_subtree_mut`], but also visiting the shadow trees
+    /// of hosts (after the host, before its children), as the DOM's
+    /// "shadow-including descendants" do.
+    pub fn iter_shadow_including_subtree_mut(
+        &mut self,
+        node_id: NodeId,
+        mut cb: impl FnMut(NodeId, &mut BaseDocument),
+    ) {
+        let mut stack = vec![node_id];
+        while let Some(id) = stack.pop() {
+            cb(id, self);
+            let node = &self.nodes[id];
+            stack.extend(node.children.iter().rev().copied());
+            if let Some(root) = node.element_data().and_then(|e| e.shadow_root) {
+                stack.push(root);
+            }
         }
     }
 

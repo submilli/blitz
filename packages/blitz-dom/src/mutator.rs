@@ -654,6 +654,7 @@ impl DocumentMutator<'_> {
         let node = &mut self.doc.nodes[node_id];
 
         // Update child_idx values
+        node.flat_parent.set(crate::node::FlatParent::Dom);
         if let Some(parent_id) = node.parent.take() {
             self.mutations_occurred |= node_is_in_document;
             let parent = &mut self.doc.nodes[parent_id];
@@ -844,6 +845,9 @@ impl DocumentMutator<'_> {
             let child = &mut self.doc.nodes[child_id];
             let child_was_in_doc = child.flags.is_in_document();
             child.parent = Some(parent_id);
+            // Its place in the flat tree is recomputed if the new parent is
+            // a shadow host.
+            child.flat_parent.set(crate::node::FlatParent::Dom);
 
             if new_parent_is_in_document && !child_was_in_doc {
                 self.process_added_subtree(child_id);
@@ -1075,8 +1079,13 @@ impl<'doc> DocumentMutator<'doc> {
         self.eager_op_queue = ops;
     }
 
+    /// Connect a shadow root attached to a connected host.
+    pub(crate) fn connect_subtree(&mut self, node_id: NodeId) {
+        self.process_added_subtree(node_id);
+    }
+
     fn process_added_subtree(&mut self, node_id: NodeId) {
-        self.doc.iter_subtree_mut(node_id, |node_id, doc| {
+        self.doc.iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
             if doc.is_recording_custom_element_reactions()
                 && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
             {
@@ -1086,8 +1095,12 @@ impl<'doc> DocumentMutator<'doc> {
             node.flags.set(NodeFlags::IS_IN_DOCUMENT, true);
             node.insert_damage(ALL_DAMAGE);
 
-            // If the node has an "id" attribute, store it in the ID map.
-            if let Some(id_attr) = node.attr(local_name!("id")).map(ToString::to_string) {
+            // If the node has an "id" attribute, store it in the ID map
+            // (the document's: ids in shadow trees are scoped to them).
+            let in_shadow_tree = doc.containing_shadow_root(node_id).is_some();
+            if let Some(id_attr) = doc.nodes[node_id].attr(local_name!("id")).map(ToString::to_string)
+                && !in_shadow_tree
+            {
                 doc.add_to_id_map(&id_attr, node_id);
             }
 
@@ -1140,7 +1153,7 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     fn process_removed_subtree(&mut self, node_id: NodeId) {
-        self.doc.iter_subtree_mut(node_id, |node_id, doc| {
+        self.doc.iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
             if doc.is_recording_custom_element_reactions()
                 && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
             {
@@ -1295,13 +1308,16 @@ impl<'doc> DocumentMutator<'doc> {
             unreachable!();
         };
 
+        if self.doc.nodes_to_stylesheet.remove(&node_id).is_none() {
+            // Not a document sheet: one from a shadow tree.
+            self.doc.remove_shadow_stylesheet(node_id);
+            return;
+        }
         let guard = self.doc.guard.read();
         self.doc.stylist.remove_stylesheet(stylesheet, &guard);
         self.doc
             .stylist
             .force_stylesheet_origins_dirty(OriginSet::all());
-
-        self.doc.nodes_to_stylesheet.remove(&node_id);
         self.doc.stylesheet_generation += 1;
     }
 

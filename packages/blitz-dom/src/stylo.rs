@@ -273,14 +273,16 @@ impl<'a> TShadowRoot for BlitzNode<'a> {
     }
 
     fn host(&self) -> <Self::ConcreteNode as TNode>::ConcreteElement {
-        todo!("Shadow roots not implemented")
+        let host = self.shadow_root_data.as_ref().expect("a shadow root").host;
+        self.with(host)
     }
 
     fn style_data<'b>(&self) -> Option<&'b style::stylist::CascadeData>
     where
         Self: 'b,
     {
-        todo!("Shadow roots not implemented")
+        let node: &'a Node = self;
+        node.shadow_styles.as_ref().map(|styles| &*styles.author_styles.data)
     }
 }
 
@@ -328,7 +330,9 @@ impl<'a> TNode for BlitzNode<'a> {
     //
     // For the sake of this demo, we're just going to return the parent node ann
     fn traversal_parent(&self) -> Option<Self::ConcreteElement> {
-        self.parent_node().and_then(|node| node.as_element())
+        // The flat tree: shadow content inherits from its host, slotted
+        // content from its slot.
+        self.flat_parent_id().map(|id| self.with(id)).and_then(|node| node.as_element())
     }
 
     fn opaque(&self) -> OpaqueNode {
@@ -354,8 +358,7 @@ impl<'a> TNode for BlitzNode<'a> {
     }
 
     fn as_shadow_root(&self) -> Option<Self::ConcreteShadowRoot> {
-        // TODO: implement shadow DOM
-        None
+        self.is_shadow_root().then_some(*self)
     }
 }
 
@@ -376,15 +379,26 @@ impl selectors::Element for BlitzNode<'_> {
     }
 
     fn parent_element(&self) -> Option<Self> {
-        TElement::traversal_parent(self)
+        // Selectors match the DOM tree, not the flat tree.
+        self.parent_node().and_then(|node| node.as_element())
     }
 
     fn parent_node_is_shadow_root(&self) -> bool {
-        false
+        self.parent_node().is_some_and(|parent| parent.is_shadow_root())
     }
 
     fn containing_shadow_host(&self) -> Option<Self> {
-        None
+        TElement::containing_shadow(self).map(|root| TShadowRoot::host(&root))
+    }
+
+    fn assigned_slot(&self) -> Option<Self> {
+        // Slotted: a shadow host's child whose flat-tree parent is a slot.
+        let parent = self.parent_node()?;
+        parent.element_data()?.shadow_root?;
+        match self.flat_parent.get() {
+            crate::node::FlatParent::Node(slot) => Some(self.with(slot)),
+            _ => None,
+        }
     }
 
     fn is_pseudo_element(&self) -> bool {
@@ -550,7 +564,8 @@ impl selectors::Element for BlitzNode<'_> {
     }
 
     fn is_html_slot_element(&self) -> bool {
-        false
+        self.element_data()
+            .is_some_and(|e| e.name.ns == markup5ever::ns!(html) && e.name.local == local_name!("slot"))
     }
 
     fn has_id(
@@ -599,9 +614,9 @@ impl selectors::Element for BlitzNode<'_> {
     }
 
     fn is_root(&self) -> bool {
-        self.parent_node()
-            .and_then(|parent| parent.parent_node())
-            .is_none()
+        // The document element: its parent is the Document (not a shadow
+        // root or other fragment).
+        self.parent_node().is_some_and(|parent| parent.as_document().is_some())
     }
 
     fn has_custom_state(
@@ -630,11 +645,15 @@ impl<'a> TElement for BlitzNode<'a> {
         _opaque_host: OpaqueElement,
         _sheet_index: usize,
     ) -> Option<ImplicitScopeRoot> {
-        // We cannot currently implement this as we are using the NodeId as the OpaqueElement,
-        // and need a reference to the Slab to convert it back into an Element
-        //
-        // Luckily it is only needed for shadow dom.
-        todo!();
+        // Implicit `@scope` roots in shadow stylesheets are not supported:
+        // the rules apply unscoped within the shadow tree.
+        None
+    }
+
+    fn inheritance_parent(&self) -> Option<Self> {
+        // Styles inherit through the flat tree (shadow content from its
+        // host, slotted content from its slot); selectors match the DOM.
+        TElement::traversal_parent(self)
     }
 
     fn traversal_children(&self) -> style::dom::LayoutIterator<Self::TraversalChildrenIterator> {
@@ -823,11 +842,15 @@ impl<'a> TElement for BlitzNode<'a> {
     }
 
     fn shadow_root(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {
-        None
+        self.element_data()?.shadow_root.map(|root| self.with(root))
     }
 
     fn containing_shadow(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {
-        None
+        let mut node = *self;
+        while let Some(parent) = node.parent {
+            node = node.with(parent);
+        }
+        node.is_shadow_root().then_some(node)
     }
 
     fn get_attr(&self, attr: &style::LocalName, ns: &style::Namespace) -> Option<String> {
@@ -1277,7 +1300,8 @@ impl<'a> Iterator for Traverser<'a> {
     type Item = BlitzNode<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let node_id = self.parent.children.get(self.child_index)?;
+        // The flat tree: a host's shadow content, a slot's assigned nodes.
+        let node_id = self.parent.flat_children().get(self.child_index)?;
         let node = self.parent.with(*node_id);
 
         self.child_index += 1;

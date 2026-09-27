@@ -188,8 +188,14 @@ impl BaseDocument {
     }
 
     /// `Node.isConnected`
+    /// Connected through shadow roots too: a shadow tree is connected when
+    /// its host is.
     pub fn is_connected(&self, node: NodeId) -> bool {
-        self.tree_root(node) == self.root_node().id
+        let mut root = self.tree_root(node);
+        while let Some(host) = self.shadow_host_of(root) {
+            root = self.tree_root(host);
+        }
+        root == self.root_node().id
     }
 
     fn is_element(&self, id: NodeId) -> bool {
@@ -750,12 +756,21 @@ impl DocumentMutator<'_> {
     /// detached, not dropped. For `<template>`, replaces the template contents.
     pub fn set_inner_html_detaching(&mut self, id: NodeId, html: &str) {
         let target = self.try_template_contents(id).unwrap_or(id);
+        // A shadow root parses in the context of its host.
+        let context = self.doc.shadow_host_of(target);
         self.with_one_child_list_record(target, |m| {
             m.replace_all(target, None);
-            m.doc
-                .html_parser_provider
-                .clone()
-                .parse_inner_html(m, target, html);
+            match context {
+                None => m.doc.html_parser_provider.clone().parse_inner_html(m, target, html),
+                Some(host) => {
+                    let name = m.doc.nodes[host].element_data().expect("host").name.clone();
+                    let scratch = m.create_element(name, Vec::new());
+                    m.doc.html_parser_provider.clone().parse_inner_html(m, scratch, html);
+                    let parsed = m.doc.nodes[scratch].children.to_vec();
+                    m.append_children(target, &parsed);
+                    m.remove_and_drop_node(scratch);
+                }
+            }
         });
     }
 

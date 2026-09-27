@@ -87,6 +87,8 @@ pub struct ElementData {
     ///   - The parley Layout for inline roots.
     ///   - The text editor for input/textarea elements
     pub special_data: SpecialElementData,
+    /// The shadow root attached to this element, if any.
+    pub shadow_root: Option<NodeId>,
 
     pub background_images: ThinVec<Option<ImageResourceData>>,
 
@@ -336,6 +338,8 @@ impl Clone for ElementData {
             inline_layout_data: self.inline_layout_data.clone(),
             list_item_data: self.list_item_data.clone(),
             template_contents: self.template_contents,
+            // A clone gets no shadow root (it is not cloned with the element).
+            shadow_root: None,
 
             // Runtime state: reset to defaults.
             stylo_element_data: Default::default(),
@@ -446,6 +450,7 @@ impl ElementData {
             inline_layout_data: None,
             list_item_data: None,
             special_data: SpecialElementData::None,
+            shadow_root: None,
             template_contents: None,
             background_images: ThinVec::new(),
             mask_images: ThinVec::new(),

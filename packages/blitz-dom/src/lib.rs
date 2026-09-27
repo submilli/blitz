@@ -42,6 +42,7 @@ pub mod mutations;
 
 /// The nodes themsleves, and their data.
 pub mod node;
+pub mod shadow;
 
 mod clock;
 mod config;

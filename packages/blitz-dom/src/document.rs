@@ -325,6 +325,8 @@ pub struct BaseDocument {
     /// `<script>` elements that became connected outside the parser and have
     /// not been prepared yet; the embedder drains and runs them.
     pub(crate) connected_scripts: Vec<NodeId>,
+    /// Elements with a shadow root attached.
+    pub(crate) shadow_hosts: HashSet<NodeId>,
     /// Mutation records, while recording is on (see `mutations`).
     pub(crate) mutation_log: Option<Vec<crate::mutations::LoggedMutation>>,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
@@ -506,6 +508,7 @@ impl BaseDocument {
             dom_generation: 0,
             event_listeners: Default::default(),
             connected_scripts: Vec::new(),
+            shadow_hosts: HashSet::new(),
             mutation_log: None,
             custom_element_reactions: None,
             deferred_construction_nodes: Vec::new(),
@@ -1023,6 +1026,11 @@ impl BaseDocument {
             for &child in &node.children {
                 self.drop_node_ignoring_parent_with(child, on_drop);
             }
+            // A host's shadow tree goes with it.
+            if let Some(root) = node.element_data().and_then(|e| e.shadow_root) {
+                self.shadow_hosts.remove(&node_id);
+                self.drop_node_ignoring_parent_with(root, on_drop);
+            }
 
             // Anonymous blocks live only in the slab, so deallocate the ones this
             // node owns rather than leaking them.
@@ -1255,6 +1263,13 @@ impl BaseDocument {
     }
 
     pub fn add_stylesheet_for_node(&mut self, stylesheet: DocumentStyleSheet, node_id: NodeId) {
+        // A sheet in a shadow tree styles that tree alone.
+        if let Some(root) = self.containing_shadow_root(node_id) {
+            let element = &mut self.nodes[node_id].element_data_mut().unwrap();
+            element.special_data = SpecialElementData::Stylesheet(stylesheet.clone());
+            self.add_shadow_stylesheet(root, node_id, stylesheet);
+            return;
+        }
         let old = self.nodes_to_stylesheet.insert(node_id, stylesheet.clone());
         self.stylesheet_generation += 1;
 

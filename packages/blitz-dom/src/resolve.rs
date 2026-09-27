@@ -48,6 +48,11 @@ impl BaseDocument {
         // Process messages that have been sent to our message channel (e.g. loaded resource)
         self.handle_messages();
 
+        // Shadow hosts style and lay out their shadow trees (the flat tree),
+        // each with its own stylesheets.
+        self.compose_shadow_trees();
+        self.flush_shadow_styles();
+
         // While render-blocking resources (e.g. stylesheets linked from the `<head>`) are
         // still loading, don't resolve styles or layout (matching how browsers block
         // rendering). Resolving styles before the document's stylesheets have loaded would

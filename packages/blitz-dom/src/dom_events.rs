@@ -139,6 +139,11 @@ pub trait DispatchHost {
     fn document_mut(&self) -> std::cell::RefMut<'_, BaseDocument>;
     fn event_type(&self) -> String;
     fn bubbles(&self) -> bool;
+    /// Whether the event crosses shadow boundaries (`composed`): user input
+    /// events do, script events only when created so.
+    fn composed(&self) -> bool {
+        false
+    }
     /// Update the event's `eventPhase` and `currentTarget`.
     fn set_phase(&mut self, phase: EventPhase, current_target: Option<EventTargetId>);
     fn set_target(&mut self, target: Option<EventTargetId>);
@@ -159,19 +164,71 @@ impl BaseDocument {
     /// The event path for `target`: the target, its ancestors, and (for
     /// nodes in the document) the `Window` last.
     pub fn event_path(&self, target: EventTargetId) -> Vec<EventTargetId> {
+        self.composed_event_path(target, false)
+    }
+
+    /// The event path through shadow trees: a slotted node's parent is its
+    /// slot, and a shadow root's is its host when the event is `composed`
+    /// (otherwise the path ends at the shadow root).
+    pub fn composed_event_path(&self, target: EventTargetId, composed: bool) -> Vec<EventTargetId> {
         let EventTargetId::Node(node) = target else {
             return vec![target];
         };
         let mut path = Vec::new();
         let mut current = Some(node);
+        let mut reached_document = false;
         while let Some(id) = current {
             path.push(EventTargetId::Node(id));
-            current = self.get_node(id).and_then(|n| n.parent);
+            let Some(n) = self.get_node(id) else { break };
+            current = if let Some(data) = &n.shadow_root_data {
+                if !composed {
+                    break;
+                }
+                Some(data.host)
+            } else if let Some(slot) = n.parent.and_then(|_| self.assigned_slot(id)) {
+                Some(slot)
+            } else {
+                n.parent
+            };
+            if current.is_none() && id == self.root_node().id {
+                reached_document = true;
+            }
         }
-        if self.is_connected(node) {
+        if reached_document {
             path.push(EventTargetId::Window);
         }
         path
+    }
+
+    /// Retarget `target` against `current` (the DOM's "retarget"): while the
+    /// target is in a shadow tree that does not contain `current`, the target
+    /// becomes that tree's host. Listeners outside a component see its host.
+    pub fn retarget(&self, target: EventTargetId, current: EventTargetId) -> EventTargetId {
+        let EventTargetId::Node(mut node) = target else { return target };
+        loop {
+            let root = self.tree_root(node);
+            let Some(host) = self.shadow_host_of(root) else { return EventTargetId::Node(node) };
+            if let EventTargetId::Node(current) = current
+                && self.is_shadow_including_inclusive_ancestor(root, current)
+            {
+                return EventTargetId::Node(node);
+            }
+            node = host;
+        }
+    }
+
+    /// Whether `ancestor` is `node` or one of its ancestors, crossing from
+    /// shadow roots to their hosts.
+    pub fn is_shadow_including_inclusive_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if id == ancestor {
+                return true;
+            }
+            let Some(n) = self.get_node(id) else { return false };
+            current = n.shadow_root_data.as_ref().map(|d| d.host).or(n.parent);
+        }
+        false
     }
 }
 
@@ -179,14 +236,20 @@ impl BaseDocument {
 /// (`preventDefault()` in a non-passive listener of a cancelable event).
 pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     host.set_target(Some(target));
-    let path = host.document().event_path(target);
+    let path = host.document().composed_event_path(target, host.composed());
     let bubbles = host.bubbles();
+    // Each listener sees the target retargeted to its own tree.
+    let targets: Vec<EventTargetId> = {
+        let doc = host.document();
+        path.iter().map(|&current| doc.retarget(target, current)).collect()
+    };
 
     // Capturing phase: root to target (excluding the target).
-    for &current in path.iter().skip(1).rev() {
+    for (i, &current) in path.iter().enumerate().skip(1).rev() {
         if host.propagation_stopped() {
             break;
         }
+        host.set_target(Some(targets[i]));
         host.set_phase(EventPhase::Capturing, Some(current));
         invoke_listeners(host, current, Some(true));
     }
@@ -194,6 +257,7 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     // At target: capture listeners first, then non-capture, as the DOM
     // Standard now specifies.
     if !host.propagation_stopped() {
+        host.set_target(Some(target));
         host.set_phase(EventPhase::AtTarget, Some(target));
         invoke_listeners(host, target, Some(true));
         if !host.propagation_stopped() {
@@ -202,16 +266,25 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     }
 
     // Bubbling phase: target's parent to root.
-    if bubbles {
-        for &current in path.iter().skip(1) {
-            if host.propagation_stopped() {
-                break;
-            }
-            host.set_phase(EventPhase::Bubbling, Some(current));
-            invoke_listeners(host, current, Some(false));
+    // Bubbling phase: target's parent to root. A shadow host on the path is
+    // "at target" for its tree's listeners, so it hears non-bubbling events
+    // too.
+    for (i, &current) in path.iter().enumerate().skip(1) {
+        if host.propagation_stopped() {
+            break;
         }
+        let at_host = targets[i] == current;
+        if !bubbles && !at_host {
+            continue;
+        }
+        host.set_target(Some(targets[i]));
+        host.set_phase(if at_host { EventPhase::AtTarget } else { EventPhase::Bubbling }, Some(current));
+        invoke_listeners(host, current, Some(false));
     }
 
+    // Afterwards the target is as seen from the document.
+    let outside = host.document().retarget(target, EventTargetId::Window);
+    host.set_target(Some(outside));
     host.set_phase(EventPhase::None, None);
     host.clear_propagation_flags();
     !host.canceled()

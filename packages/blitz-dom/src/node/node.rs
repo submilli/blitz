@@ -89,6 +89,30 @@ impl NodeFlags {
     }
 }
 
+/// Where a node sits in the flat tree, relative to its DOM parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlatParent {
+    /// The DOM parent.
+    Dom,
+    /// Another node (a host, or the slot the node is assigned to).
+    Node(NodeId),
+    /// Not in the flat tree: a host's child assigned to no slot.
+    None,
+}
+
+/// A shadow root's host and options (`attachShadow`'s init dictionary).
+#[derive(Debug, Clone)]
+pub struct ShadowRootData {
+    pub host: NodeId,
+    /// `mode: "open"` (else "closed").
+    pub open: bool,
+    pub delegates_focus: bool,
+    /// `slotAssignment: "manual"` (else "named").
+    pub manual_slots: bool,
+    pub clonable: bool,
+    pub serializable: bool,
+}
+
 pub struct Node {
     // The actual tree we belong to. This is unsafe!!
     tree: *mut crate::NodeTree,
@@ -128,6 +152,18 @@ pub struct Node {
 
     // Flags
     pub flags: NodeFlags,
+
+    /// For a shadow root (a fragment attached to a host element): its host
+    /// and options. `None` for every other node.
+    pub shadow_root_data: Option<Box<ShadowRootData>>,
+    /// For a shadow root: the stylesheets in its tree and their cascade data.
+    pub shadow_styles: Option<Box<crate::shadow::ShadowStyles>>,
+    /// Children in the flat tree, when they differ from `children`: for a
+    /// shadow host, its shadow root's children; for a `<slot>` with assigned
+    /// nodes, those nodes. Recomputed before each style and layout pass.
+    pub composed_children: Option<ThinVec<NodeId>>,
+    /// Parent in the flat tree, when it differs from `parent`.
+    pub flat_parent: Cell<FlatParent>,
 
     /// Node type (Element, TextNode, etc) specific data.
     ///
@@ -424,8 +460,32 @@ impl Node {
             sc_contribution_cache: RefCell::new(ThinVec::new()),
 
             flags: NodeFlags::empty(),
+            shadow_root_data: None,
+            shadow_styles: None,
+            composed_children: None,
+            flat_parent: Cell::new(FlatParent::Dom),
             data,
         }
+    }
+
+    /// Children in the flat tree (the composed tree that is styled and laid
+    /// out): see [`Self::composed_children`].
+    pub fn flat_children(&self) -> &[NodeId] {
+        self.composed_children.as_deref().unwrap_or(&self.children)
+    }
+
+    /// Parent in the flat tree: a shadow root's children have their host,
+    /// a host's light children the slot they are assigned to (or none).
+    pub fn flat_parent_id(&self) -> Option<NodeId> {
+        match self.flat_parent.get() {
+            FlatParent::Dom => self.parent,
+            FlatParent::Node(id) => Some(id),
+            FlatParent::None => None,
+        }
+    }
+
+    pub fn is_shadow_root(&self) -> bool {
+        self.shadow_root_data.is_some()
     }
 
     pub fn set_transform(&mut self, scale: f32) -> Option<Affine> {
@@ -593,7 +653,9 @@ impl Node {
     /// This propagates the dirty flag up the tree so that the style traversal
     /// knows to visit the subtree containing this node.
     pub fn mark_ancestors_dirty(&self) {
-        let mut current_id = self.parent;
+        // The flat tree: shadow content reaches its host, slotted content
+        // its slot.
+        let mut current_id = self.flat_parent_id();
         while let Some(parent_id) = current_id {
             let parent = &self.tree()[parent_id];
             // If this ancestor already has dirty_descendants set, we can stop
@@ -603,7 +665,7 @@ impl Node {
                     break;
                 }
             }
-            current_id = parent.parent;
+            current_id = parent.flat_parent_id();
         }
     }
 
