@@ -38,22 +38,34 @@ fn deeper_nesting_is_a_parse_error_not_a_stack_overflow() {
     on_script_stack(|| {
         let doc = parse(PAGE);
         let a = q(&doc, "#a");
-        for selector in [nested(MAX_SELECTOR_NESTING + 1), nested(100_000)] {
+        let deep = [
+            nested(MAX_SELECTOR_NESTING + 1),
+            nested(100_000),
+            format!("{}p{}", ":not(".repeat(100_000), ")".repeat(100_000)),
+            // cssparser's error recovery recurses into every kind of block.
+            format!(":is({}", "[".repeat(100_000)),
+            format!(":where(b, {}", "{".repeat(100_000)),
+            format!("a:is(b, {}", "(".repeat(100_000)),
+            // An unquoted url is one token; the nesting after it counts.
+            format!(":is(url(/*), {})", nested(100_000)),
+            format!(":is(url(a\"b), {})", nested(100_000)),
+            // A quoted url is a function: a block like any other.
+            format!("{}p{}", "url(\"a\" ".repeat(100_000), ")".repeat(100_000)),
+        ];
+        for selector in deep {
             assert!(doc.try_parse_selector_list(&selector).is_err());
             assert!(doc.query_selector_in(a, &selector).is_err());
             assert!(doc.query_selector_all_in(a, &selector).is_err());
             assert!(doc.matches_selector(a, &selector).is_err());
             assert!(doc.closest(a, &selector).is_err());
         }
-        let not = format!("{}p{}", ":not(".repeat(100_000), ")".repeat(100_000));
-        assert!(doc.query_selector(&not).is_err());
     });
 }
 
 #[test]
-fn parentheses_in_strings_comments_and_escapes_do_not_count() {
+fn blocks_in_strings_comments_and_escapes_do_not_count() {
     let doc = parse(PAGE);
-    let many = "(".repeat(10 * MAX_SELECTOR_NESTING);
+    let many = "([{".repeat(10 * MAX_SELECTOR_NESTING);
     for selector in [
         format!("p[title^=\"{many}\"]"),
         format!("p[title^='{many}']"),
@@ -63,4 +75,11 @@ fn parentheses_in_strings_comments_and_escapes_do_not_count() {
         assert!(doc.try_parse_selector_list(&selector).is_ok(), "{selector}");
     }
     assert_eq!(doc.query_selector_all("p[title^='(']").unwrap().len(), 1);
+}
+
+#[test]
+fn long_selector_lists_are_not_nesting() {
+    let doc = parse(PAGE);
+    let list = vec!["p:not([hidden])"; 10 * MAX_SELECTOR_NESTING].join(", ");
+    assert_eq!(doc.query_selector_all(&list).unwrap().len(), 2);
 }
