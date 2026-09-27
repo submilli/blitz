@@ -31,7 +31,6 @@ use linebender_resource_handle::Blob;
 use markup5ever::{LocalName, local_name};
 use parley::{FontContext, PlainEditorDriver};
 use selectors::{Element, matching::QuirksMode};
-use smallvec::SmallVec;
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, Bound, HashMap, HashSet};
@@ -299,7 +298,9 @@ pub struct BaseDocument {
     /// Map of id attribute values to node IDs for fast lookups.
     /// May contain multiple nodes for the same id: `get_element_by_id`
     /// returns the first in tree order.
-    pub(crate) nodes_to_id: HashMap<String, SmallVec<[NodeId; 1]>>,
+    /// Every connected element by `id` attribute. A set, so pages with
+    /// many elements sharing an id stay linear to maintain.
+    pub(crate) nodes_to_id: HashMap<String, HashSet<NodeId>>,
     /// Map of `<style>` and `<link>` node IDs to their associated stylesheet
     pub(crate) nodes_to_stylesheet: BTreeMap<NodeId, DocumentStyleSheet>,
     /// Incremented whenever `nodes_to_stylesheet` changes (a stylesheet is

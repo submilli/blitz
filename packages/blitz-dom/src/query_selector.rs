@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use blitz_traits::node_id::NodeId;
 use selectors::SelectorList;
 use smallvec::SmallVec;
@@ -14,15 +16,16 @@ impl BaseDocument {
     /// Find the node with the specified id attribute (if one exists).
     /// If multiple nodes have the same id, the first in tree order is returned.
     pub fn get_element_by_id(&self, id: &str) -> Option<NodeId> {
-        match self.nodes_to_id.get(id)?.as_slice() {
-            [] => None,
-            [node_id] => Some(*node_id),
-            candidates => self.first_in_tree_order(candidates),
+        let candidates = self.nodes_to_id.get(id)?;
+        match candidates.len() {
+            0 => None,
+            1 => candidates.iter().next().copied(),
+            _ => self.first_in_tree_order(candidates),
         }
     }
 
     /// Find the first of `candidates` in tree order
-    fn first_in_tree_order(&self, candidates: &[NodeId]) -> Option<NodeId> {
+    fn first_in_tree_order(&self, candidates: &HashSet<NodeId>) -> Option<NodeId> {
         let mut stack = vec![self.root_node_id];
         while let Some(node_id) = stack.pop() {
             if candidates.contains(&node_id) {
@@ -38,16 +41,16 @@ impl BaseDocument {
         if id.is_empty() {
             return;
         }
-        let node_ids = self.nodes_to_id.entry(id.to_string()).or_default();
-        if !node_ids.contains(&node_id) {
-            node_ids.push(node_id);
-        }
+        self.nodes_to_id
+            .entry(id.to_string())
+            .or_default()
+            .insert(node_id);
     }
 
     /// Remove a node from the id-to-node map
     pub(crate) fn remove_from_id_map(&mut self, id: &str, node_id: NodeId) {
         if let Some(node_ids) = self.nodes_to_id.get_mut(id) {
-            node_ids.retain(|nid| *nid != node_id);
+            node_ids.remove(&node_id);
             if node_ids.is_empty() {
                 self.nodes_to_id.remove(id);
             }

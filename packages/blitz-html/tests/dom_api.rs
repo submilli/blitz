@@ -336,6 +336,39 @@ fn emptying_and_moving_many_children_takes_linear_time() {
     );
 }
 
+#[test]
+fn many_elements_sharing_an_id_connect_in_linear_time() {
+    // The id map must not search every element with the same id on each
+    // insertion: seconds at this count even optimized. The first in tree
+    // order still wins.
+    const COUNT: usize = 100_000;
+    let mut doc = parse(PAGE);
+    let a = q(&doc, "#a");
+    let mut m = doc.mutate();
+    let attrs = || {
+        vec![blitz_dom::node::Attribute {
+            name: blitz_dom::QualName::new(
+                None,
+                blitz_dom::ns!(),
+                blitz_dom::LocalName::from("id"),
+            ),
+            value: "dup".into(),
+        }]
+    };
+    let elements: Vec<_> = (0..COUNT)
+        .map(|_| m.create_element(html_name("i"), attrs()))
+        .collect();
+    let start = std::time::Instant::now();
+    m.append_children(a, &elements);
+    drop(m);
+    let elapsed = start.elapsed();
+    assert_eq!(doc.get_element_by_id("dup"), Some(elements[0]));
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "connecting took {elapsed:?}"
+    );
+}
+
 fn html_name(local: &str) -> blitz_dom::QualName {
     blitz_dom::QualName::new(
         None,
