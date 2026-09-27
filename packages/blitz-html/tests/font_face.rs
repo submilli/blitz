@@ -42,7 +42,9 @@ fn quoted_unsupported_formats_are_skipped() {
 
 #[test]
 fn extension_guess_ignores_queries() {
-    let urls = requested_fonts("@font-face { font-family: icons; src: url('b.eot?v=1'), url('b.ttf?v=1'); }");
+    let urls = requested_fonts(
+        "@font-face { font-family: icons; src: url('b.eot?v=1'), url('b.ttf?v=1'); }",
+    );
     assert_eq!(urls, vec!["https://example.test/css/b.ttf?v=1"]);
 }
 

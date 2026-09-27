@@ -19,11 +19,15 @@ fn pauses_at_each_script_with_later_content_unparsed() {
     parser.feed("<p>a</p><script>one</script><p>b</p><script>two</script><p>c</p>");
     parser.end_of_input();
 
-    let ParseStep::Script(first) = parser.run() else { panic!("expected a script") };
+    let ParseStep::Script(first) = parser.run() else {
+        panic!("expected a script")
+    };
     assert_eq!(doc.borrow().text_content_of(first).unwrap(), "one");
     assert_eq!(body_html(&doc), "<p>a</p><script>one</script>");
 
-    let ParseStep::Script(_) = parser.run() else { panic!("expected a second script") };
+    let ParseStep::Script(_) = parser.run() else {
+        panic!("expected a second script")
+    };
     assert!(body_html(&doc).ends_with("<p>b</p><script>two</script>"));
 
     assert!(matches!(parser.run(), ParseStep::Done));
@@ -38,14 +42,19 @@ fn document_write_inserts_at_the_insertion_point() {
     parser.feed("<p>a</p><script>w</script><p>b</p>");
     parser.end_of_input();
 
-    let ParseStep::Script(_) = parser.run() else { panic!("expected a script") };
+    let ParseStep::Script(_) = parser.run() else {
+        panic!("expected a script")
+    };
     // While the script runs, its writes are parsed immediately.
     parser.write("<i>written</i>");
     assert!(matches!(parser.run_written(), ParseStep::Done));
     assert_eq!(body_html(&doc), "<p>a</p><script>w</script><i>written</i>");
 
     assert!(matches!(parser.run(), ParseStep::Done));
-    assert_eq!(body_html(&doc), "<p>a</p><script>w</script><i>written</i><p>b</p>");
+    assert_eq!(
+        body_html(&doc),
+        "<p>a</p><script>w</script><i>written</i><p>b</p>"
+    );
 }
 
 #[test]

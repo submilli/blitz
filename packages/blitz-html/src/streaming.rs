@@ -13,8 +13,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use blitz_dom::{BaseDocument, NodeId};
-use html5ever::tendril::StrTendril;
 use html5ever::TokenizerResult;
+use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{BufferQueue, Tokenizer, TokenizerOpts};
 use html5ever::tree_builder::{QuirksMode, TreeBuilder, TreeBuilderOpts};
 
@@ -87,7 +87,10 @@ impl StreamingParser {
 
     /// Feed `queue` until it is exhausted or a script ends. Encoding hints
     /// (`<meta charset>`) are ignored: input is already decoded.
-    fn feed_until_script(tokenizer: &Tokenizer<TreeBuilder<NodeId, Sink>>, queue: &BufferQueue) -> ParseStep {
+    fn feed_until_script(
+        tokenizer: &Tokenizer<TreeBuilder<NodeId, Sink>>,
+        queue: &BufferQueue,
+    ) -> ParseStep {
         loop {
             match tokenizer.feed(queue) {
                 TokenizerResult::Script(node) => return ParseStep::Script(node),

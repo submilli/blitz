@@ -282,7 +282,9 @@ impl<'a> TShadowRoot for BlitzNode<'a> {
         Self: 'b,
     {
         let node: &'a Node = self;
-        node.shadow_styles.as_ref().map(|styles| &*styles.author_styles.data)
+        node.shadow_styles
+            .as_ref()
+            .map(|styles| &*styles.author_styles.data)
     }
 }
 
@@ -338,7 +340,9 @@ impl<'a> TNode for BlitzNode<'a> {
     fn traversal_parent(&self) -> Option<Self::ConcreteElement> {
         // The flat tree: shadow content inherits from its host, slotted
         // content from its slot.
-        self.flat_parent_id().map(|id| self.with(id)).and_then(|node| node.as_element())
+        self.flat_parent_id()
+            .map(|id| self.with(id))
+            .and_then(|node| node.as_element())
     }
 
     fn opaque(&self) -> OpaqueNode {
@@ -390,7 +394,8 @@ impl selectors::Element for BlitzNode<'_> {
     }
 
     fn parent_node_is_shadow_root(&self) -> bool {
-        self.parent_node().is_some_and(|parent| parent.is_shadow_root())
+        self.parent_node()
+            .is_some_and(|parent| parent.is_shadow_root())
     }
 
     fn containing_shadow_host(&self) -> Option<Self> {
@@ -490,7 +495,9 @@ impl selectors::Element for BlitzNode<'_> {
             NonTSPseudoClass::Checked => self.element_state().contains(ElementState::CHECKED),
             NonTSPseudoClass::Valid => false,
             NonTSPseudoClass::Invalid => false,
-            NonTSPseudoClass::Defined => self.element_data().is_some_and(|el| el.custom_element_state.is_defined()),
+            NonTSPseudoClass::Defined => self
+                .element_data()
+                .is_some_and(|el| el.custom_element_state.is_defined()),
             NonTSPseudoClass::Disabled => self.element_state().contains(ElementState::DISABLED),
             NonTSPseudoClass::Enabled => self.element_state().contains(ElementState::ENABLED),
             NonTSPseudoClass::Focus => self.element_state().contains(ElementState::FOCUS),
@@ -570,8 +577,9 @@ impl selectors::Element for BlitzNode<'_> {
     }
 
     fn is_html_slot_element(&self) -> bool {
-        self.element_data()
-            .is_some_and(|e| e.name.ns == markup5ever::ns!(html) && e.name.local == local_name!("slot"))
+        self.element_data().is_some_and(|e| {
+            e.name.ns == markup5ever::ns!(html) && e.name.local == local_name!("slot")
+        })
     }
 
     fn has_id(
@@ -622,7 +630,8 @@ impl selectors::Element for BlitzNode<'_> {
     fn is_root(&self) -> bool {
         // The document element: its parent is the Document (not a shadow
         // root or other fragment).
-        self.parent_node().is_some_and(|parent| parent.as_document().is_some())
+        self.parent_node()
+            .is_some_and(|parent| parent.as_document().is_some())
     }
 
     fn has_custom_state(

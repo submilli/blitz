@@ -45,12 +45,24 @@ fn pre_insert_enforces_hierarchy_rules() {
     assert_eq!(m.pre_insert(body, a, None), Err(DomError::HierarchyRequest));
     // A doctype cannot go into an element; text cannot go into a document.
     let doctype = m.create_doctype("html", "", "");
-    assert_eq!(m.pre_insert(doctype, a, None), Err(DomError::HierarchyRequest));
+    assert_eq!(
+        m.pre_insert(doctype, a, None),
+        Err(DomError::HierarchyRequest)
+    );
     let text = m.create_text_node("x");
-    assert_eq!(m.pre_insert(text, root, None), Err(DomError::HierarchyRequest));
+    assert_eq!(
+        m.pre_insert(text, root, None),
+        Err(DomError::HierarchyRequest)
+    );
     // A second document element is rejected.
-    let extra = m.create_element(blitz_dom::QualName::new(None, blitz_dom::ns!(html), "div".into()), vec![]);
-    assert_eq!(m.pre_insert(extra, root, None), Err(DomError::HierarchyRequest));
+    let extra = m.create_element(
+        blitz_dom::QualName::new(None, blitz_dom::ns!(html), "div".into()),
+        vec![],
+    );
+    assert_eq!(
+        m.pre_insert(extra, root, None),
+        Err(DomError::HierarchyRequest)
+    );
     // The reference child must be a child of the parent.
     assert_eq!(m.pre_insert(text, a, Some(body)), Err(DomError::NotFound));
 }
@@ -96,7 +108,10 @@ fn clone_node_shallow_and_deep_including_template_contents() {
     let template = m.clone_node(t, true);
     drop(m);
     assert!(doc.get_node(shallow).unwrap().children.is_empty());
-    assert_eq!(doc.get_node(deep).unwrap().outer_html(), r#"<div id="a" title="t"><b>x</b></div>"#);
+    assert_eq!(
+        doc.get_node(deep).unwrap().outer_html(),
+        r#"<div id="a" title="t"><b>x</b></div>"#
+    );
     assert_eq!(doc.get_node(template).unwrap().inner_html(), "<i>in</i>");
     assert!(doc.get_node(deep).unwrap().parent.is_none());
 }
@@ -108,12 +123,18 @@ fn attributes_by_qualified_name() {
     let mut m = doc.mutate();
     // HTML elements lowercase names.
     m.set_attribute_by_name(a, "Data-X", "1").unwrap();
-    assert_eq!(m.set_attribute_by_name(a, "bad name", "1"), Err(DomError::InvalidCharacter));
+    assert_eq!(
+        m.set_attribute_by_name(a, "bad name", "1"),
+        Err(DomError::InvalidCharacter)
+    );
     assert_eq!(m.toggle_attribute(a, "hidden", None), Ok(true));
     assert_eq!(m.toggle_attribute(a, "hidden", Some(true)), Ok(true));
     assert_eq!(m.toggle_attribute(a, "hidden", None), Ok(false));
     drop(m);
-    assert_eq!(doc.attribute_by_name(a, "DATA-x").map(|a| a.value.as_str()), Some("1"));
+    assert_eq!(
+        doc.attribute_by_name(a, "DATA-x").map(|a| a.value.as_str()),
+        Some("1")
+    );
     assert_eq!(doc.attribute_names(a), vec!["id", "data-x"]);
     doc.mutate().remove_attribute_by_name(a, "data-x");
     assert!(doc.attribute_by_name(a, "data-x").is_none());

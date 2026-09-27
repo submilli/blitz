@@ -73,8 +73,9 @@ impl BaseDocument {
         {
             use crate::node::scrollbar::{FADE_DELAY, FADE_DURATION};
             let now = self.now_ms();
-            self.scrollbar_activity
-                .retain(|_, last| now - *last < (FADE_DELAY + FADE_DURATION).as_secs_f64() * 1000.0);
+            self.scrollbar_activity.retain(|_, last| {
+                now - *last < (FADE_DELAY + FADE_DURATION).as_secs_f64() * 1000.0
+            });
         }
 
         let root_node_id = self.root_element().id;

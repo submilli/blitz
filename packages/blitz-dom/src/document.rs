@@ -1,4 +1,5 @@
 use crate::NodeTree;
+use crate::clock::{Clock, default_clock};
 use crate::events::{DragMode, handle_dom_event};
 use crate::layout::construct::ConstructionTask;
 use crate::layout::damage::ALL_DAMAGE;
@@ -19,7 +20,6 @@ use crate::{
     EventDriver, HtmlParserProvider, Node, NodeData, NoopEventHandler, StyleThreading,
     TextNodeData,
 };
-use crate::clock::{Clock, default_clock};
 use blitz_traits::devtools::DevtoolSettings;
 use blitz_traits::events::{DomEvent, HitResult, UiEvent};
 use blitz_traits::navigation::{DummyNavigationProvider, NavigationProvider};
@@ -481,7 +481,9 @@ impl BaseDocument {
             stylesheet_generation: 0,
             font_ctx,
             #[cfg(feature = "svg")]
-            svg_fonts: config.svg_fonts.unwrap_or_else(crate::util::default_svg_fonts),
+            svg_fonts: config
+                .svg_fonts
+                .unwrap_or_else(crate::util::default_svg_fonts),
             #[cfg(not(feature = "svg"))]
             svg_fonts: (),
             #[cfg(feature = "parallel-construct")]
@@ -650,9 +652,14 @@ impl BaseDocument {
     /// `<canvas>`'s bitmap, drawn by script). Its layout size still comes
     /// from its attributes and style.
     pub fn set_element_bitmap(&mut self, node_id: NodeId, image: crate::node::RasterImageData) {
-        let Some(node) = self.nodes.get_mut(node_id) else { return };
-        let Some(element) = node.element_data_mut() else { return };
-        element.special_data = crate::node::SpecialElementData::Image(Box::new(crate::node::ImageData::Raster(image)));
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
+        let Some(element) = node.element_data_mut() else {
+            return;
+        };
+        element.special_data =
+            crate::node::SpecialElementData::Image(Box::new(crate::node::ImageData::Raster(image)));
         node.insert_damage(style::selector_parser::RestyleDamage::REPAINT);
     }
 
@@ -1271,7 +1278,8 @@ impl BaseDocument {
         if let Some(root) = self.containing_shadow_root(node_id) {
             if let Some(old) = self.nodes_to_stylesheet.remove(&node_id) {
                 self.stylist.remove_stylesheet(old, &self.guard.read());
-                self.stylist.force_stylesheet_origins_dirty(style::stylesheets::OriginSet::all());
+                self.stylist
+                    .force_stylesheet_origins_dirty(style::stylesheets::OriginSet::all());
                 self.stylesheet_generation += 1;
             }
             let element = &mut self.nodes[node_id].element_data_mut().unwrap();
@@ -1524,7 +1532,10 @@ impl BaseDocument {
         if let Some(parent_id) = node.parent {
             let parent = &mut self.nodes[parent_id];
             parent.insert_damage(crate::layout::damage::ALL_DAMAGE);
-            if let Some(mut data) = parent.try_stylo_element_data_mut().and_then(|s| s.get_mut()) {
+            if let Some(mut data) = parent
+                .try_stylo_element_data_mut()
+                .and_then(|s| s.get_mut())
+            {
                 data.hint |= RestyleHint::restyle_subtree();
             }
         }

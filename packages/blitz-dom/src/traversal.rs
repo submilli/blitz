@@ -36,7 +36,6 @@ macro_rules! iter_children_and_pseudos {
         if let Some(after) = after {
             $cb(after)
         }
-
     }};
 }
 pub(crate) use iter_children_and_pseudos;
@@ -125,7 +124,9 @@ impl BaseDocument {
         while let Some(id) = stack.pop() {
             // Slots' composed children are recomputed at the next resolve; a
             // node dropped since then is skipped.
-            let Some(node) = self.nodes.get(id) else { continue };
+            let Some(node) = self.nodes.get(id) else {
+                continue;
+            };
             visit(id, node);
             stack.extend(node.flat_children().iter().rev().copied());
         }

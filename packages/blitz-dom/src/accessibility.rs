@@ -1,8 +1,10 @@
 use crate::{BaseDocument, ElementData, Node as BlitzDomNode, local_name};
-use accesskit::{Invalid, Node as AccessKitNode, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
+use accesskit::{
+    Invalid, Node as AccessKitNode, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate,
+};
 use markup5ever::ns;
-use style_dom::ElementState;
 use style::properties::longhands::visibility;
+use style_dom::ElementState;
 
 impl BaseDocument {
     pub fn build_accessibility_tree(&self) -> TreeUpdate {
@@ -130,7 +132,13 @@ impl BaseDocument {
         role: Role,
         builder: &mut AccessKitNode,
     ) {
-        let attr = |name: &str| element.attrs().iter().find(|a| &*a.name.local == name).map(|a| a.value.to_string());
+        let attr = |name: &str| {
+            element
+                .attrs()
+                .iter()
+                .find(|a| &*a.name.local == name)
+                .map(|a| a.value.to_string())
+        };
         let tag = &*element.name.local;
 
         if let Some(name) = self.accessible_name(node, element, role) {
@@ -149,10 +157,14 @@ impl BaseDocument {
         if disabled {
             builder.set_disabled();
         }
-        if element.attr(local_name!("required")).is_some() || attr("aria-required").as_deref() == Some("true") {
+        if element.attr(local_name!("required")).is_some()
+            || attr("aria-required").as_deref() == Some("true")
+        {
             builder.set_required();
         }
-        if element.attr(local_name!("readonly")).is_some() || attr("aria-readonly").as_deref() == Some("true") {
+        if element.attr(local_name!("readonly")).is_some()
+            || attr("aria-readonly").as_deref() == Some("true")
+        {
             builder.set_read_only();
         }
         if attr("aria-invalid").is_some_and(|v| v != "false") {
@@ -162,7 +174,10 @@ impl BaseDocument {
             Role::CheckBox | Role::RadioButton | Role::Switch if tag == "input" => {
                 builder.set_toggled(Toggled::from(self.checkedness(node.id)));
             }
-            _ => match attr("aria-checked").or_else(|| attr("aria-pressed")).as_deref() {
+            _ => match attr("aria-checked")
+                .or_else(|| attr("aria-pressed"))
+                .as_deref()
+            {
                 Some("true") => builder.set_toggled(Toggled::True),
                 Some("mixed") => builder.set_toggled(Toggled::Mixed),
                 Some("false") => builder.set_toggled(Toggled::False),
@@ -173,7 +188,9 @@ impl BaseDocument {
             let selected = node
                 .ancestors_select()
                 .and_then(|select| self.selected_option(select))
-                .map_or(element.attr(local_name!("selected")).is_some(), |s| s == node.id);
+                .map_or(element.attr(local_name!("selected")).is_some(), |s| {
+                    s == node.id
+                });
             builder.set_selected(selected);
         } else if let Some(selected) = attr("aria-selected") {
             builder.set_selected(selected == "true");
@@ -181,15 +198,20 @@ impl BaseDocument {
         if let Some(expanded) = attr("aria-expanded") {
             builder.set_expanded(expanded == "true");
         } else if tag == "summary" {
-            let open = node.parent.and_then(|p| self.nodes[p].element_data()).is_some_and(|d| {
-                &*d.name.local == "details" && d.attr(local_name!("open")).is_some()
-            });
+            let open = node
+                .parent
+                .and_then(|p| self.nodes[p].element_data())
+                .is_some_and(|d| {
+                    &*d.name.local == "details" && d.attr(local_name!("open")).is_some()
+                });
             builder.set_expanded(open);
         }
 
         // Values.
         match tag {
-            "input" | "textarea" if !matches!(role, Role::CheckBox | Role::RadioButton | Role::Button) => {
+            "input" | "textarea"
+                if !matches!(role, Role::CheckBox | Role::RadioButton | Role::Button) =>
+            {
                 if let Some(value) = self.form_value(node.id) {
                     builder.set_value(value);
                 }
@@ -220,7 +242,9 @@ impl BaseDocument {
             "h6" => Some(6),
             _ => None,
         };
-        let level = attr("aria-level").and_then(|l| l.parse::<usize>().ok()).or(heading_level);
+        let level = attr("aria-level")
+            .and_then(|l| l.parse::<usize>().ok())
+            .or(heading_level);
         if let Some(level) = level {
             builder.set_level(level);
         }
@@ -232,16 +256,35 @@ impl BaseDocument {
 
         // Bounds, from layout, in CSS pixels relative to the viewport.
         if let Some(rect) = self.get_client_bounding_rect(node.id) {
-            builder.set_bounds(Rect { x0: rect.x, y0: rect.y, x1: rect.x + rect.width, y1: rect.y + rect.height });
+            builder.set_bounds(Rect {
+                x0: rect.x,
+                y0: rect.y,
+                x1: rect.x + rect.width,
+                y1: rect.y + rect.height,
+            });
         }
     }
 
     /// The accessible name (a practical subset of accname 1.2): labelled-by,
     /// `aria-label`, the host language's labels, content, then `title`.
-    fn accessible_name(&self, node: &BlitzDomNode, element: &ElementData, role: Role) -> Option<String> {
-        let attr = |name: &str| element.attrs().iter().find(|a| &*a.name.local == name).map(|a| a.value.to_string());
+    fn accessible_name(
+        &self,
+        node: &BlitzDomNode,
+        element: &ElementData,
+        role: Role,
+    ) -> Option<String> {
+        let attr = |name: &str| {
+            element
+                .attrs()
+                .iter()
+                .find(|a| &*a.name.local == name)
+                .map(|a| a.value.to_string())
+        };
         let non_empty = |s: String| Some(normalize(&s)).filter(|s| !s.is_empty());
-        if let Some(name) = attr("aria-labelledby").map(|ids| self.text_of_ids(&ids)).and_then(non_empty) {
+        if let Some(name) = attr("aria-labelledby")
+            .map(|ids| self.text_of_ids(&ids))
+            .and_then(non_empty)
+        {
             return Some(name);
         }
         if let Some(name) = attr("aria-label").and_then(non_empty) {
@@ -277,7 +320,13 @@ impl BaseDocument {
                 return Some(name);
             }
         }
-        let fallback = attr("title").or_else(|| if tag == "input" || tag == "textarea" { attr("placeholder") } else { None });
+        let fallback = attr("title").or_else(|| {
+            if tag == "input" || tag == "textarea" {
+                attr("placeholder")
+            } else {
+                None
+            }
+        });
         fallback.and_then(non_empty)
     }
 
@@ -302,7 +351,9 @@ impl BaseDocument {
         if let Some(id) = node.element_data().and_then(|e| e.attr(local_name!("id"))) {
             self.visit(|label_id, label| {
                 if label.element_data().is_some_and(|l| {
-                    l.name.ns == ns!(html) && &*l.name.local == "label" && l.attr(local_name!("for")) == Some(id)
+                    l.name.ns == ns!(html)
+                        && &*l.name.local == "label"
+                        && l.attr(local_name!("for")) == Some(id)
                 }) {
                     labels.push(label_id);
                 }
@@ -310,7 +361,10 @@ impl BaseDocument {
         }
         let mut ancestor = node.parent;
         while let Some(id) = ancestor {
-            if self.nodes[id].element_data().is_some_and(|e| &*e.name.local == "label") {
+            if self.nodes[id]
+                .element_data()
+                .is_some_and(|e| &*e.name.local == "label")
+            {
                 labels.push(id);
                 break;
             }
@@ -329,11 +383,11 @@ impl BaseDocument {
     }
 
     fn first_child_text(&self, node: &BlitzDomNode, tag: &str) -> Option<String> {
-        let child = node
-            .children
-            .iter()
-            .copied()
-            .find(|&c| self.nodes[c].element_data().is_some_and(|e| &*e.name.local == tag))?;
+        let child = node.children.iter().copied().find(|&c| {
+            self.nodes[c]
+                .element_data()
+                .is_some_and(|e| &*e.name.local == tag)
+        })?;
         let mut text = String::new();
         self.text_alternative(child, &mut text);
         Some(text)
@@ -345,7 +399,12 @@ impl BaseDocument {
         self.text_alternative_skipping(id, None, out)
     }
 
-    fn text_alternative_skipping(&self, id: crate::NodeId, skip: Option<crate::NodeId>, out: &mut String) {
+    fn text_alternative_skipping(
+        &self,
+        id: crate::NodeId,
+        skip: Option<crate::NodeId>,
+        out: &mut String,
+    ) {
         if Some(id) == skip {
             return;
         }
@@ -383,7 +442,9 @@ impl BaseDocument {
         // An element that contributed no text contributes its tooltip
         // (accname: a descendant's name falls back to `title`).
         if out.trim_end().len() == before
-            && let Some(title) = node.element_data().and_then(|e| e.attr(local_name!("title")))
+            && let Some(title) = node
+                .element_data()
+                .and_then(|e| e.attr(local_name!("title")))
         {
             out.push(' ');
             out.push_str(title);
@@ -396,12 +457,16 @@ impl BaseDocument {
 impl BlitzDomNode {
     /// An `<option>` or `<optgroup>` inside a `<select>`.
     fn is_select_option(&self) -> bool {
-        let Some(element) = self.element_data() else { return false };
+        let Some(element) = self.element_data() else {
+            return false;
+        };
         match &*element.name.local {
             "option" => self.ancestors_select().is_some(),
-            "optgroup" => self
-                .parent
-                .is_some_and(|p| self.tree()[p].element_data().is_some_and(|e| &*e.name.local == "select")),
+            "optgroup" => self.parent.is_some_and(|p| {
+                self.tree()[p]
+                    .element_data()
+                    .is_some_and(|e| &*e.name.local == "select")
+            }),
             _ => false,
         }
     }
@@ -411,11 +476,17 @@ impl BlitzDomNode {
     fn ancestors_select(&self) -> Option<crate::NodeId> {
         let parent = self.parent?;
         let tree = self.tree();
-        let is = |id: crate::NodeId, tag: &str| tree[id].element_data().is_some_and(|e| &*e.name.local == tag);
+        let is = |id: crate::NodeId, tag: &str| {
+            tree[id]
+                .element_data()
+                .is_some_and(|e| &*e.name.local == tag)
+        };
         if is(parent, "select") {
             return Some(parent);
         }
-        tree[parent].parent.filter(|&grand| is(parent, "optgroup") && is(grand, "select"))
+        tree[parent]
+            .parent
+            .filter(|&grand| is(parent, "optgroup") && is(grand, "select"))
     }
 
     // https://www.w3.org/TR/wai-aria-1.2/#tree_exclusion

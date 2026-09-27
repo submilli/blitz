@@ -4,8 +4,8 @@
 
 use blitz_traits::node_id::NodeId;
 use kurbo::Rect as KurboRect;
-use taffy::AbsoluteAxis;
 use std::time::Duration;
+use taffy::AbsoluteAxis;
 
 use super::Node;
 

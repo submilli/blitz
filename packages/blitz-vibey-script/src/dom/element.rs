@@ -847,7 +847,10 @@ fn get_inner_html(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsRes
     let ctx = dom_ctx(context)?;
     let node_id = this_node_id(this)?;
     let doc = ctx.doc.borrow();
-    let html = doc.get_node(node_id).map(|node| node.inner_html()).unwrap_or_default();
+    let html = doc
+        .get_node(node_id)
+        .map(|node| node.inner_html())
+        .unwrap_or_default();
     Ok(js_str(&html))
 }
 

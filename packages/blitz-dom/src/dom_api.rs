@@ -119,7 +119,9 @@ impl BaseDocument {
     /// `Node.nodeName`
     pub fn node_name(&self, id: NodeId) -> String {
         match &self.nodes[id].data {
-            NodeData::Element(el) | NodeData::AnonymousBlock(el) => html_uppercased_qualified_name(&el.name),
+            NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
+                html_uppercased_qualified_name(&el.name)
+            }
             NodeData::Text(_) => "#text".into(),
             NodeData::ProcessingInstruction { target, .. } => target.clone(),
             NodeData::Comment { .. } => "#comment".into(),
@@ -143,9 +145,9 @@ impl BaseDocument {
     pub fn text_content_of(&self, id: NodeId) -> Option<String> {
         match &self.nodes[id].data {
             NodeData::Document(_) | NodeData::Doctype { .. } => None,
-            NodeData::Text(_) | NodeData::Comment { .. } | NodeData::ProcessingInstruction { .. } => {
-                self.character_data(id).map(str::to_string)
-            }
+            NodeData::Text(_)
+            | NodeData::Comment { .. }
+            | NodeData::ProcessingInstruction { .. } => self.character_data(id).map(str::to_string),
             _ => {
                 let mut out = String::new();
                 self.collect_descendant_text(id, &mut out);
@@ -249,7 +251,12 @@ impl BaseDocument {
         replacing: Option<NodeId>,
     ) -> Result<(), DomError> {
         let children = &self.nodes[document].children;
-        let others = || children.iter().copied().filter(move |&c| Some(c) != replacing);
+        let others = || {
+            children
+                .iter()
+                .copied()
+                .filter(move |&c| Some(c) != replacing)
+        };
         let has_element_child = others().any(|c| self.is_element(c));
         let has_doctype_child = others().any(|c| self.node_type(c) == node_type::DOCUMENT_TYPE);
         let doctype_after_child = |child: NodeId| {
@@ -268,8 +275,14 @@ impl BaseDocument {
         match self.node_type(node) {
             node_type::DOCUMENT_FRAGMENT => {
                 let frag_children = &self.nodes[node].children;
-                let elements = frag_children.iter().filter(|&&c| self.is_element(c)).count();
-                if frag_children.iter().any(|&c| self.node_type(c) == node_type::TEXT) {
+                let elements = frag_children
+                    .iter()
+                    .filter(|&&c| self.is_element(c))
+                    .count();
+                if frag_children
+                    .iter()
+                    .any(|&c| self.node_type(c) == node_type::TEXT)
+                {
                     return Err(DomError::HierarchyRequest);
                 }
                 if elements > 1
@@ -347,8 +360,12 @@ fn is_text_control(el: &crate::node::ElementData) -> bool {
     match &*el.name.local {
         "textarea" => true,
         "input" => !matches!(
-            el.attr(markup5ever::local_name!("type")).map(|t| t.to_ascii_lowercase()).as_deref(),
-            Some("checkbox" | "radio" | "file" | "button" | "submit" | "reset" | "image" | "hidden")
+            el.attr(markup5ever::local_name!("type"))
+                .map(|t| t.to_ascii_lowercase())
+                .as_deref(),
+            Some(
+                "checkbox" | "radio" | "file" | "button" | "submit" | "reset" | "image" | "hidden"
+            )
         ),
         _ => false,
     }
@@ -357,7 +374,9 @@ fn is_text_control(el: &crate::node::ElementData) -> bool {
 fn is_checkable(el: &crate::node::ElementData) -> bool {
     &*el.name.local == "input"
         && matches!(
-            el.attr(markup5ever::local_name!("type")).map(|t| t.to_ascii_lowercase()).as_deref(),
+            el.attr(markup5ever::local_name!("type"))
+                .map(|t| t.to_ascii_lowercase())
+                .as_deref(),
             Some("checkbox" | "radio")
         )
 }
@@ -383,7 +402,11 @@ impl BaseDocument {
                 }
                 // Checkboxes and radios default to "on".
                 let default = if is_checkable(el) { "on" } else { "" };
-                Some(el.attr(markup5ever::local_name!("value")).unwrap_or(default).to_string())
+                Some(
+                    el.attr(markup5ever::local_name!("value"))
+                        .unwrap_or(default)
+                        .to_string(),
+                )
             }
             "option" => Some(match el.attr(markup5ever::local_name!("value")) {
                 Some(v) => v.to_string(),
@@ -398,9 +421,11 @@ impl BaseDocument {
                 let option = self.selected_option(id)?;
                 self.form_value(option)
             }
-            "button" | "data" | "li" | "param" | "output" => {
-                Some(el.attr(markup5ever::local_name!("value")).unwrap_or("").to_string())
-            }
+            "button" | "data" | "li" | "param" | "output" => Some(
+                el.attr(markup5ever::local_name!("value"))
+                    .unwrap_or("")
+                    .to_string(),
+            ),
             _ => None,
         }
     }
@@ -409,22 +434,36 @@ impl BaseDocument {
     /// `selected` attribute for a multiple select, otherwise the one
     /// [`selected_option`](Self::selected_option).
     pub fn selected_options(&self, select: NodeId) -> Vec<NodeId> {
-        let multiple = self.nodes[select].element_data().is_some_and(|e| e.attr(markup5ever::local_name!("multiple")).is_some());
+        let multiple = self.nodes[select]
+            .element_data()
+            .is_some_and(|e| e.attr(markup5ever::local_name!("multiple")).is_some());
         if !multiple {
             return self.selected_option(select).into_iter().collect();
         }
         // Options are children of the select or of its optgroups.
-        let is = |id: NodeId, tag: &str| self.nodes[id].element_data().is_some_and(|e| &*e.name.local == tag);
+        let is = |id: NodeId, tag: &str| {
+            self.nodes[id]
+                .element_data()
+                .is_some_and(|e| &*e.name.local == tag)
+        };
         let mut options = Vec::new();
         for &child in &self.nodes[select].children {
             if is(child, "optgroup") {
-                options.extend(self.nodes[child].children.iter().copied().filter(|&c| is(c, "option")));
+                options.extend(
+                    self.nodes[child]
+                        .children
+                        .iter()
+                        .copied()
+                        .filter(|&c| is(c, "option")),
+                );
             } else if is(child, "option") {
                 options.push(child);
             }
         }
         options.retain(|&o| {
-            self.nodes[o].element_data().is_some_and(|e| e.attr(markup5ever::local_name!("selected")).is_some())
+            self.nodes[o]
+                .element_data()
+                .is_some_and(|e| e.attr(markup5ever::local_name!("selected")).is_some())
         });
         options
     }
@@ -437,7 +476,11 @@ impl BaseDocument {
         options
             .iter()
             .copied()
-            .find(|&o| self.nodes[o].element_data().is_some_and(|e| e.has_attr(markup5ever::local_name!("selected"))))
+            .find(|&o| {
+                self.nodes[o]
+                    .element_data()
+                    .is_some_and(|e| e.has_attr(markup5ever::local_name!("selected")))
+            })
             .or_else(|| options.first().copied())
     }
 
@@ -472,7 +515,9 @@ impl DocumentMutator<'_> {
     /// `input.value = ...` / `textarea.value = ...`: sets the current value
     /// and its dirty flag; the `value` attribute is untouched.
     pub fn set_form_value(&mut self, id: NodeId, value: &str) {
-        let is_text = self.doc.nodes[id].element_data().is_some_and(is_text_control);
+        let is_text = self.doc.nodes[id]
+            .element_data()
+            .is_some_and(is_text_control);
         if !is_text {
             // Other controls reflect `value` to the attribute.
             let _ = self.set_attribute_by_name(id, "value", value);
@@ -496,7 +541,10 @@ impl DocumentMutator<'_> {
     pub fn set_checkedness(&mut self, id: NodeId, checked: bool) {
         let radio_group = self.doc.nodes[id].element_data().and_then(|el| {
             (el.attr(markup5ever::local_name!("type")) == Some("radio"))
-                .then(|| el.attr(markup5ever::local_name!("name")).map(str::to_string))
+                .then(|| {
+                    el.attr(markup5ever::local_name!("name"))
+                        .map(str::to_string)
+                })
                 .flatten()
         });
         if let (true, Some(group)) = (checked, radio_group) {
@@ -529,7 +577,8 @@ impl DocumentMutator<'_> {
                     if el.checkbox_input_checked().is_some() {
                         el.set_checkbox_input_checked(checked);
                     } else {
-                        el.element_state.set(style_dom::ElementState::CHECKED, checked);
+                        el.element_state
+                            .set(style_dom::ElementState::CHECKED, checked);
                     }
                 }
                 node.mark_ancestors_dirty();
@@ -708,13 +757,14 @@ impl DocumentMutator<'_> {
         let added: Vec<NodeId> = self.doc.nodes[parent].children.to_vec();
         self.doc.mutation_log = Some(log);
         if !removed.is_empty() || !added.is_empty() {
-            self.doc.record_mutation(crate::mutations::MutationRecord::ChildList {
-                target: parent,
-                added,
-                removed,
-                previous_sibling: None,
-                next_sibling: None,
-            });
+            self.doc
+                .record_mutation(crate::mutations::MutationRecord::ChildList {
+                    target: parent,
+                    added,
+                    removed,
+                    previous_sibling: None,
+                    next_sibling: None,
+                });
         }
     }
 
@@ -740,10 +790,16 @@ impl DocumentMutator<'_> {
             return;
         }
         let old = match &self.doc.nodes[id].data {
-            NodeData::Comment { contents } | NodeData::ProcessingInstruction { contents, .. } => contents.clone(),
+            NodeData::Comment { contents } | NodeData::ProcessingInstruction { contents, .. } => {
+                contents.clone()
+            }
             _ => return,
         };
-        self.doc.record_mutation(crate::mutations::MutationRecord::CharacterData { target: id, old_value: old });
+        self.doc
+            .record_mutation(crate::mutations::MutationRecord::CharacterData {
+                target: id,
+                old_value: old,
+            });
         if let NodeData::Comment { contents } | NodeData::ProcessingInstruction { contents, .. } =
             &mut self.doc.nodes[id].data
         {
@@ -761,11 +817,18 @@ impl DocumentMutator<'_> {
         self.with_one_child_list_record(target, |m| {
             m.replace_all(target, None);
             match context {
-                None => m.doc.html_parser_provider.clone().parse_inner_html(m, target, html),
+                None => m
+                    .doc
+                    .html_parser_provider
+                    .clone()
+                    .parse_inner_html(m, target, html),
                 Some(host) => {
                     let name = m.doc.nodes[host].element_data().expect("host").name.clone();
                     let scratch = m.create_element(name, Vec::new());
-                    m.doc.html_parser_provider.clone().parse_inner_html(m, scratch, html);
+                    m.doc
+                        .html_parser_provider
+                        .clone()
+                        .parse_inner_html(m, scratch, html);
                     let parsed = m.doc.nodes[scratch].children.to_vec();
                     m.append_children(target, &parsed);
                     m.remove_and_drop_node(scratch);
@@ -776,7 +839,12 @@ impl DocumentMutator<'_> {
 
     /// `Element.insertAdjacentHTML(position, html)`: parse `html` as a
     /// fragment in the right context element and insert the result.
-    pub fn insert_adjacent_html(&mut self, id: NodeId, position: &str, html: &str) -> Result<(), DomError> {
+    pub fn insert_adjacent_html(
+        &mut self,
+        id: NodeId,
+        position: &str,
+        html: &str,
+    ) -> Result<(), DomError> {
         let parent = self.doc.nodes[id].parent;
         let (context, target_parent, anchor) = match position.to_ascii_lowercase().as_str() {
             "beforebegin" | "afterend" => {
@@ -826,7 +894,8 @@ impl DocumentMutator<'_> {
                 if deep {
                     if let Some(contents) = el.template_contents {
                         let copy_contents = self.template_contents(copy);
-                        let children: Vec<NodeId> = self.doc.nodes[contents].children.iter().copied().collect();
+                        let children: Vec<NodeId> =
+                            self.doc.nodes[contents].children.iter().copied().collect();
                         for child in children {
                             let child_copy = self.clone_node(child, true);
                             self.append_children(copy_contents, &[child_copy]);
@@ -886,7 +955,9 @@ pub fn is_valid_element_name(name: &str) -> bool {
     if !(first.is_ascii_alphabetic() || first == '_' || first == ':' || !first.is_ascii()) {
         return false;
     }
-    !name.chars().any(|c| c.is_ascii_whitespace() || matches!(c, '>' | '/' | '<' | '\0'))
+    !name
+        .chars()
+        .any(|c| c.is_ascii_whitespace() || matches!(c, '>' | '/' | '<' | '\0'))
 }
 
 /// Whether `name` can be used as an attribute name with `setAttribute`: not

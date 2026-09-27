@@ -27,7 +27,13 @@ impl Clock for ManualClock {
 struct Recorder(Vec<&'static str>);
 
 impl EventHandler for &mut Recorder {
-    fn handle_event(&mut self, _: &[NodeId], event: &mut DomEvent, _: &mut dyn blitz_dom::Document, _: &mut EventState) {
+    fn handle_event(
+        &mut self,
+        _: &[NodeId],
+        event: &mut DomEvent,
+        _: &mut dyn blitz_dom::Document,
+        _: &mut EventState,
+    ) {
         if matches!(event.data, DomEventData::DoubleClick(_)) {
             self.0.push("dblclick");
         }
@@ -51,7 +57,10 @@ fn doc_with(clock: Arc<ManualClock>) -> BaseDocument {
 
 /// Press and release the primary button on `#target` at the current time.
 fn click(doc: &mut BaseDocument, recorder: &mut Recorder) {
-    let event = doc.get_node(q(doc, "#target")).unwrap().synthetic_click_event_data(Default::default());
+    let event = doc
+        .get_node(q(doc, "#target"))
+        .unwrap()
+        .synthetic_click_event_data(Default::default());
     let mut driver = EventDriver::new(doc, recorder);
     driver.handle_ui_event(UiEvent::PointerDown(event.clone()));
     driver.handle_ui_event(UiEvent::PointerUp(event));

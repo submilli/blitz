@@ -34,14 +34,42 @@ fn child_list_attribute_and_character_data_records() {
     assert_eq!(
         records,
         vec![
-            MutationRecord::Attributes { target: a, name: "title".into(), namespace: None, old_value: None },
-            MutationRecord::Attributes { target: a, name: "title".into(), namespace: None, old_value: Some("one".into()) },
-            MutationRecord::ChildList { target: a, added: vec![span], removed: vec![], previous_sibling: Some(p), next_sibling: None },
-            MutationRecord::ChildList { target: a, added: vec![], removed: vec![p], previous_sibling: None, next_sibling: Some(span) },
-            MutationRecord::CharacterData { target: text, old_value: "text".into() },
+            MutationRecord::Attributes {
+                target: a,
+                name: "title".into(),
+                namespace: None,
+                old_value: None
+            },
+            MutationRecord::Attributes {
+                target: a,
+                name: "title".into(),
+                namespace: None,
+                old_value: Some("one".into())
+            },
+            MutationRecord::ChildList {
+                target: a,
+                added: vec![span],
+                removed: vec![],
+                previous_sibling: Some(p),
+                next_sibling: None
+            },
+            MutationRecord::ChildList {
+                target: a,
+                added: vec![],
+                removed: vec![p],
+                previous_sibling: None,
+                next_sibling: Some(span)
+            },
+            MutationRecord::CharacterData {
+                target: text,
+                old_value: "text".into()
+            },
         ]
     );
-    assert!(doc.take_mutation_records().is_empty(), "records are drained");
+    assert!(
+        doc.take_mutation_records().is_empty(),
+        "records are drained"
+    );
 }
 
 #[test]
@@ -52,8 +80,12 @@ fn moving_a_node_records_its_removal_and_insertion() {
     doc.mutate().pre_insert(b, c, None).unwrap();
     let records = doc.take_mutation_records();
     assert_eq!(records.len(), 2);
-    assert!(matches!(&records[0], MutationRecord::ChildList { target, removed, .. } if *target == a && removed == &vec![b]));
-    assert!(matches!(&records[1], MutationRecord::ChildList { target, added, .. } if *target == c && added == &vec![b]));
+    assert!(
+        matches!(&records[0], MutationRecord::ChildList { target, removed, .. } if *target == a && removed == &vec![b])
+    );
+    assert!(
+        matches!(&records[1], MutationRecord::ChildList { target, added, .. } if *target == c && added == &vec![b])
+    );
 }
 
 #[test]
@@ -69,10 +101,23 @@ fn inner_html_is_one_record_and_its_parsing_is_not_recorded() {
     assert_eq!(logged.len(), 1, "{logged:?}");
     assert_eq!(
         logged[0].record,
-        MutationRecord::ChildList { target: a, added: new, removed: old, previous_sibling: None, next_sibling: None }
+        MutationRecord::ChildList {
+            target: a,
+            added: new,
+            removed: old,
+            previous_sibling: None,
+            next_sibling: None
+        }
     );
     // Ancestors are captured when the record is made, up to the document.
-    assert_eq!((logged[0].ancestors[0], logged[0].ancestors.last().copied()), (a, Some(root)));
+    assert_eq!(
+        (logged[0].ancestors[0], logged[0].ancestors.last().copied()),
+        (a, Some(root))
+    );
     // The parser's scratch nodes never touched the document.
-    assert_eq!(doc.get_node(root).unwrap().children.len(), 1, "only <html> under the document");
+    assert_eq!(
+        doc.get_node(root).unwrap().children.len(),
+        1,
+        "only <html> under the document"
+    );
 }

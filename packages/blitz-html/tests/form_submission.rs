@@ -32,7 +32,9 @@ fn submit(html: &str, edit: impl FnOnce(&mut BaseDocument)) -> Vec<(String, Stri
     let form = q(&doc, "form");
     doc.submit_form(form, form);
     let options = capture.0.lock().unwrap().pop().expect("submitted");
-    let Body::Form(data) = options.document_resource else { panic!("a POST form body") };
+    let Body::Form(data) = options.document_resource else {
+        panic!("a POST form body")
+    };
     data.0
         .into_iter()
         .map(|e| match e.value {
@@ -43,7 +45,9 @@ fn submit(html: &str, edit: impl FnOnce(&mut BaseDocument)) -> Vec<(String, Stri
 }
 
 fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
-    list.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect()
+    list.iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect()
 }
 
 #[test]
@@ -54,7 +58,15 @@ fn selects_submit_their_selected_options() {
          <option selected disabled>w</select><select name=first><option>only</select></form>",
         |_| {},
     );
-    assert_eq!(entries, pairs(&[("one", "B"), ("many", "x"), ("many", "y"), ("first", "only")]));
+    assert_eq!(
+        entries,
+        pairs(&[
+            ("one", "B"),
+            ("many", "x"),
+            ("many", "y"),
+            ("first", "only")
+        ])
+    );
 }
 
 #[test]
@@ -67,5 +79,13 @@ fn controls_submit_their_current_values() {
             doc.mutate().set_form_value(typed, "new");
         },
     );
-    assert_eq!(entries, pairs(&[("t", "default"), ("typed", "new"), ("area", "text\\nbody"), ("h", "hid")]));
+    assert_eq!(
+        entries,
+        pairs(&[
+            ("t", "default"),
+            ("typed", "new"),
+            ("area", "text\\nbody"),
+            ("h", "hid")
+        ])
+    );
 }

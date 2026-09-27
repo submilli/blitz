@@ -320,7 +320,8 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         _flags: ElementFlags,
     ) -> Self::Handle {
         let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
-        let is_script = name.local == html5ever::local_name!("script") && name.ns == html5ever::ns!(html);
+        let is_script =
+            name.local == html5ever::local_name!("script") && name.ns == html5ever::ns!(html);
         let fragment = self.fragment;
         self.with(|m| {
             let id = m.create_element(name, attrs);

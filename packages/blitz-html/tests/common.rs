@@ -22,5 +22,7 @@ pub fn parse(html: &str) -> BaseDocument {
 }
 
 pub fn q(doc: &BaseDocument, selector: &str) -> NodeId {
-    doc.query_selector(selector).unwrap().unwrap_or_else(|| panic!("no match for {selector}"))
+    doc.query_selector(selector)
+        .unwrap()
+        .unwrap_or_else(|| panic!("no match for {selector}"))
 }

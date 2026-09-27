@@ -30,7 +30,10 @@ fn empty_elements_get_end_tags() {
 #[test]
 fn void_elements_have_no_end_tag() {
     let d = doc("<div id=x><br><img src=a.png><input type=text></div>");
-    assert_eq!(inner(&d, "#x"), r#"<br><img src="a.png"><input type="text">"#);
+    assert_eq!(
+        inner(&d, "#x"),
+        r#"<br><img src="a.png"><input type="text">"#
+    );
 }
 
 #[test]
@@ -61,13 +64,20 @@ fn comments_are_serialized() {
 fn template_serializes_its_contents() {
     let d = doc("<template id=t><b>bold</b></template>");
     assert_eq!(inner(&d, "#t"), "<b>bold</b>");
-    assert_eq!(outer(&d, "#t"), r#"<template id="t"><b>bold</b></template>"#);
+    assert_eq!(
+        outer(&d, "#t"),
+        r#"<template id="t"><b>bold</b></template>"#
+    );
 }
 
 #[test]
 fn doctype_is_serialized() {
     let d = doc("<!DOCTYPE html><html><body></body></html>");
-    assert!(d.root_node().inner_html().starts_with("<!DOCTYPE html><html>"));
+    assert!(
+        d.root_node()
+            .inner_html()
+            .starts_with("<!DOCTYPE html><html>")
+    );
 }
 
 #[test]
@@ -78,4 +88,3 @@ fn svg_and_foreign_names_keep_case() {
         r#"<svg viewBox="0 0 1 1"><foreignObject></foreignObject></svg>"#
     );
 }
-

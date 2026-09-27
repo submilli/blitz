@@ -86,7 +86,8 @@ impl BaseDocument {
     /// Start or stop recording custom element reactions. Stopping discards
     /// pending ones.
     pub fn set_custom_element_reactions(&mut self, on: bool) {
-        self.custom_element_reactions = on.then(|| self.custom_element_reactions.take().unwrap_or_default());
+        self.custom_element_reactions =
+            on.then(|| self.custom_element_reactions.take().unwrap_or_default());
     }
 
     /// Reactions since the last call, oldest first.
@@ -101,7 +102,9 @@ impl BaseDocument {
         self.nodes
             .get(node_id)
             .and_then(|node| node.element_data())
-            .map_or(CustomElementState::Uncustomized, |el| el.custom_element_state)
+            .map_or(CustomElementState::Uncustomized, |el| {
+                el.custom_element_state
+            })
     }
 
     /// Set an element's state (the embedder does this when it upgrades or

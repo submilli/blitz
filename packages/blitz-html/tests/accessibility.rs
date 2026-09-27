@@ -11,9 +11,14 @@ fn tree(doc: &mut BaseDocument) -> std::collections::HashMap<AxId, Node> {
     doc.build_accessibility_tree().nodes.into_iter().collect()
 }
 
-fn node<'a>(tree: &'a std::collections::HashMap<AxId, Node>, doc: &BaseDocument, selector: &str) -> &'a Node {
+fn node<'a>(
+    tree: &'a std::collections::HashMap<AxId, Node>,
+    doc: &BaseDocument,
+    selector: &str,
+) -> &'a Node {
     let id = q(doc, selector);
-    tree.get(&AxId(id.as_u64())).unwrap_or_else(|| panic!("{selector} is in the tree"))
+    tree.get(&AxId(id.as_u64()))
+        .unwrap_or_else(|| panic!("{selector} is in the tree"))
 }
 
 #[test]
@@ -83,7 +88,10 @@ fn hidden_elements_are_left_out_and_bounds_come_from_layout() {
     );
     let tree = tree(&mut doc);
     let bounds = node(&tree, &doc, "#box").bounds().expect("bounds");
-    assert_eq!((bounds.x0, bounds.y0, bounds.x1, bounds.y1), (10.0, 0.0, 110.0, 40.0));
+    assert_eq!(
+        (bounds.x0, bounds.y0, bounds.x1, bounds.y1),
+        (10.0, 0.0, 110.0, 40.0)
+    );
     assert!(!tree.contains_key(&AxId(q(&doc, "#gone").as_u64())));
     assert_eq!(node(&tree, &doc, "#box").role(), Role::Region);
 }

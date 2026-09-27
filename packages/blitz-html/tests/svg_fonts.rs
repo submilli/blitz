@@ -26,7 +26,11 @@ fn svg_text_width(fonts: &[(FontRole, &[u8])], family: &str) -> f32 {
     DocumentHtmlParser::parse_into_mutator(&mut doc.mutate(), &html);
     doc.resolve(0.0);
     let node = doc.get_node(q(&doc, "#s")).unwrap();
-    let tree = node.element_data().unwrap().svg_data().expect("inline svg is parsed");
+    let tree = node
+        .element_data()
+        .unwrap()
+        .svg_data()
+        .expect("inline svg is parsed");
     tree.root().abs_bounding_box().width()
 }
 

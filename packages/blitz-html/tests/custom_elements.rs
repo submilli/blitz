@@ -2,11 +2,16 @@
 
 mod common;
 
-use blitz_dom::custom_elements::{CustomElementReaction, CustomElementState, is_valid_custom_element_name};
+use blitz_dom::custom_elements::{
+    CustomElementReaction, CustomElementState, is_valid_custom_element_name,
+};
 use common::{parse, q};
 
 fn matches(doc: &blitz_dom::BaseDocument, selector: &str) -> Vec<blitz_dom::NodeId> {
-    doc.query_selector_all(selector).unwrap().into_iter().collect()
+    doc.query_selector_all(selector)
+        .unwrap()
+        .into_iter()
+        .collect()
 }
 
 #[test]
@@ -14,7 +19,16 @@ fn valid_custom_element_names() {
     for name in ["my-el", "a-", "x-1.2_3", "math-α"] {
         assert!(is_valid_custom_element_name(name), "{name}");
     }
-    for name in ["div", "My-el", "my-El", "-x", "1-x", "font-face", "annotation-xml", "a b-c"] {
+    for name in [
+        "div",
+        "My-el",
+        "my-El",
+        "-x",
+        "1-x",
+        "font-face",
+        "annotation-xml",
+        "a b-c",
+    ] {
         assert!(!is_valid_custom_element_name(name), "{name}");
     }
 }
@@ -25,7 +39,10 @@ fn defined_matches_built_ins_and_upgraded_custom_elements() {
     let (d, m, s) = (q(&doc, "#d"), q(&doc, "#m"), q(&doc, "#s"));
     assert_eq!(doc.custom_element_state(m), CustomElementState::Undefined);
     // Only HTML-namespace elements can be custom elements.
-    assert_eq!(doc.custom_element_state(s), CustomElementState::Uncustomized);
+    assert_eq!(
+        doc.custom_element_state(s),
+        CustomElementState::Uncustomized
+    );
     assert!(matches(&doc, ":defined").contains(&d));
     assert_eq!(matches(&doc, ":not(:defined)"), vec![m]);
 
@@ -37,7 +54,9 @@ fn defined_matches_built_ins_and_upgraded_custom_elements() {
 
 #[test]
 fn defined_restyles() {
-    let mut doc = parse("<style>my-el { display: block; height: 10px } my-el:not(:defined) { display: none }</style><my-el id=m></my-el>");
+    let mut doc = parse(
+        "<style>my-el { display: block; height: 10px } my-el:not(:defined) { display: none }</style><my-el id=m></my-el>",
+    );
     let m = q(&doc, "#m");
     doc.resolve(0.0);
     assert_eq!(doc.get_node(m).unwrap().final_layout().size.height, 0.0);
@@ -50,7 +69,10 @@ fn defined_restyles() {
 fn reactions_for_connection_and_attribute_changes() {
     let mut doc = parse("<div id=host></div><my-el id=m></my-el>");
     let (host, m) = (q(&doc, "#host"), q(&doc, "#m"));
-    assert!(doc.take_custom_element_reactions().is_empty(), "off until enabled");
+    assert!(
+        doc.take_custom_element_reactions().is_empty(),
+        "off until enabled"
+    );
     doc.set_custom_element_reactions(true);
 
     // Moving a custom element disconnects and reconnects it; built-in

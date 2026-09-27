@@ -1669,7 +1669,6 @@ impl ScriptRuntime {
         any_called
     }
 
-
     /// Dispatch an event named `name` along `chain`, using `make_event` to lazily
     /// construct the JS event object. Returns `true` if any listener was invoked.
     fn dispatch_event_inner(

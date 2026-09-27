@@ -19,7 +19,9 @@ fn value_defaults_to_the_attribute_until_dirty() {
     assert_eq!(doc.form_value(i).as_deref(), Some("typed"));
     // The attribute holds the default value and no longer drives the value.
     assert_eq!(doc.attribute_by_name(i, "value").unwrap().value, "default");
-    doc.mutate().set_attribute_by_name(i, "value", "new default").unwrap();
+    doc.mutate()
+        .set_attribute_by_name(i, "value", "new default")
+        .unwrap();
     assert_eq!(doc.form_value(i).as_deref(), Some("typed"));
 }
 
@@ -28,8 +30,13 @@ fn checkedness_follows_the_attribute_until_dirty() {
     let mut doc = parse("<input id=c type=checkbox>");
     let c = q(&doc, "#c");
     assert!(!doc.checkedness(c));
-    doc.mutate().set_attribute_by_name(c, "checked", "").unwrap();
-    assert!(doc.checkedness(c), "adding the attribute checks a clean control");
+    doc.mutate()
+        .set_attribute_by_name(c, "checked", "")
+        .unwrap();
+    assert!(
+        doc.checkedness(c),
+        "adding the attribute checks a clean control"
+    );
     doc.mutate().remove_attribute_by_name(c, "checked");
     assert!(!doc.checkedness(c));
 
@@ -48,14 +55,21 @@ fn checking_a_radio_unchecks_its_group() {
 
 #[test]
 fn select_value_is_the_selected_option() {
-    let doc = parse("<select id=s><option value=a>A</option><option selected>  B  </option></select>");
+    let doc =
+        parse("<select id=s><option value=a>A</option><option selected>  B  </option></select>");
     assert_eq!(doc.form_value(q(&doc, "#s")).as_deref(), Some("B"));
 }
 
 struct Recorder(Vec<String>);
 
 impl EventHandler for &mut Recorder {
-    fn handle_event(&mut self, _: &[NodeId], event: &mut DomEvent, _: &mut dyn Document, _: &mut EventState) {
+    fn handle_event(
+        &mut self,
+        _: &[NodeId],
+        event: &mut DomEvent,
+        _: &mut dyn Document,
+        _: &mut EventState,
+    ) {
         self.0.push(event.name().to_string());
     }
 }
@@ -64,7 +78,12 @@ impl EventHandler for &mut Recorder {
 fn clicking_a_checkbox_toggles_it_and_fires_input_then_change() {
     let mut doc = parse("<input id=c type=checkbox>");
     let c = q(&doc, "#c");
-    let click = DomEvent::new(c, doc.get_node(c).unwrap().synthetic_click_event(Modifiers::empty()));
+    let click = DomEvent::new(
+        c,
+        doc.get_node(c)
+            .unwrap()
+            .synthetic_click_event(Modifiers::empty()),
+    );
     let mut recorder = Recorder(Vec::new());
     EventDriver::new(&mut doc, &mut recorder).handle_dom_event(click);
     // (Focus events follow: clicking also focuses the checkbox.)

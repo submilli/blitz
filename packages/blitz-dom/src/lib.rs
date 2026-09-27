@@ -31,11 +31,11 @@
 pub const DEFAULT_CSS: &str = include_str!("../assets/default.css");
 pub const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.otf");
 
+pub mod custom_elements;
 /// The DOM implementation.
 ///
 /// This is the primary entry point for this crate.
 mod document;
-pub mod custom_elements;
 pub mod dom_api;
 pub mod dom_events;
 pub mod mutations;
@@ -98,9 +98,9 @@ pub use crate::node::Widget;
 pub use blitz_traits::node_id::NodeId;
 // Re-export taffy: it is part of blitz-dom's public API (e.g. `Node::style`,
 // `Node::final_layout`)
-pub use clock::{Clock, FrozenClock};
 #[cfg(feature = "system-clock")]
 pub use clock::SystemClock;
+pub use clock::{Clock, FrozenClock};
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{BaseDocument, DocGuard, DocGuardMut, Document, PlainDocument};
 pub use markup5ever::{
@@ -109,9 +109,9 @@ pub use markup5ever::{
 };
 pub use mutator::DocumentMutator;
 pub use node::{Attribute, DocumentData, ElementData, Node, NodeData, TextNodeData};
-pub use parley::FontContext;
 /// The text engine, for embedders that shape text with the document's fonts.
 pub use parley;
+pub use parley::FontContext;
 pub use scrolling::{ScrollBehavior, ScrollLogicalPosition};
 pub use tree::NodeTree;
 
@@ -283,13 +283,21 @@ mod font_ctx_tests {
     #[test]
     fn roles_map_to_css_generic_families() {
         let mut ctx = build_font_ctx(&[(FontRole::Monospace, BULLET_FONT)]);
-        let has = |ctx: &mut crate::FontContext, g| ctx.collection.generic_families(g).next().is_some();
+        let has =
+            |ctx: &mut crate::FontContext, g| ctx.collection.generic_families(g).next().is_some();
         assert!(has(&mut ctx, GenericFamily::Monospace));
         assert!(has(&mut ctx, GenericFamily::UiMonospace));
-        assert!(!has(&mut ctx, GenericFamily::Serif), "no serif font was supplied");
+        assert!(
+            !has(&mut ctx, GenericFamily::Serif),
+            "no serif font was supplied"
+        );
 
         let mut ctx = build_font_ctx(&[(FontRole::SansSerif, BULLET_FONT)]);
-        for g in [GenericFamily::SansSerif, GenericFamily::SystemUi, GenericFamily::Cursive] {
+        for g in [
+            GenericFamily::SansSerif,
+            GenericFamily::SystemUi,
+            GenericFamily::Cursive,
+        ] {
             assert!(has(&mut ctx, g), "{g:?} falls back to the sans-serif font");
         }
     }

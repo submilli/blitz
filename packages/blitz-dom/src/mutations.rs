@@ -58,7 +58,10 @@ impl BaseDocument {
 
     /// Records since the last call, oldest first.
     pub fn take_mutation_records(&mut self) -> Vec<MutationRecord> {
-        self.take_logged_mutations().into_iter().map(|m| m.record).collect()
+        self.take_logged_mutations()
+            .into_iter()
+            .map(|m| m.record)
+            .collect()
     }
 
     /// Records since the last call with their targets' ancestors, oldest
@@ -86,7 +89,10 @@ impl BaseDocument {
     }
 
     /// (parent, previous sibling, next sibling) of `node`, if it has a parent.
-    pub(crate) fn position_in_parent(&self, node: NodeId) -> Option<(NodeId, Option<NodeId>, Option<NodeId>)> {
+    pub(crate) fn position_in_parent(
+        &self,
+        node: NodeId,
+    ) -> Option<(NodeId, Option<NodeId>, Option<NodeId>)> {
         let parent = self.nodes[node].parent?;
         let siblings = &self.nodes[parent].children;
         let i = siblings.iter().position(|&c| c == node)?;

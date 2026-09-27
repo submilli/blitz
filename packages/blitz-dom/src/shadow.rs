@@ -34,7 +34,11 @@ pub struct ShadowStyles {
 
 impl Default for ShadowStyles {
     fn default() -> Self {
-        Self { sheets: Default::default(), author_styles: style::author_styles::AuthorStyles::new(), dirty: false }
+        Self {
+            sheets: Default::default(),
+            author_styles: style::author_styles::AuthorStyles::new(),
+            dirty: false,
+        }
     }
 }
 
@@ -59,17 +63,40 @@ pub enum AttachShadowError {
 
 /// Elements that may host a shadow root, besides autonomous custom elements.
 const VALID_HOSTS: &[&str] = &[
-    "article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "main",
-    "nav", "p", "section", "span",
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "div",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "main",
+    "nav",
+    "p",
+    "section",
+    "span",
 ];
 
 impl DocumentMutator<'_> {
     /// `Element.attachShadow(init)`.
-    pub fn attach_shadow(&mut self, host: NodeId, init: ShadowRootInit) -> Result<NodeId, AttachShadowError> {
-        let element = self.doc.nodes[host].element_data().ok_or(AttachShadowError::NotSupported)?;
+    pub fn attach_shadow(
+        &mut self,
+        host: NodeId,
+        init: ShadowRootInit,
+    ) -> Result<NodeId, AttachShadowError> {
+        let element = self.doc.nodes[host]
+            .element_data()
+            .ok_or(AttachShadowError::NotSupported)?;
         let local = &*element.name.local;
         let valid = element.name.ns == markup5ever::ns!(html)
-            && (VALID_HOSTS.contains(&local) || crate::custom_elements::is_valid_custom_element_name(local));
+            && (VALID_HOSTS.contains(&local)
+                || crate::custom_elements::is_valid_custom_element_name(local));
         if !valid {
             return Err(AttachShadowError::NotSupported);
         }
@@ -85,7 +112,10 @@ impl DocumentMutator<'_> {
             clonable: init.clonable,
             serializable: init.serializable,
         }));
-        self.doc.nodes[host].element_data_mut().expect("checked").shadow_root = Some(root);
+        self.doc.nodes[host]
+            .element_data_mut()
+            .expect("checked")
+            .shadow_root = Some(root);
         self.doc.shadow_hosts.insert(host);
         // The host now renders its (empty) shadow tree instead of its
         // children.
@@ -107,7 +137,11 @@ impl BaseDocument {
 
     /// The host of the shadow root `root`.
     pub fn shadow_host_of(&self, root: NodeId) -> Option<NodeId> {
-        self.nodes.get(root)?.shadow_root_data.as_ref().map(|d| d.host)
+        self.nodes
+            .get(root)?
+            .shadow_root_data
+            .as_ref()
+            .map(|d| d.host)
     }
 
     /// The root of `node`'s tree, if it is a shadow root.
@@ -120,7 +154,9 @@ impl BaseDocument {
     /// attribute, or "" (the default slot) for text and unnamed elements.
     fn slot_name(&self, node: NodeId) -> String {
         match &self.nodes[node].data {
-            NodeData::Element(element) => element.attr(local_name!("slot")).unwrap_or("").to_string(),
+            NodeData::Element(element) => {
+                element.attr(local_name!("slot")).unwrap_or("").to_string()
+            }
             _ => String::new(),
         }
     }
@@ -132,7 +168,10 @@ impl BaseDocument {
         let mut stack: Vec<NodeId> = self.nodes[root].children.iter().rev().copied().collect();
         while let Some(id) = stack.pop() {
             let node = &self.nodes[id];
-            if node.element_data().is_some_and(|e| e.name.local == local_name!("slot")) {
+            if node
+                .element_data()
+                .is_some_and(|e| e.name.local == local_name!("slot"))
+            {
                 slots.push(id);
             }
             stack.extend(node.children.iter().rev().copied());
@@ -142,9 +181,11 @@ impl BaseDocument {
 
     /// Host children that take part in slotting: elements and text.
     fn slottables(&self, host: NodeId) -> impl Iterator<Item = NodeId> + '_ {
-        self.nodes[host].children.iter().copied().filter(|&c| {
-            matches!(self.nodes[c].data, NodeData::Element(_) | NodeData::Text(_))
-        })
+        self.nodes[host]
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| matches!(self.nodes[c].data, NodeData::Element(_) | NodeData::Text(_)))
     }
 
     /// `assignedSlot`: the slot `node` (a host's child) is assigned to.
@@ -152,23 +193,38 @@ impl BaseDocument {
         let host = self.nodes.get(node)?.parent?;
         let root = self.shadow_root_of(host)?;
         let name = self.slot_name(node);
-        self.slots_in(root).into_iter().find(|&slot| self.slot_own_name(slot) == name)
+        self.slots_in(root)
+            .into_iter()
+            .find(|&slot| self.slot_own_name(slot) == name)
     }
 
     fn slot_own_name(&self, slot: NodeId) -> String {
-        self.nodes[slot].element_data().and_then(|e| e.attr(local_name!("name"))).unwrap_or("").to_string()
+        self.nodes[slot]
+            .element_data()
+            .and_then(|e| e.attr(local_name!("name")))
+            .unwrap_or("")
+            .to_string()
     }
 
     /// `slot.assignedNodes()`: the host children assigned to `slot`.
     pub fn assigned_nodes(&self, slot: NodeId) -> Vec<NodeId> {
-        let Some(root) = self.containing_shadow_root(slot) else { return Vec::new() };
+        let Some(root) = self.containing_shadow_root(slot) else {
+            return Vec::new();
+        };
         let host = self.shadow_host_of(root).expect("shadow root");
         let name = self.slot_own_name(slot);
         // Only the first slot of a name receives nodes.
-        if self.slots_in(root).into_iter().find(|&s| self.slot_own_name(s) == name) != Some(slot) {
+        if self
+            .slots_in(root)
+            .into_iter()
+            .find(|&s| self.slot_own_name(s) == name)
+            != Some(slot)
+        {
             return Vec::new();
         }
-        self.slottables(host).filter(|&c| self.slot_name(c) == name).collect()
+        self.slottables(host)
+            .filter(|&c| self.slot_name(c) == name)
+            .collect()
     }
 
     /// Record the flat tree for every shadow host (see the module docs),
@@ -185,10 +241,13 @@ impl BaseDocument {
                 self.set_flat_parent(child, FlatParent::Node(host));
             }
             let slots = self.slots_in(root);
-            let mut assigned: Vec<(NodeId, Vec<NodeId>)> = slots.iter().map(|&s| (s, Vec::new())).collect();
+            let mut assigned: Vec<(NodeId, Vec<NodeId>)> =
+                slots.iter().map(|&s| (s, Vec::new())).collect();
             for child in self.slottables(host).collect::<Vec<_>>() {
                 let name = self.slot_name(child);
-                let slot = assigned.iter_mut().find(|(s, _)| self.slot_own_name(*s) == name);
+                let slot = assigned
+                    .iter_mut()
+                    .find(|(s, _)| self.slot_own_name(*s) == name);
                 match slot {
                     Some((slot, nodes)) => {
                         nodes.push(child);
@@ -200,7 +259,10 @@ impl BaseDocument {
             }
             // Comments and the like under a host are never rendered.
             for child in self.nodes[host].children.to_vec() {
-                if !matches!(self.nodes[child].data, NodeData::Element(_) | NodeData::Text(_)) {
+                if !matches!(
+                    self.nodes[child].data,
+                    NodeData::Element(_) | NodeData::Text(_)
+                ) {
                     self.set_flat_parent(child, FlatParent::None);
                 }
             }
@@ -219,14 +281,20 @@ impl BaseDocument {
         node: NodeId,
         sheet: style::stylesheets::DocumentStyleSheet,
     ) {
-        let styles = self.nodes[root].shadow_styles.get_or_insert_with(Default::default);
+        let styles = self.nodes[root]
+            .shadow_styles
+            .get_or_insert_with(Default::default);
         styles.sheets.insert(node, sheet);
         styles.dirty = true;
     }
 
     /// Forget `node`'s stylesheet in whichever shadow tree held it.
     pub(crate) fn remove_shadow_stylesheet(&mut self, node: NodeId) {
-        let roots: Vec<NodeId> = self.shadow_hosts.iter().filter_map(|&h| self.shadow_root_of(h)).collect();
+        let roots: Vec<NodeId> = self
+            .shadow_hosts
+            .iter()
+            .filter_map(|&h| self.shadow_root_of(h))
+            .collect();
         for root in roots {
             if let Some(styles) = self.nodes[root].shadow_styles.as_mut()
                 && styles.sheets.remove(&node).is_some()
@@ -241,15 +309,24 @@ impl BaseDocument {
     pub(crate) fn flush_shadow_styles(&mut self) {
         let hosts: Vec<NodeId> = self.shadow_hosts.iter().copied().collect();
         for host in hosts {
-            let Some(root) = self.shadow_root_of(host) else { continue };
-            let Some(mut styles) = self.nodes[root].shadow_styles.take() else { continue };
+            let Some(root) = self.shadow_root_of(host) else {
+                continue;
+            };
+            let Some(mut styles) = self.nodes[root].shadow_styles.take() else {
+                continue;
+            };
             if styles.dirty {
                 let guard = self.guard.clone();
                 let guard = guard.read();
                 let mut author_styles = style::author_styles::AuthorStyles::new();
                 let custom_media = style::stylesheets::CustomMediaMap::default();
                 for sheet in styles.sheets.values() {
-                    author_styles.stylesheets.append_stylesheet(None, &custom_media, sheet.clone(), &guard);
+                    author_styles.stylesheets.append_stylesheet(
+                        None,
+                        &custom_media,
+                        sheet.clone(),
+                        &guard,
+                    );
                 }
                 author_styles.flush(&mut self.stylist, &guard);
                 styles.author_styles = author_styles;

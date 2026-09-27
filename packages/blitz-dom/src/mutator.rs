@@ -3,16 +3,14 @@ use std::collections::HashSet;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 
-use crate::layout::damage::ALL_DAMAGE;
-use crate::net::{ImageHandler, ResourceHandler, StylesheetHandler};
 use crate::custom_elements::{CustomElementReaction, CustomElementState};
+use crate::layout::damage::ALL_DAMAGE;
 use crate::mutations::MutationRecord;
+use crate::net::{ImageHandler, ResourceHandler, StylesheetHandler};
 use crate::node::{CanvasData, NodeFlags, SpecialElementData};
 use crate::stylo_device::DeviceChanges;
 use crate::util::ImageType;
-use crate::{
-    Attribute, BaseDocument, Document, ElementData, Node, NodeData, QualName, local_name,
-};
+use crate::{Attribute, BaseDocument, Document, ElementData, Node, NodeData, QualName, local_name};
 // Only the file-input widget and the tests construct names this way.
 #[cfg(any(feature = "file-input", test))]
 use crate::qual_name;
@@ -235,7 +233,10 @@ impl DocumentMutator<'_> {
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if let NodeData::Text(text) = &self.doc.nodes[node_id].data {
             let old_value = text.content.clone();
-            self.doc.record_mutation(MutationRecord::CharacterData { target: node_id, old_value });
+            self.doc.record_mutation(MutationRecord::CharacterData {
+                target: node_id,
+                old_value,
+            });
         }
         let node = &mut self.doc.nodes[node_id];
 
@@ -275,7 +276,10 @@ impl DocumentMutator<'_> {
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if let Some(data) = self.doc.nodes[node_id].text_data() {
             let old_value = data.content.clone();
-            self.doc.record_mutation(MutationRecord::CharacterData { target: node_id, old_value });
+            self.doc.record_mutation(MutationRecord::CharacterData {
+                target: node_id,
+                old_value,
+            });
         }
         let node = &mut self.doc.nodes[node_id];
         node.insert_damage(ALL_DAMAGE);
@@ -317,21 +321,28 @@ impl DocumentMutator<'_> {
         if self.doc.custom_element_state(node_id) == CustomElementState::Custom
             && self.doc.is_recording_custom_element_reactions()
         {
-            let old_value = self.doc.nodes[node_id]
-                .element_data()
-                .and_then(|el| el.attrs().iter().find(|a| a.name == name).map(|a| a.value.to_string()));
-            self.doc.record_custom_element_reaction(CustomElementReaction::AttributeChanged {
-                element: node_id,
-                name: name.local.to_string(),
-                namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
-                old_value,
-                new_value: Some(value.to_string()),
+            let old_value = self.doc.nodes[node_id].element_data().and_then(|el| {
+                el.attrs()
+                    .iter()
+                    .find(|a| a.name == name)
+                    .map(|a| a.value.to_string())
             });
+            self.doc
+                .record_custom_element_reaction(CustomElementReaction::AttributeChanged {
+                    element: node_id,
+                    name: name.local.to_string(),
+                    namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
+                    old_value,
+                    new_value: Some(value.to_string()),
+                });
         }
         if self.doc.is_recording_mutations() {
-            let old_value = self.doc.nodes[node_id]
-                .element_data()
-                .and_then(|el| el.attrs().iter().find(|a| a.name == name).map(|a| a.value.to_string()));
+            let old_value = self.doc.nodes[node_id].element_data().and_then(|el| {
+                el.attrs()
+                    .iter()
+                    .find(|a| a.name == name)
+                    .map(|a| a.value.to_string())
+            });
             self.doc.record_mutation(MutationRecord::Attributes {
                 target: node_id,
                 name: name.local.to_string(),
@@ -515,13 +526,14 @@ impl DocumentMutator<'_> {
             old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
         });
         if self.doc.custom_element_state(node_id) == CustomElementState::Custom {
-            self.doc.record_custom_element_reaction(CustomElementReaction::AttributeChanged {
-                element: node_id,
-                name: name.local.to_string(),
-                namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
-                old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
-                new_value: None,
-            });
+            self.doc
+                .record_custom_element_reaction(CustomElementReaction::AttributeChanged {
+                    element: node_id,
+                    name: name.local.to_string(),
+                    namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
+                    old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
+                    new_value: None,
+                });
         }
         let node = &mut self.doc.nodes[node_id];
         let Some(element) = node.element_data_mut() else {
@@ -635,7 +647,9 @@ impl DocumentMutator<'_> {
     /// Remove the node from it's parent but don't drop it
     pub fn remove_node(&mut self, node_id: NodeId) {
         if self.doc.is_recording_mutations() {
-            if let Some((parent, previous_sibling, next_sibling)) = self.doc.position_in_parent(node_id) {
+            if let Some((parent, previous_sibling, next_sibling)) =
+                self.doc.position_in_parent(node_id)
+            {
                 self.doc.record_mutation(MutationRecord::ChildList {
                     target: parent,
                     added: Vec::new(),
@@ -856,9 +870,15 @@ impl DocumentMutator<'_> {
             } else if child_was_in_doc {
                 self.rescope_stylesheets(child_id);
             }
-            if new_parent_is_in_document && child_was_in_doc && self.doc.is_recording_custom_element_reactions() {
+            if new_parent_is_in_document
+                && child_was_in_doc
+                && self.doc.is_recording_custom_element_reactions()
+            {
                 // A move within the document disconnects and reconnects.
-                for reaction in [CustomElementReaction::Disconnected, CustomElementReaction::Connected] {
+                for reaction in [
+                    CustomElementReaction::Disconnected,
+                    CustomElementReaction::Connected,
+                ] {
                     self.doc.iter_subtree_mut(child_id, |id, doc| {
                         if doc.custom_element_state(id) != CustomElementState::Uncustomized {
                             doc.record_custom_element_reaction(reaction(id));
@@ -1088,142 +1108,149 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     fn process_added_subtree(&mut self, node_id: NodeId) {
-        self.doc.iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
-            if doc.is_recording_custom_element_reactions()
-                && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
-            {
-                doc.record_custom_element_reaction(CustomElementReaction::Connected(node_id));
-            }
-            let node = &mut doc.nodes[node_id];
-            node.flags.set(NodeFlags::IS_IN_DOCUMENT, true);
-            node.insert_damage(ALL_DAMAGE);
-
-            // If the node has an "id" attribute, store it in the ID map
-            // (the document's: ids in shadow trees are scoped to them).
-            let in_shadow_tree = doc.containing_shadow_root(node_id).is_some();
-            if let Some(id_attr) = doc.nodes[node_id].attr(local_name!("id")).map(ToString::to_string)
-                && !in_shadow_tree
-            {
-                doc.add_to_id_map(&id_attr, node_id);
-            }
-
-            let node = &mut doc.nodes[node_id];
-            let NodeData::Element(ref mut element) = node.data else {
-                return;
-            };
-
-            // Custom post-processing by element tag name
-            let tag = element.name.local.as_ref();
-            match tag {
-                "title" => self.title_node = Some(node_id),
-                "link" => self.eager_op_queue.push(SpecialOp::LoadStylesheet(node_id)),
-                "img" => self.eager_op_queue.push(SpecialOp::LoadImage(node_id)),
-                "iframe" => self.eager_op_queue.push(SpecialOp::LoadIframe(node_id)),
-                "canvas" => self
-                    .eager_op_queue
-                    .push(SpecialOp::LoadCustomPaintSource(node_id)),
-                "style" => {
-                    self.style_nodes.insert(node_id);
-                }
-                "script"
-                    if element.name.ns == markup5ever::ns!(html)
-                        && !element.script_state.already_started
-                        && !element.script_state.parser_inserted =>
+        self.doc
+            .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
+                if doc.is_recording_custom_element_reactions()
+                    && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
                 {
-                    doc.connected_scripts.push(node_id);
+                    doc.record_custom_element_reaction(CustomElementReaction::Connected(node_id));
                 }
-                "button" | "fieldset" | "input" | "select" | "textarea" | "object" | "output" => {
-                    self.eager_op_queue
-                        .push(SpecialOp::ProcessButtonInput(node_id));
-                    self.form_nodes.insert(node_id);
-                }
-                _ => {}
-            }
+                let node = &mut doc.nodes[node_id];
+                node.flags.set(NodeFlags::IS_IN_DOCUMENT, true);
+                node.insert_damage(ALL_DAMAGE);
 
-            #[cfg(feature = "autofocus")]
-            if node.is_focussable() {
-                if let NodeData::Element(ref element) = node.data {
-                    if let Some(value) = element.attr(local_name!("autofocus")) {
-                        if value == "true" {
-                            self.node_to_autofocus = Some(node_id);
+                // If the node has an "id" attribute, store it in the ID map
+                // (the document's: ids in shadow trees are scoped to them).
+                let in_shadow_tree = doc.containing_shadow_root(node_id).is_some();
+                if let Some(id_attr) = doc.nodes[node_id]
+                    .attr(local_name!("id"))
+                    .map(ToString::to_string)
+                    && !in_shadow_tree
+                {
+                    doc.add_to_id_map(&id_attr, node_id);
+                }
+
+                let node = &mut doc.nodes[node_id];
+                let NodeData::Element(ref mut element) = node.data else {
+                    return;
+                };
+
+                // Custom post-processing by element tag name
+                let tag = element.name.local.as_ref();
+                match tag {
+                    "title" => self.title_node = Some(node_id),
+                    "link" => self.eager_op_queue.push(SpecialOp::LoadStylesheet(node_id)),
+                    "img" => self.eager_op_queue.push(SpecialOp::LoadImage(node_id)),
+                    "iframe" => self.eager_op_queue.push(SpecialOp::LoadIframe(node_id)),
+                    "canvas" => self
+                        .eager_op_queue
+                        .push(SpecialOp::LoadCustomPaintSource(node_id)),
+                    "style" => {
+                        self.style_nodes.insert(node_id);
+                    }
+                    "script"
+                        if element.name.ns == markup5ever::ns!(html)
+                            && !element.script_state.already_started
+                            && !element.script_state.parser_inserted =>
+                    {
+                        doc.connected_scripts.push(node_id);
+                    }
+                    "button" | "fieldset" | "input" | "select" | "textarea" | "object"
+                    | "output" => {
+                        self.eager_op_queue
+                            .push(SpecialOp::ProcessButtonInput(node_id));
+                        self.form_nodes.insert(node_id);
+                    }
+                    _ => {}
+                }
+
+                #[cfg(feature = "autofocus")]
+                if node.is_focussable() {
+                    if let NodeData::Element(ref element) = node.data {
+                        if let Some(value) = element.attr(local_name!("autofocus")) {
+                            if value == "true" {
+                                self.node_to_autofocus = Some(node_id);
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
 
         self.flush_eager_ops();
     }
 
     fn process_removed_subtree(&mut self, node_id: NodeId) {
-        self.doc.iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
-            if doc.is_recording_custom_element_reactions()
-                && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
-            {
-                doc.record_custom_element_reaction(CustomElementReaction::Disconnected(node_id));
-            }
-            doc.nodes[node_id]
-                .flags
-                .set(NodeFlags::IS_IN_DOCUMENT, false);
-
-            // Clear any interaction state that references this node, running
-            // the usual teardown steps (unhover/unactive the surviving
-            // ancestor chain, IME disable on blur of a focused input).
-            doc.clear_interaction_state_for_removed_node(node_id);
-
-            let node = &mut doc.nodes[node_id];
-
-            // Clear the text selection if one of its endpoints references this node.
-            // This prevents stale selection endpoint references.
-            if doc.text_selection.anchor.node_or_parent == Some(node_id)
-                || doc.text_selection.focus.node_or_parent == Some(node_id)
-            {
-                doc.text_selection.clear();
-            }
-
-            // Remove any snapshot for this node to prevent stale snapshot references
-            // during style invalidation.
-            if node.has_snapshot() {
-                let opaque_id = style::dom::TNode::opaque(&&*node);
-                doc.snapshots.remove(&opaque_id);
-                node.set_has_snapshot(false);
-            }
-
-            // If the node has an "id" attribute remove it from the ID map.
-            if let Some(id_attr) = node.attr(local_name!("id")).map(ToString::to_string) {
-                doc.remove_from_id_map(&id_attr, node_id);
-            }
-
-            let node = &mut doc.nodes[node_id];
-            let NodeData::Element(ref mut element) = node.data else {
-                return;
-            };
-
-            match &element.special_data {
-                SpecialElementData::SubDocument(_) => {
-                    self.eager_op_queue
-                        .push(SpecialOp::UnloadSubDocument(node_id));
+        self.doc
+            .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
+                if doc.is_recording_custom_element_reactions()
+                    && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
+                {
+                    doc.record_custom_element_reaction(CustomElementReaction::Disconnected(
+                        node_id,
+                    ));
                 }
-                #[cfg(feature = "custom-widget")]
-                SpecialElementData::CustomWidget(_) => {
-                    self.eager_op_queue
-                        .push(SpecialOp::UnloadCustomWidget(node_id));
+                doc.nodes[node_id]
+                    .flags
+                    .set(NodeFlags::IS_IN_DOCUMENT, false);
+
+                // Clear any interaction state that references this node, running
+                // the usual teardown steps (unhover/unactive the surviving
+                // ancestor chain, IME disable on blur of a focused input).
+                doc.clear_interaction_state_for_removed_node(node_id);
+
+                let node = &mut doc.nodes[node_id];
+
+                // Clear the text selection if one of its endpoints references this node.
+                // This prevents stale selection endpoint references.
+                if doc.text_selection.anchor.node_or_parent == Some(node_id)
+                    || doc.text_selection.focus.node_or_parent == Some(node_id)
+                {
+                    doc.text_selection.clear();
                 }
-                SpecialElementData::Stylesheet(_) => self
-                    .eager_op_queue
-                    .push(SpecialOp::UnloadStylesheet(node_id)),
-                SpecialElementData::Image(_) => {}
-                SpecialElementData::Canvas(_) => {
-                    self.recompute_is_animating = true;
+
+                // Remove any snapshot for this node to prevent stale snapshot references
+                // during style invalidation.
+                if node.has_snapshot() {
+                    let opaque_id = style::dom::TNode::opaque(&&*node);
+                    doc.snapshots.remove(&opaque_id);
+                    node.set_has_snapshot(false);
                 }
-                SpecialElementData::TableRoot(_) => {}
-                SpecialElementData::TextInput(_) => {}
-                SpecialElementData::CheckboxInput(_) => {}
-                #[cfg(feature = "file-input")]
-                SpecialElementData::FileInput(_) => {}
-                SpecialElementData::None => {}
-            }
-        });
+
+                // If the node has an "id" attribute remove it from the ID map.
+                if let Some(id_attr) = node.attr(local_name!("id")).map(ToString::to_string) {
+                    doc.remove_from_id_map(&id_attr, node_id);
+                }
+
+                let node = &mut doc.nodes[node_id];
+                let NodeData::Element(ref mut element) = node.data else {
+                    return;
+                };
+
+                match &element.special_data {
+                    SpecialElementData::SubDocument(_) => {
+                        self.eager_op_queue
+                            .push(SpecialOp::UnloadSubDocument(node_id));
+                    }
+                    #[cfg(feature = "custom-widget")]
+                    SpecialElementData::CustomWidget(_) => {
+                        self.eager_op_queue
+                            .push(SpecialOp::UnloadCustomWidget(node_id));
+                    }
+                    SpecialElementData::Stylesheet(_) => self
+                        .eager_op_queue
+                        .push(SpecialOp::UnloadStylesheet(node_id)),
+                    SpecialElementData::Image(_) => {}
+                    SpecialElementData::Canvas(_) => {
+                        self.recompute_is_animating = true;
+                    }
+                    SpecialElementData::TableRoot(_) => {}
+                    SpecialElementData::TextInput(_) => {}
+                    SpecialElementData::CheckboxInput(_) => {}
+                    #[cfg(feature = "file-input")]
+                    SpecialElementData::FileInput(_) => {}
+                    SpecialElementData::None => {}
+                }
+            });
 
         self.flush_eager_ops();
     }
@@ -1307,13 +1334,14 @@ impl<'doc> DocumentMutator<'doc> {
     /// (the document's or a shadow root's).
     fn rescope_stylesheets(&mut self, node_id: NodeId) {
         let mut sheets = Vec::new();
-        self.doc.iter_shadow_including_subtree_mut(node_id, |id, doc| {
-            if let Some(element) = doc.nodes[id].element_data()
-                && let SpecialElementData::Stylesheet(sheet) = &element.special_data
-            {
-                sheets.push((id, sheet.clone()));
-            }
-        });
+        self.doc
+            .iter_shadow_including_subtree_mut(node_id, |id, doc| {
+                if let Some(element) = doc.nodes[id].element_data()
+                    && let SpecialElementData::Stylesheet(sheet) = &element.special_data
+                {
+                    sheets.push((id, sheet.clone()));
+                }
+            });
         for (id, sheet) in sheets {
             self.doc.add_stylesheet_for_node(sheet, id);
         }

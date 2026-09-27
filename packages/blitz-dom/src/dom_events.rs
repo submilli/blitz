@@ -64,10 +64,9 @@ impl EventListeners {
         options: ListenerOptions,
     ) -> bool {
         let list = self.map.entry(target).or_default();
-        if list
-            .iter()
-            .any(|l| l.event_type == event_type && l.callback == callback && l.capture == options.capture)
-        {
+        if list.iter().any(|l| {
+            l.event_type == event_type && l.callback == callback && l.capture == options.capture
+        }) {
             return false;
         }
         list.push(Rc::new(Listener {
@@ -90,9 +89,9 @@ impl EventListeners {
         capture: bool,
     ) -> Option<u64> {
         let list = self.map.get_mut(&target)?;
-        let pos = list
-            .iter()
-            .position(|l| l.event_type == event_type && l.callback == callback && l.capture == capture)?;
+        let pos = list.iter().position(|l| {
+            l.event_type == event_type && l.callback == callback && l.capture == capture
+        })?;
         let listener = list.remove(pos);
         listener.removed.set(true);
         Some(listener.callback)
@@ -109,7 +108,12 @@ impl EventListeners {
     pub fn listeners(&self, target: EventTargetId, event_type: &str) -> Vec<Rc<Listener>> {
         self.map
             .get(&target)
-            .map(|list| list.iter().filter(|l| l.event_type == event_type).cloned().collect())
+            .map(|list| {
+                list.iter()
+                    .filter(|l| l.event_type == event_type)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -204,10 +208,14 @@ impl BaseDocument {
     /// target is in a shadow tree that does not contain `current`, the target
     /// becomes that tree's host. Listeners outside a component see its host.
     pub fn retarget(&self, target: EventTargetId, current: EventTargetId) -> EventTargetId {
-        let EventTargetId::Node(mut node) = target else { return target };
+        let EventTargetId::Node(mut node) = target else {
+            return target;
+        };
         loop {
             let root = self.tree_root(node);
-            let Some(host) = self.shadow_host_of(root) else { return EventTargetId::Node(node) };
+            let Some(host) = self.shadow_host_of(root) else {
+                return EventTargetId::Node(node);
+            };
             if let EventTargetId::Node(current) = current
                 && self.is_shadow_including_inclusive_ancestor(root, current)
             {
@@ -225,7 +233,9 @@ impl BaseDocument {
             if id == ancestor {
                 return true;
             }
-            let Some(n) = self.get_node(id) else { return false };
+            let Some(n) = self.get_node(id) else {
+                return false;
+            };
             current = n.shadow_root_data.as_ref().map(|d| d.host).or(n.parent);
         }
         false
@@ -241,7 +251,9 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     // Each listener sees the target retargeted to its own tree.
     let targets: Vec<EventTargetId> = {
         let doc = host.document();
-        path.iter().map(|&current| doc.retarget(target, current)).collect()
+        path.iter()
+            .map(|&current| doc.retarget(target, current))
+            .collect()
     };
 
     // Capturing phase: root to target (excluding the target).
@@ -278,7 +290,14 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
             continue;
         }
         host.set_target(Some(targets[i]));
-        host.set_phase(if at_host { EventPhase::AtTarget } else { EventPhase::Bubbling }, Some(current));
+        host.set_phase(
+            if at_host {
+                EventPhase::AtTarget
+            } else {
+                EventPhase::Bubbling
+            },
+            Some(current),
+        );
         invoke_listeners(host, current, Some(false));
     }
 
@@ -294,7 +313,10 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
 /// given capture flag), in order, against a snapshot of the list.
 fn invoke_listeners(host: &mut dyn DispatchHost, target: EventTargetId, capture: Option<bool>) {
     let event_type = host.event_type();
-    let listeners = host.document().event_listeners.listeners(target, &event_type);
+    let listeners = host
+        .document()
+        .event_listeners
+        .listeners(target, &event_type);
     for listener in listeners {
         if listener.removed.get() {
             continue;
@@ -303,7 +325,9 @@ fn invoke_listeners(host: &mut dyn DispatchHost, target: EventTargetId, capture:
             continue;
         }
         if listener.once {
-            host.document_mut().event_listeners.remove_entry(target, &listener);
+            host.document_mut()
+                .event_listeners
+                .remove_entry(target, &listener);
         }
         host.set_in_passive_listener(listener.passive);
         host.invoke(&listener);

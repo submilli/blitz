@@ -647,7 +647,9 @@ pub(crate) fn handle_click(
                     let value = is_checked.to_string();
                     dispatch_event(DomEvent::new(
                         node_id,
-                        DomEventData::Input(BlitzInputEvent { value: value.clone() }),
+                        DomEventData::Input(BlitzInputEvent {
+                            value: value.clone(),
+                        }),
                     ));
                     // Checkable inputs fire `change` after `input`.
                     dispatch_event(DomEvent::new(
@@ -680,7 +682,9 @@ pub(crate) fn handle_click(
                     let value = String::from("true");
                     dispatch_event(DomEvent::new(
                         node_id,
-                        DomEventData::Input(BlitzInputEvent { value: value.clone() }),
+                        DomEventData::Input(BlitzInputEvent {
+                            value: value.clone(),
+                        }),
                     ));
                     // Checkable inputs fire `change` after `input`.
                     dispatch_event(DomEvent::new(

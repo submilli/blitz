@@ -7,7 +7,9 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use blitz_dom::BaseDocument;
-use blitz_dom::dom_events::{DispatchHost, EventPhase, EventTargetId, Listener, ListenerOptions, dispatch};
+use blitz_dom::dom_events::{
+    DispatchHost, EventPhase, EventTargetId, Listener, ListenerOptions, dispatch,
+};
 use common::{parse, q};
 
 /// Listener behaviour, by callback handle.
@@ -90,7 +92,8 @@ impl DispatchHost for Host {
         self.stop_immediate = false;
     }
     fn invoke(&mut self, listener: &Listener) {
-        self.log.push(format!("{}@{:?}", listener.callback, self.phase));
+        self.log
+            .push(format!("{}@{:?}", listener.callback, self.phase));
         let behaviour = self
             .behaviours
             .iter()
@@ -111,7 +114,10 @@ impl DispatchHost for Host {
             }
             Behaviour::RemoveOther => {
                 let target = self.current.unwrap();
-                self.doc.borrow_mut().event_listeners.remove(target, &self.event_type, 99, false);
+                self.doc
+                    .borrow_mut()
+                    .event_listeners
+                    .remove(target, &self.event_type, 99, false);
             }
         }
     }
@@ -121,12 +127,27 @@ fn node(doc: &Rc<RefCell<BaseDocument>>, selector: &str) -> EventTargetId {
     EventTargetId::Node(q(&doc.borrow(), selector))
 }
 
-fn add(doc: &Rc<RefCell<BaseDocument>>, target: EventTargetId, handle: u64, options: ListenerOptions) {
-    doc.borrow_mut().event_listeners.add(target, "x", handle, options);
+fn add(
+    doc: &Rc<RefCell<BaseDocument>>,
+    target: EventTargetId,
+    handle: u64,
+    options: ListenerOptions,
+) {
+    doc.borrow_mut()
+        .event_listeners
+        .add(target, "x", handle, options);
 }
 
-const CAPTURE: ListenerOptions = ListenerOptions { capture: true, passive: false, once: false };
-const BUBBLE: ListenerOptions = ListenerOptions { capture: false, passive: false, once: false };
+const CAPTURE: ListenerOptions = ListenerOptions {
+    capture: true,
+    passive: false,
+    once: false,
+};
+const BUBBLE: ListenerOptions = ListenerOptions {
+    capture: false,
+    passive: false,
+    once: false,
+};
 
 fn doc() -> Rc<RefCell<BaseDocument>> {
     Rc::new(RefCell::new(parse("<div id=outer><p id=inner></p></div>")))
@@ -146,7 +167,14 @@ fn capture_then_target_then_bubble_up_to_the_window() {
     assert!(dispatch(&mut host, inner));
     assert_eq!(
         host.log,
-        ["1@Capturing", "2@Capturing", "4@AtTarget", "3@AtTarget", "5@Bubbling", "6@Bubbling"]
+        [
+            "1@Capturing",
+            "2@Capturing",
+            "4@AtTarget",
+            "3@AtTarget",
+            "5@Bubbling",
+            "6@Bubbling"
+        ]
     );
     assert_eq!(host.phase, EventPhase::None);
 }
@@ -173,7 +201,11 @@ fn stop_propagation_and_stop_immediate_propagation() {
     let mut host = Host::new(doc.clone(), "x", true);
     host.behaviours = vec![(1, Behaviour::StopPropagation)];
     dispatch(&mut host, inner);
-    assert_eq!(host.log, ["1@AtTarget", "2@AtTarget"], "the target's other listeners still run");
+    assert_eq!(
+        host.log,
+        ["1@AtTarget", "2@AtTarget"],
+        "the target's other listeners still run"
+    );
 
     let mut host = Host::new(doc.clone(), "x", true);
     host.behaviours = vec![(1, Behaviour::StopImmediate)];
@@ -192,18 +224,45 @@ fn prevent_default_cancels_unless_passive() {
 
     let doc = self::doc();
     let inner = node(&doc, "#inner");
-    add(&doc, inner, 1, ListenerOptions { passive: true, ..BUBBLE });
+    add(
+        &doc,
+        inner,
+        1,
+        ListenerOptions {
+            passive: true,
+            ..BUBBLE
+        },
+    );
     let mut host = Host::new(doc.clone(), "x", true);
     host.behaviours = vec![(1, Behaviour::PreventDefault)];
-    assert!(dispatch(&mut host, inner), "passive listeners cannot cancel");
+    assert!(
+        dispatch(&mut host, inner),
+        "passive listeners cannot cancel"
+    );
 }
 
 #[test]
 fn once_listeners_run_once_and_duplicates_are_ignored() {
     let doc = doc();
     let inner = node(&doc, "#inner");
-    add(&doc, inner, 1, ListenerOptions { once: true, ..BUBBLE });
-    assert!(!doc.borrow_mut().event_listeners.add(inner, "x", 1, ListenerOptions { once: true, ..BUBBLE }));
+    add(
+        &doc,
+        inner,
+        1,
+        ListenerOptions {
+            once: true,
+            ..BUBBLE
+        },
+    );
+    assert!(!doc.borrow_mut().event_listeners.add(
+        inner,
+        "x",
+        1,
+        ListenerOptions {
+            once: true,
+            ..BUBBLE
+        }
+    ));
     let mut host = Host::new(doc.clone(), "x", true);
     dispatch(&mut host, inner);
     dispatch(&mut host, inner);
