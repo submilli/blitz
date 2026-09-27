@@ -37,6 +37,15 @@ impl MutationRecord {
     }
 }
 
+/// A record with the target's inclusive ancestors when it was made, target
+/// first. Observers match on these: a node's position at the time of the
+/// mutation decides which observers see it, not where it is later.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoggedMutation {
+    pub record: MutationRecord,
+    pub ancestors: Vec<NodeId>,
+}
+
 impl BaseDocument {
     /// Start or stop recording mutations. Stopping discards pending records.
     pub fn set_mutation_recording(&mut self, on: bool) {
@@ -49,6 +58,12 @@ impl BaseDocument {
 
     /// Records since the last call, oldest first.
     pub fn take_mutation_records(&mut self) -> Vec<MutationRecord> {
+        self.take_logged_mutations().into_iter().map(|m| m.record).collect()
+    }
+
+    /// Records since the last call with their targets' ancestors, oldest
+    /// first.
+    pub fn take_logged_mutations(&mut self) -> Vec<LoggedMutation> {
         match &mut self.mutation_log {
             Some(log) => std::mem::take(log),
             None => Vec::new(),
@@ -56,8 +71,17 @@ impl BaseDocument {
     }
 
     pub(crate) fn record_mutation(&mut self, record: MutationRecord) {
+        if self.mutation_log.is_none() {
+            return;
+        }
+        let mut ancestors = Vec::new();
+        let mut current = Some(record.target());
+        while let Some(id) = current {
+            ancestors.push(id);
+            current = self.nodes.get(id).and_then(|n| n.parent);
+        }
         if let Some(log) = &mut self.mutation_log {
-            log.push(record);
+            log.push(LoggedMutation { record, ancestors });
         }
     }
 

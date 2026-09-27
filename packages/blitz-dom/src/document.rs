@@ -326,7 +326,7 @@ pub struct BaseDocument {
     /// not been prepared yet; the embedder drains and runs them.
     pub(crate) connected_scripts: Vec<NodeId>,
     /// Mutation records, while recording is on (see `mutations`).
-    pub(crate) mutation_log: Option<Vec<crate::mutations::MutationRecord>>,
+    pub(crate) mutation_log: Option<Vec<crate::mutations::LoggedMutation>>,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
     pub(crate) custom_element_reactions: Option<Vec<crate::custom_elements::CustomElementReaction>>,
     /// DOM event listeners, per target.

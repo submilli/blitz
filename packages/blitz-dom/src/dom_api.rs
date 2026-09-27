@@ -677,13 +677,38 @@ impl DocumentMutator<'_> {
     /// Replace all children of `parent` with `node` (or nothing), as used by
     /// the `textContent` and `innerHTML` setters.
     pub fn replace_all(&mut self, parent: NodeId, node: Option<NodeId>) {
-        // Copy the list: removing children mutates it.
-        let children: Vec<NodeId> = self.doc.nodes[parent].children.iter().copied().collect();
-        for child in children {
-            self.remove_node(child);
-        }
-        if let Some(node) = node {
-            self.insert(node, parent, None);
+        // One mutation record for the whole replacement, as the spec's
+        // "replace all" queues (its removals and insertion are silent).
+        self.with_one_child_list_record(parent, |m| {
+            // Copy the list: removing children mutates it.
+            let children: Vec<NodeId> = m.doc.nodes[parent].children.iter().copied().collect();
+            for child in children {
+                m.remove_node(child);
+            }
+            if let Some(node) = node {
+                m.insert(node, parent, None);
+            }
+        });
+    }
+
+    /// Run `f`, which replaces `parent`'s children, recording it as a single
+    /// childList record (removed: the old children, added: the new ones).
+    fn with_one_child_list_record(&mut self, parent: NodeId, f: impl FnOnce(&mut Self)) {
+        let Some(log) = self.doc.mutation_log.take() else {
+            return f(self);
+        };
+        let removed: Vec<NodeId> = self.doc.nodes[parent].children.to_vec();
+        f(self);
+        let added: Vec<NodeId> = self.doc.nodes[parent].children.to_vec();
+        self.doc.mutation_log = Some(log);
+        if !removed.is_empty() || !added.is_empty() {
+            self.doc.record_mutation(crate::mutations::MutationRecord::ChildList {
+                target: parent,
+                added,
+                removed,
+                previous_sibling: None,
+                next_sibling: None,
+            });
         }
     }
 
@@ -725,11 +750,13 @@ impl DocumentMutator<'_> {
     /// detached, not dropped. For `<template>`, replaces the template contents.
     pub fn set_inner_html_detaching(&mut self, id: NodeId, html: &str) {
         let target = self.try_template_contents(id).unwrap_or(id);
-        self.replace_all(target, None);
-        self.doc
-            .html_parser_provider
-            .clone()
-            .parse_inner_html(self, target, html);
+        self.with_one_child_list_record(target, |m| {
+            m.replace_all(target, None);
+            m.doc
+                .html_parser_provider
+                .clone()
+                .parse_inner_html(m, target, html);
+        });
     }
 
     /// `Element.insertAdjacentHTML(position, html)`: parse `html` as a

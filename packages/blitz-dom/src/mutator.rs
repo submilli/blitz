@@ -233,6 +233,10 @@ impl DocumentMutator<'_> {
 
     pub fn set_node_text(&mut self, node_id: NodeId, value: &str) {
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
+        if let NodeData::Text(text) = &self.doc.nodes[node_id].data {
+            let old_value = text.content.clone();
+            self.doc.record_mutation(MutationRecord::CharacterData { target: node_id, old_value });
+        }
         let node = &mut self.doc.nodes[node_id];
 
         let text = match node.data {
@@ -242,12 +246,6 @@ impl DocumentMutator<'_> {
         };
 
         let changed = text.content != value;
-        if let Some(log) = &mut self.doc.mutation_log {
-            log.push(MutationRecord::CharacterData {
-                target: node_id,
-                old_value: text.content.clone(),
-            });
-        }
         if changed {
             self.mutations_occurred |= node_is_in_document;
             text.content.clear();
@@ -275,17 +273,15 @@ impl DocumentMutator<'_> {
         text: &str,
     ) -> Result<(), AppendTextErr> {
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
+        if let Some(data) = self.doc.nodes[node_id].text_data() {
+            let old_value = data.content.clone();
+            self.doc.record_mutation(MutationRecord::CharacterData { target: node_id, old_value });
+        }
         let node = &mut self.doc.nodes[node_id];
         node.insert_damage(ALL_DAMAGE);
         node.mark_ancestors_dirty();
         match node.text_data_mut() {
             Some(data) => {
-                if let Some(log) = &mut self.doc.mutation_log {
-                    log.push(MutationRecord::CharacterData {
-                        target: node_id,
-                        old_value: data.content.clone(),
-                    });
-                }
                 data.content += text;
                 self.mutations_occurred |= node_is_in_document;
                 // A `<style>` (or `<title>`) whose text grew must be
@@ -512,14 +508,12 @@ impl DocumentMutator<'_> {
         if !had_attr {
             return;
         }
-        if let Some(log) = &mut self.doc.mutation_log {
-            log.push(MutationRecord::Attributes {
-                target: node_id,
-                name: name.local.to_string(),
-                namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
-                old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
-            });
-        }
+        self.doc.record_mutation(MutationRecord::Attributes {
+            target: node_id,
+            name: name.local.to_string(),
+            namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
+            old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
+        });
         if self.doc.custom_element_state(node_id) == CustomElementState::Custom {
             self.doc.record_custom_element_reaction(CustomElementReaction::AttributeChanged {
                 element: node_id,

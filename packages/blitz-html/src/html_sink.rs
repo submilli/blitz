@@ -246,8 +246,14 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         element_id: NodeId,
         html: &str,
     ) {
+        // Parse under a detached document: html5ever puts the fragment's root
+        // element under the document node, and under the real document the
+        // parsed nodes would briefly be connected (visible to mutation
+        // observers, which could then hold a node dropped below).
+        let scratch = mutr.create_document_node();
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.fragment = true;
+        sink.document_node = Some(scratch);
 
         let opts = ParseOpts {
             tokenizer: TokenizerOpts::default(),
@@ -264,13 +270,13 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
             .read_from(&mut html.as_bytes())
             .unwrap();
 
-        // html5ever creates a new fragment root node under the document node and parses the nodes into that fragment root.
-        // So here we move the children of the fragment root to element_id and then drop the fragment root.
-        let document_id = mutr.doc.root_node().id;
-        let fragment_root_id = mutr.last_child_id(document_id).unwrap();
+        // html5ever creates a fragment root under the (scratch) document node
+        // and parses into it. Move its children to element_id, then drop the
+        // scratch document and the root.
+        let fragment_root_id = mutr.last_child_id(scratch).unwrap();
         let child_ids = mutr.child_ids(fragment_root_id);
         mutr.append_children(element_id, &child_ids);
-        mutr.remove_and_drop_node(fragment_root_id);
+        mutr.remove_and_drop_node(scratch);
     }
 }
 
