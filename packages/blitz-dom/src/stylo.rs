@@ -313,12 +313,18 @@ impl<'a> TNode for BlitzNode<'a> {
     }
 
     fn owner_doc(&self) -> Self::ConcreteDocument {
-        // Walk up the (layout-)parent chain to the root Document node.
+        // Walk up the parent chain to the root Document node, crossing from
+        // a shadow root to its host.
         let mut node = *self;
-        while let Some(parent_id) = node.parent {
-            node = node.with(parent_id);
+        loop {
+            if let Some(parent_id) = node.parent {
+                node = node.with(parent_id);
+            } else if let Some(shadow) = &node.shadow_root_data {
+                node = node.with(shadow.host);
+            } else {
+                return node;
+            }
         }
-        node
     }
 
     fn is_in_document(&self) -> bool {

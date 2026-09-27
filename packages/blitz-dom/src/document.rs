@@ -327,6 +327,9 @@ pub struct BaseDocument {
     pub(crate) connected_scripts: Vec<NodeId>,
     /// Elements with a shadow root attached.
     pub(crate) shadow_hosts: HashSet<NodeId>,
+    /// The embedder loads `<iframe>` documents itself (and runs their
+    /// scripts); Blitz does not fetch them.
+    pub embedder_loads_iframes: bool,
     /// Mutation records, while recording is on (see `mutations`).
     pub(crate) mutation_log: Option<Vec<crate::mutations::LoggedMutation>>,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
@@ -509,6 +512,7 @@ impl BaseDocument {
             event_listeners: Default::default(),
             connected_scripts: Vec::new(),
             shadow_hosts: HashSet::new(),
+            embedder_loads_iframes: false,
             mutation_log: None,
             custom_element_reactions: None,
             deferred_construction_nodes: Vec::new(),
@@ -1265,11 +1269,17 @@ impl BaseDocument {
     pub fn add_stylesheet_for_node(&mut self, stylesheet: DocumentStyleSheet, node_id: NodeId) {
         // A sheet in a shadow tree styles that tree alone.
         if let Some(root) = self.containing_shadow_root(node_id) {
+            if let Some(old) = self.nodes_to_stylesheet.remove(&node_id) {
+                self.stylist.remove_stylesheet(old, &self.guard.read());
+                self.stylist.force_stylesheet_origins_dirty(style::stylesheets::OriginSet::all());
+                self.stylesheet_generation += 1;
+            }
             let element = &mut self.nodes[node_id].element_data_mut().unwrap();
             element.special_data = SpecialElementData::Stylesheet(stylesheet.clone());
             self.add_shadow_stylesheet(root, node_id, stylesheet);
             return;
         }
+        self.remove_shadow_stylesheet(node_id);
         let old = self.nodes_to_stylesheet.insert(node_id, stylesheet.clone());
         self.stylesheet_generation += 1;
 

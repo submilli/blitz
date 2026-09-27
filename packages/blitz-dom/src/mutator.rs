@@ -853,7 +853,10 @@ impl DocumentMutator<'_> {
                 self.process_added_subtree(child_id);
             } else if !new_parent_is_in_document && child_was_in_doc {
                 self.process_removed_subtree(child_id);
-            } else if child_was_in_doc && self.doc.is_recording_custom_element_reactions() {
+            } else if child_was_in_doc {
+                self.rescope_stylesheets(child_id);
+            }
+            if new_parent_is_in_document && child_was_in_doc && self.doc.is_recording_custom_element_reactions() {
                 // A move within the document disconnects and reconnects.
                 for reaction in [CustomElementReaction::Disconnected, CustomElementReaction::Connected] {
                     self.doc.iter_subtree_mut(child_id, |id, doc| {
@@ -1299,20 +1302,38 @@ impl<'doc> DocumentMutator<'doc> {
         );
     }
 
+    /// After a move within the document: the sheets of `<style>` and
+    /// `<link>` elements in the subtree may now belong to a different tree
+    /// (the document's or a shadow root's).
+    fn rescope_stylesheets(&mut self, node_id: NodeId) {
+        let mut sheets = Vec::new();
+        self.doc.iter_shadow_including_subtree_mut(node_id, |id, doc| {
+            if let Some(element) = doc.nodes[id].element_data()
+                && let SpecialElementData::Stylesheet(sheet) = &element.special_data
+            {
+                sheets.push((id, sheet.clone()));
+            }
+        });
+        for (id, sheet) in sheets {
+            self.doc.add_stylesheet_for_node(sheet, id);
+        }
+    }
+
     fn unload_stylesheet(&mut self, node_id: NodeId) {
         let node = &mut self.doc.nodes[node_id];
         let Some(element) = node.element_data_mut() else {
             unreachable!();
         };
-        let SpecialElementData::Stylesheet(stylesheet) = element.special_data.take() else {
+        let SpecialElementData::Stylesheet(_) = element.special_data.take() else {
             unreachable!();
         };
 
-        if self.doc.nodes_to_stylesheet.remove(&node_id).is_none() {
-            // Not a document sheet: one from a shadow tree.
-            self.doc.remove_shadow_stylesheet(node_id);
+        // Remove the sheet the stylist holds for the node (the element's own
+        // may since have been replaced by one for a shadow tree).
+        self.doc.remove_shadow_stylesheet(node_id);
+        let Some(stylesheet) = self.doc.nodes_to_stylesheet.remove(&node_id) else {
             return;
-        }
+        };
         let guard = self.doc.guard.read();
         self.doc.stylist.remove_stylesheet(stylesheet, &guard);
         self.doc
@@ -1373,6 +1394,9 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     fn load_iframe(&mut self, target_id: NodeId) {
+        if self.doc.embedder_loads_iframes {
+            return;
+        }
         if self.doc.subdocument_depth >= crate::iframe::MAX_SUBDOCUMENT_DEPTH {
             #[cfg(feature = "tracing")]
             tracing::warn!(
