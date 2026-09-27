@@ -30,7 +30,7 @@ use crate::{
         },
         damage::{ALL_DAMAGE, CONSTRUCT_BOX, CONSTRUCT_DESCENDENT, CONSTRUCT_FC},
     },
-    node::{NodeFlags, TextBrush},
+    node::TextBrush,
 };
 
 impl BaseDocument {
@@ -331,7 +331,7 @@ impl BaseDocument {
     #[cfg(debug_assertions)]
     fn assert_layout_parents_consistent(&self) {
         for (parent_id, node) in self.nodes.iter() {
-            if !node.flags.contains(NodeFlags::IS_IN_DOCUMENT) {
+            if !node.flags.contains(crate::node::NodeFlags::IS_IN_DOCUMENT) {
                 continue;
             }
             let Some(children) = node.layout_children.borrow().clone() else {
