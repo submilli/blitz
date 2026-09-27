@@ -1366,24 +1366,22 @@ impl Node {
         })
     }
 
+    /// The text of this node and its element descendants, in tree order.
+    /// It walks with an explicit stack, so a deep tree cannot overflow the
+    /// native stack.
     pub fn text_content(&self) -> String {
         let mut out = String::new();
-        self.write_text_content(&mut out);
-        out
-    }
-
-    fn write_text_content(&self, out: &mut String) {
-        match &self.data {
-            NodeData::Text(data) => {
-                out.push_str(&data.content);
-            }
-            NodeData::Element(..) | NodeData::AnonymousBlock(..) => {
-                for child_id in self.children.iter() {
-                    self.with(*child_id).write_text_content(out);
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            match &node.data {
+                NodeData::Text(data) => out.push_str(&data.content),
+                NodeData::Element(..) | NodeData::AnonymousBlock(..) => {
+                    stack.extend(node.children.iter().rev().map(|&child| node.with(child)));
                 }
+                _ => {}
             }
-            _ => {}
         }
+        out
     }
 
     pub fn flush_style_attribute(&mut self, url_extra_data: &UrlExtraData) {

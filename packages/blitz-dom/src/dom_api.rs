@@ -739,11 +739,7 @@ impl DocumentMutator<'_> {
         // One mutation record for the whole replacement, as the spec's
         // "replace all" queues (its removals and insertion are silent).
         self.with_one_child_list_record(parent, |m| {
-            // Copy the list: removing children mutates it.
-            let children: Vec<NodeId> = m.doc.nodes[parent].children.iter().copied().collect();
-            for child in children {
-                m.remove_node(child);
-            }
+            m.detach_children(parent);
             if let Some(node) = node {
                 m.insert(node, parent, None);
             }
@@ -818,17 +814,12 @@ impl DocumentMutator<'_> {
         let is_template = self.doc.nodes[id].element_data().is_some_and(|el| {
             el.name.ns == ns!(html) && el.name.local == markup5ever::local_name!("template")
         });
-        let target = if is_template {
-            self.template_contents(id)
-        } else {
-            id
-        };
         // The fragment parsing context is an element: a template parses in
         // its own context into its contents, a shadow root in its host's.
-        let context = if is_template {
-            Some(id)
+        let (target, context) = if is_template {
+            (self.template_contents(id), Some(id))
         } else {
-            self.doc.shadow_host_of(target)
+            (id, self.doc.shadow_host_of(id))
         };
         self.with_one_child_list_record(target, |m| {
             m.replace_all(target, None);
@@ -884,9 +875,14 @@ impl DocumentMutator<'_> {
             _ => return Err(DomError::Syntax),
         };
         // Parse into a detached element named like the context element.
+        // A context that is not an element, or is the `html` element, parses
+        // as a `body` would (HTML § 8.5, insertAdjacentHTML step 2).
         let context_name = self.doc.nodes[context]
             .element_data()
             .map(|el| el.name.clone())
+            .filter(|name| {
+                !(name.ns == ns!(html) && name.local == markup5ever::local_name!("html"))
+            })
             .unwrap_or_else(|| QualName::new(None, ns!(html), markup5ever::local_name!("body")));
         let scratch = self.create_element(context_name, Vec::new());
         self.doc
@@ -964,6 +960,8 @@ impl DocumentMutator<'_> {
                 system_id,
             } => self.create_doctype(&name, &public_id, &system_id),
             NodeData::DocumentFragment => self.create_document_fragment(),
+            // Unreachable: `clone_node` returns early for a document, and a
+            // document is never a child.
             NodeData::Document(_) => self.create_document_node(),
         }
     }

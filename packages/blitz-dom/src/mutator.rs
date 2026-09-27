@@ -1,5 +1,5 @@
 use blitz_traits::node_id::NodeId;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::ops::{Deref, DerefMut};
 
@@ -680,6 +680,33 @@ impl DocumentMutator<'_> {
         }
     }
 
+    /// Detach every child of `parent` without dropping them, clearing its
+    /// child list once rather than searching it per child, so emptying a
+    /// large list stays linear. It records no mutations: its caller,
+    /// `replace_all`, records one for the whole replacement.
+    pub(crate) fn detach_children(&mut self, parent_id: NodeId) {
+        let children = self.doc.nodes[parent_id].children.to_vec();
+        if children.is_empty() {
+            return;
+        }
+        for &child_id in &children {
+            self.mutations_occurred |= self.doc.nodes[child_id].flags.is_in_document();
+            // Before the parent link is severed, as in `remove_node`.
+            self.process_removed_subtree(child_id);
+        }
+        for &child_id in &children {
+            let child = &mut self.doc.nodes[child_id];
+            child.flat_parent.set(crate::node::FlatParent::Dom);
+            child.parent = None;
+        }
+        let parent = &mut self.doc.nodes[parent_id];
+        parent.insert_damage(ALL_DAMAGE);
+        // Mark ancestors dirty so the style traversal visits this subtree.
+        parent.mark_ancestors_dirty();
+        parent.children.clear();
+        self.maybe_record_node(parent_id);
+    }
+
     pub fn remove_and_drop_node(&mut self, node_id: NodeId) -> Option<Node> {
         self.remove_and_drop_node_with(node_id, &mut |_| {})
     }
@@ -797,10 +824,10 @@ impl DocumentMutator<'_> {
         // would remove both the old and the newly-inserted entries from the
         // parent's child list, and anchor indices would be computed against a
         // child list that still contains the moved nodes.
+        let recording = self.doc.is_recording_mutations();
+        let mut detached: HashMap<NodeId, HashSet<NodeId>> = HashMap::new();
         for child_id in child_ids.iter().copied() {
-            let removal = self
-                .doc
-                .is_recording_mutations()
+            let removal = recording
                 .then(|| self.doc.position_in_parent(child_id))
                 .flatten();
             if let Some((old_parent, previous_sibling, next_sibling)) = removal {
@@ -834,8 +861,20 @@ impl DocumentMutator<'_> {
                 old_parent.mark_ancestors_dirty();
             }
 
-            old_parent.children.retain(|id| *id != child_id);
+            if recording {
+                // Each record names the siblings as they are at its removal.
+                old_parent.children.retain(|id| *id != child_id);
+            } else {
+                detached.entry(old_parent_id).or_default().insert(child_id);
+            }
             self.maybe_record_node(old_parent_id);
+        }
+        // One pass over each old parent's child list, so moving a
+        // fragment's many children stays linear.
+        for (old_parent_id, children) in detached {
+            self.doc.nodes[old_parent_id]
+                .children
+                .retain(|id| !children.contains(id));
         }
 
         let new_parent = &mut self.doc.nodes[parent_id];

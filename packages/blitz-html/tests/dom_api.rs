@@ -220,19 +220,11 @@ fn deep_trees_serialize_clone_and_collect_text_without_recursion() {
     assert_eq!(result.2, "onetwoleaf");
 }
 
-fn html_name(local: &str) -> blitz_dom::QualName {
-    blitz_dom::QualName::new(
-        None,
-        blitz_dom::ns!(html),
-        blitz_dom::LocalName::from(local),
-    )
-}
-
 #[test]
 fn connecting_a_deep_subtree_takes_linear_time() {
-    // Connecting each node used to walk to its tree root, so connecting a
-    // chain cost time in its depth squared: seconds at this depth, even
-    // optimized. One pass now carries whether a node is in a shadow tree.
+    // Connecting must not walk to the tree root for each node: that costs
+    // time in the chain's depth squared, seconds at this depth even
+    // optimized. The bound is loose enough for unoptimized builds.
     const DEPTH: usize = 40_000;
     let mut doc = parse(PAGE);
     let a = q(&doc, "#a");
@@ -252,4 +244,102 @@ fn connecting_a_deep_subtree_takes_linear_time() {
         elapsed < std::time::Duration::from_secs(2),
         "connecting took {elapsed:?}"
     );
+}
+
+#[test]
+fn insert_adjacent_html_on_the_root_element_parses_as_body_content() {
+    // HTML § 8.5, insertAdjacentHTML step 2: an `html` context element
+    // parses as `body`, so no `head` or `body` is invented.
+    let mut doc = parse(PAGE);
+    let html = q(&doc, "html");
+    let mut m = doc.mutate();
+    m.insert_adjacent_html(html, "afterbegin", "<p>x</p>")
+        .unwrap();
+    m.insert_adjacent_html(html, "beforeend", "<i>y</i>")
+        .unwrap();
+    drop(m);
+    let names: Vec<String> = doc
+        .get_node(html)
+        .unwrap()
+        .children
+        .iter()
+        .map(|&child| doc.node_name(child))
+        .collect();
+    assert_eq!(names, ["P", "HEAD", "BODY", "I"]);
+}
+
+#[test]
+fn deep_text_in_title_and_style_elements_collects_without_recursion() {
+    // A document reads a `<title>`'s and a `<style>`'s text when their
+    // children change; on a small stack, recursing once per level would
+    // overflow long before this depth.
+    const DEPTH: usize = 20_000;
+    let texts = std::thread::Builder::new()
+        .stack_size(256 << 10)
+        .spawn(|| {
+            let mut doc = parse(PAGE);
+            let head = q(&doc, "head");
+            let mut m = doc.mutate();
+            let mut texts = Vec::new();
+            for tag in ["title", "style"] {
+                let element = m.create_element(html_name(tag), Vec::new());
+                m.append_children(head, &[element]);
+                let leaf = m.create_text_node("leaf");
+                let mut top = m.create_element(html_name("i"), Vec::new());
+                m.append_children(top, &[leaf]);
+                for _ in 1..DEPTH {
+                    let parent = m.create_element(html_name("i"), Vec::new());
+                    m.append_children(parent, &[top]);
+                    top = parent;
+                }
+                m.append_children(element, &[top]);
+                texts.push(element);
+            }
+            drop(m);
+            texts
+                .iter()
+                .map(|&id| doc.get_node(id).unwrap().text_content())
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(texts, ["leaf", "leaf"]);
+}
+
+#[test]
+fn emptying_and_moving_many_children_takes_linear_time() {
+    // Detaching must not search the child list once per child: that costs
+    // time in its length squared, seconds at this size even optimized.
+    // The bound is loose enough for unoptimized builds.
+    const CHILDREN: usize = 100_000;
+    let mut doc = parse(PAGE);
+    let a = q(&doc, "#a");
+    let mut m = doc.mutate();
+    let children: Vec<_> = (0..CHILDREN).map(|_| m.create_text_node("x")).collect();
+    m.append_children(a, &children);
+    let start = std::time::Instant::now();
+    m.replace_all(a, None);
+    let emptied = start.elapsed();
+    let fragment = m.create_document_fragment();
+    m.append_children(fragment, &children);
+    let start = std::time::Instant::now();
+    m.pre_insert(fragment, a, None).unwrap();
+    let moved = start.elapsed();
+    drop(m);
+    assert_eq!(doc.get_node(a).unwrap().children.len(), CHILDREN);
+    assert!(doc.get_node(fragment).unwrap().children.is_empty());
+    let bound = std::time::Duration::from_secs(2);
+    assert!(
+        emptied < bound && moved < bound,
+        "emptied in {emptied:?}, moved in {moved:?}"
+    );
+}
+
+fn html_name(local: &str) -> blitz_dom::QualName {
+    blitz_dom::QualName::new(
+        None,
+        blitz_dom::ns!(html),
+        blitz_dom::LocalName::from(local),
+    )
 }
