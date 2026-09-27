@@ -109,6 +109,8 @@ pub use markup5ever::{
 pub use mutator::DocumentMutator;
 pub use node::{Attribute, DocumentData, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
+/// The text engine, for embedders that shape text with the document's fonts.
+pub use parley;
 pub use scrolling::{ScrollBehavior, ScrollLogicalPosition};
 pub use tree::NodeTree;
 

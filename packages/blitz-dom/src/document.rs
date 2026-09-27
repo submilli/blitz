@@ -633,6 +633,22 @@ impl BaseDocument {
         self.nodes.get_mut(node_id)
     }
 
+    /// The document's font context: the fonts its text is laid out with,
+    /// for embedders that shape text of their own (a canvas's `fillText`).
+    pub fn font_ctx(&self) -> Arc<Mutex<parley::FontContext>> {
+        Arc::clone(&self.font_ctx)
+    }
+
+    /// Show `image` as the content of the replaced element `node_id` (a
+    /// `<canvas>`'s bitmap, drawn by script). Its layout size still comes
+    /// from its attributes and style.
+    pub fn set_element_bitmap(&mut self, node_id: NodeId, image: crate::node::RasterImageData) {
+        let Some(node) = self.nodes.get_mut(node_id) else { return };
+        let Some(element) = node.element_data_mut() else { return };
+        element.special_data = crate::node::SpecialElementData::Image(Box::new(crate::node::ImageData::Raster(image)));
+        node.insert_damage(style::selector_parser::RestyleDamage::REPAINT);
+    }
+
     pub fn get_focussed_node_id(&self) -> Option<NodeId> {
         self.focus_node_id
             .or(self.try_root_element().map(|el| el.id))
