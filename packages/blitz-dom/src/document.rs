@@ -331,6 +331,8 @@ pub struct BaseDocument {
     pub embedder_loads_iframes: bool,
     /// Mutation records, while recording is on (see `mutations`).
     pub(crate) mutation_log: Option<Vec<crate::mutations::LoggedMutation>>,
+    pub(crate) mutation_log_bytes: usize,
+    pub(crate) mutation_log_overflowed: bool,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
     pub(crate) custom_element_reactions: Option<Vec<crate::custom_elements::CustomElementReaction>>,
     /// DOM event listeners, per target.
@@ -515,6 +517,8 @@ impl BaseDocument {
             shadow_hosts: HashSet::new(),
             embedder_loads_iframes: false,
             mutation_log: None,
+            mutation_log_bytes: 0,
+            mutation_log_overflowed: false,
             custom_element_reactions: None,
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
