@@ -78,7 +78,7 @@ mod tree;
 
 mod url;
 
-pub use cssom::{CssRuleInfo, CssomError};
+pub use cssom::{CssRuleInfo, CssomError, CssomSheet};
 pub use resolved_style::{
     css_property_is_supported, parse_transform_matrix, resolved_style_property_names,
 };

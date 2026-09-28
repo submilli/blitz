@@ -237,7 +237,8 @@ impl BaseDocument {
                 continue;
             };
             self.set_composed_children(host, Some(self.nodes[root].children.to_vec()));
-            for child in self.nodes[root].children.to_vec() {
+            let root_children = self.nodes[root].children.clone();
+            for child in root_children {
                 self.set_flat_parent(child, FlatParent::Node(host));
             }
             let slots = self.slots_in(root);
@@ -258,7 +259,8 @@ impl BaseDocument {
                 }
             }
             // Comments and the like under a host are never rendered.
-            for child in self.nodes[host].children.to_vec() {
+            let host_children = self.nodes[host].children.clone();
+            for child in host_children {
                 if !matches!(
                     self.nodes[child].data,
                     NodeData::Element(_) | NodeData::Text(_)

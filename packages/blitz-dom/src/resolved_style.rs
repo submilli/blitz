@@ -201,6 +201,26 @@ impl BaseDocument {
         css
     }
 
+    /// Parsed declaration names, in CSSOM order. String delimiters in values
+    /// never introduce declarations; shorthand expansion belongs to Stylo.
+    pub fn style_attr_property_names(&self, text: &str) -> Vec<String> {
+        self.parse_style_attr_block(text)
+            .declarations()
+            .iter()
+            .map(|declaration| declaration.id().name().into_owned())
+            .collect()
+    }
+
+    /// Whether the parsed property carries the important priority.
+    pub fn style_attr_property_important(&self, text: &str, name: &str) -> bool {
+        let Ok(property) = PropertyId::parse_enabled_for_all_content(name) else {
+            return false;
+        };
+        self.parse_style_attr_block(text)
+            .property_priority(&property)
+            .important()
+    }
+
     /// The canonical serialization of `property`'s value in a `style` attribute
     /// string (`CSSStyleDeclaration.getPropertyValue()`). Handles shorthands.
     /// Returns an empty string if the property is not set or not recognised.
@@ -682,4 +702,22 @@ fn serialize_resolved_shorthand(styles: &ComputedValues, shorthand: ShorthandId)
     let mut css = CssStringWriter::new();
     let _ = shorthand.longhands_to_css(&declaration_refs, &mut css);
     css
+}
+
+#[cfg(test)]
+mod cssom_metadata_tests {
+    use crate::{BaseDocument, DocumentConfig};
+    #[test]
+    fn declaration_metadata_ignores_quoted_delimiters_and_priority_literals() {
+        let doc = BaseDocument::new(DocumentConfig::default());
+        let text = r#"content: "a;b:c!important"; color: red !important; --Case: blue"#;
+        assert_eq!(
+            doc.style_attr_property_names(text),
+            ["content", "color", "--Case"]
+        );
+        assert!(!doc.style_attr_property_important(text, "content"));
+        assert!(doc.style_attr_property_important(text, "color"));
+        assert_eq!(doc.style_attr_get_property(text, "--Case"), "blue");
+        assert_eq!(doc.style_attr_get_property(text, "--case"), "");
+    }
 }

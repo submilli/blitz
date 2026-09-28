@@ -79,6 +79,52 @@ impl From<RulesMutateError> for CssomError {
     }
 }
 
+/// A stylesheet retained independently of its owner node's attachment.
+/// Only the originating document may inspect or mutate it: Stylo locks and
+/// loading policy belong to that document. Attachment controls application.
+#[derive(Clone)]
+pub struct CssomSheet {
+    document: usize,
+    owner: NodeId,
+    sheet: DocumentStyleSheet,
+}
+
+/// Detached sheets still parse import rules, but have no loading authority.
+struct DetachedStylesheetLoader {
+    url_data: style::stylesheets::UrlExtraData,
+}
+impl style::stylesheets::StylesheetLoader for DetachedStylesheetLoader {
+    fn request_stylesheet(
+        &self,
+        url: style::values::CssUrl,
+        source_location: style::values::SourceLocation,
+        lock: &style::shared_lock::SharedRwLock,
+        media: ServoArc<Locked<style::media_queries::MediaList>>,
+        supports: Option<style::stylesheets::import_rule::ImportSupportsCondition>,
+        layer: style::stylesheets::import_rule::ImportLayer,
+    ) -> ServoArc<Locked<style::stylesheets::ImportRule>> {
+        // An empty child retains the import media without granting loading authority.
+        let sheet = style::stylesheets::Stylesheet::from_str(
+            "",
+            self.url_data.clone(),
+            Origin::Author,
+            media,
+            lock.clone(),
+            None,
+            None,
+            QuirksMode::NoQuirks,
+            AllowImportRules::No,
+        );
+        ServoArc::new(lock.wrap(style::stylesheets::ImportRule {
+            url,
+            source_location,
+            supports,
+            layer,
+            stylesheet: style::stylesheets::import_rule::ImportSheet::new(ServoArc::new(sheet)),
+        }))
+    }
+}
+
 /// A snapshot of the CSSOM-visible attributes of a rule
 #[derive(Debug, Clone)]
 pub struct CssRuleInfo {
@@ -282,6 +328,29 @@ fn rule_attributes(rule: &CssRule, guard: &SharedRwLockReadGuard) -> Vec<(&'stat
 }
 
 impl BaseDocument {
+    /// Retain the current stylesheet object, even if its owner is later removed
+    /// or its text is replaced. A replacement yields a distinct handle.
+    pub fn retain_stylesheet(&self, owner: NodeId) -> Option<CssomSheet> {
+        Some(CssomSheet {
+            document: self.id(),
+            owner,
+            sheet: self.nodes_to_stylesheet.get(&owner)?.clone(),
+        })
+    }
+
+    /// Whether this exact sheet is still the owner's active stylesheet.
+    pub fn stylesheet_is_current(&self, handle: &CssomSheet) -> bool {
+        handle.document == self.id()
+            && self
+                .nodes_to_stylesheet
+                .get(&handle.owner)
+                .is_some_and(|sheet| ServoArc::ptr_eq(&sheet.0, &handle.sheet.0))
+    }
+
+    fn retained_sheet<'a>(&self, handle: &'a CssomSheet) -> Option<&'a DocumentStyleSheet> {
+        (handle.document == self.id()).then_some(&handle.sheet)
+    }
+
     /// The owner nodes (`<style>` / `<link>` elements) of the document's author
     /// stylesheets (`document.styleSheets`).
     ///
@@ -371,7 +440,17 @@ impl BaseDocument {
 
     /// The number of rules in the rule list at `path` (`CSSRuleList.length`)
     pub fn stylesheet_rule_count(&self, node_id: NodeId, path: &[usize]) -> Option<usize> {
-        let sheet = self.nodes_to_stylesheet.get(&node_id)?;
+        let handle = self.retain_stylesheet(node_id)?;
+        self.retained_stylesheet_rule_count(&handle, path)
+    }
+
+    /// The same operation on a retained sheet; foreign-document handles fail.
+    pub fn retained_stylesheet_rule_count(
+        &self,
+        handle: &CssomSheet,
+        path: &[usize],
+    ) -> Option<usize> {
+        let sheet = self.retained_sheet(handle)?;
         let guard = self.guard.read();
         let list = Self::resolve_rule_list(sheet, &guard, path, |_| {})?;
         Some(match list {
@@ -382,7 +461,17 @@ impl BaseDocument {
 
     /// The CSSOM-visible attributes of the rule at `path`
     pub fn stylesheet_rule_info(&self, node_id: NodeId, path: &[usize]) -> Option<CssRuleInfo> {
-        let sheet = self.nodes_to_stylesheet.get(&node_id)?;
+        let handle = self.retain_stylesheet(node_id)?;
+        self.retained_stylesheet_rule_info(&handle, path)
+    }
+
+    /// The same operation on a retained sheet; foreign-document handles fail.
+    pub fn retained_stylesheet_rule_info(
+        &self,
+        handle: &CssomSheet,
+        path: &[usize],
+    ) -> Option<CssRuleInfo> {
+        let sheet = self.retained_sheet(handle)?;
         let guard = self.guard.read();
         let handle = Self::resolve_rule(sheet, &guard, path, |_| {})?;
         let mut css_text = CssStringWriter::new();
@@ -424,11 +513,28 @@ impl BaseDocument {
         rule: &str,
         index: usize,
     ) -> Result<usize, CssomError> {
+        let handle = self
+            .retain_stylesheet(node_id)
+            .ok_or(CssomError::NotFound)?;
+        self.retained_stylesheet_insert_rule(&handle, path, rule, index)
+    }
+
+    /// The same operation on a retained sheet; foreign-document handles fail.
+    pub fn retained_stylesheet_insert_rule(
+        &mut self,
+        handle: &CssomSheet,
+        path: &[usize],
+        rule: &str,
+        index: usize,
+    ) -> Result<usize, CssomError> {
         let sheet = self
-            .nodes_to_stylesheet
-            .get(&node_id)
+            .retained_sheet(handle)
             .ok_or(CssomError::NotFound)?
             .clone();
+        let attached = self.stylesheet_is_current(handle);
+        let detached_loader = DetachedStylesheetLoader {
+            url_data: self.url.url_extra_data(),
+        };
         let loader = self.stylesheet_loader();
         let lock = &self.guard;
 
@@ -457,7 +563,7 @@ impl BaseDocument {
                         index,
                         containing_rule_types,
                         parse_relative_rule_type,
-                        Some(&loader),
+                        Some(if attached { &loader } else { &detached_loader }),
                         AllowImportRules::Yes,
                     )?
                 };
@@ -487,12 +593,12 @@ impl BaseDocument {
         };
 
         let guard = lock.read();
-        if let CssRule::FontFace(_) = &new_rule {
+        if attached && let CssRule::FontFace(_) = &new_rule {
             crate::net::fetch_font_face_rules(
                 std::iter::once(&new_rule),
                 self.tx.clone(),
                 self.id(),
-                Some(node_id),
+                Some(handle.owner),
                 &self.net_provider,
                 &self.shell_provider,
                 &guard,
@@ -508,8 +614,10 @@ impl BaseDocument {
             ),
         };
         let ancestor_refs: Vec<CssRuleRef> = ancestors.iter().map(CssRuleRef::from).collect();
-        self.stylist
-            .rule_changed(&sheet, &new_rule, &guard, change_kind, &ancestor_refs);
+        if attached {
+            self.stylist
+                .rule_changed(&sheet, &new_rule, &guard, change_kind, &ancestor_refs);
+        }
         Ok(index)
     }
 
@@ -522,11 +630,24 @@ impl BaseDocument {
         path: &[usize],
         index: usize,
     ) -> Result<(), CssomError> {
+        let handle = self
+            .retain_stylesheet(node_id)
+            .ok_or(CssomError::NotFound)?;
+        self.retained_stylesheet_delete_rule(&handle, path, index)
+    }
+
+    /// The same operation on a retained sheet; foreign-document handles fail.
+    pub fn retained_stylesheet_delete_rule(
+        &mut self,
+        handle: &CssomSheet,
+        path: &[usize],
+        index: usize,
+    ) -> Result<(), CssomError> {
         let sheet = self
-            .nodes_to_stylesheet
-            .get(&node_id)
+            .retained_sheet(handle)
             .ok_or(CssomError::NotFound)?
             .clone();
+        let attached = self.stylesheet_is_current(handle);
         let lock = &self.guard;
 
         let (ancestors, list) = {
@@ -560,8 +681,10 @@ impl BaseDocument {
 
         let guard = lock.read();
         let ancestor_refs: Vec<CssRuleRef> = ancestors.iter().map(CssRuleRef::from).collect();
-        self.stylist
-            .rule_changed(&sheet, &removed_rule, &guard, change_kind, &ancestor_refs);
+        if attached {
+            self.stylist
+                .rule_changed(&sheet, &removed_rule, &guard, change_kind, &ancestor_refs);
+        }
         Ok(())
     }
 
@@ -609,8 +732,20 @@ impl BaseDocument {
         node_id: NodeId,
         path: &[usize],
     ) -> Option<String> {
+        let handle = self.retain_stylesheet(node_id)?;
+        self.retained_stylesheet_rule_style_css_text(&handle, path)
+    }
+
+    /// Declaration serialization remains available after sheet detachment.
+    pub fn retained_stylesheet_rule_style_css_text(
+        &self,
+        handle: &CssomSheet,
+        path: &[usize],
+    ) -> Option<String> {
+        let sheet = self.retained_sheet(handle)?;
         let guard = self.guard.read();
-        let target = self.rule_declaration_target(node_id, path, &guard)?;
+        let rule = Self::resolve_rule(sheet, &guard, path, |_| {})?;
+        let target = declaration_target(&rule, &guard)?;
         let mut css = CssStringWriter::new();
         match target {
             DeclarationTarget::Block { block, .. } => {
@@ -944,5 +1079,106 @@ impl BaseDocument {
         self.stylist
             .rule_changed(&sheet, &rule, &guard, change_kind, &ancestor_refs);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod retained_sheet_tests {
+    use crate::{BaseDocument, DocumentConfig, QualName, local_name, ns};
+    fn sheet(doc: &mut BaseDocument, text: &str) -> crate::NodeId {
+        let root = doc.root_node().id;
+        let mut m = doc.mutate();
+        let owner = m.create_element(QualName::new(None, ns!(html), local_name!("style")), vec![]);
+        m.append_children(root, &[owner]);
+        m.set_text_content(owner, text);
+        owner
+    }
+    #[test]
+    fn retained_sheet_survives_detachment_and_source_replacement() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let node = sheet(&mut doc, "a { color: red }");
+        let original = doc.retain_stylesheet(node).unwrap();
+        doc.mutate().set_text_content(node, "b {color:blue}");
+        assert!(!doc.stylesheet_is_current(&original));
+        assert_eq!(doc.retained_stylesheet_rule_count(&original, &[]), Some(1));
+        assert_eq!(
+            doc.retained_stylesheet_rule_info(&original, &[0])
+                .unwrap()
+                .attributes[0]
+                .1,
+            "a"
+        );
+        let current = doc.retain_stylesheet(node).unwrap();
+        doc.mutate().remove_node(node);
+        assert!(!doc.stylesheet_is_current(&current));
+        assert_eq!(
+            doc.retained_stylesheet_insert_rule(&current, &[], "c {color:green}", 1),
+            Ok(1)
+        );
+        assert_eq!(doc.retained_stylesheet_rule_count(&current, &[]), Some(2));
+        assert_eq!(
+            doc.retained_stylesheet_delete_rule(&current, &[], 0),
+            Ok(())
+        );
+        assert_eq!(doc.retained_stylesheet_rule_count(&current, &[]), Some(1));
+        assert_eq!(
+            doc.retained_stylesheet_rule_style_css_text(&current, &[0])
+                .unwrap(),
+            "color: green;"
+        );
+    }
+    #[test]
+    fn detached_sheet_accepts_import_rules_without_loading() {
+        use blitz_traits::net::{NetHandler, NetProvider, Request};
+        struct RejectRequests;
+        impl NetProvider for RejectRequests {
+            fn fetch(&self, _: usize, _: Request, _: Box<dyn NetHandler>) {
+                panic!("detached CSSOM must not request host I/O");
+            }
+        }
+        let mut doc = BaseDocument::new(DocumentConfig {
+            net_provider: Some(std::sync::Arc::new(RejectRequests)),
+            base_url: Some("https://example.test/".into()),
+            ..DocumentConfig::default()
+        });
+        let owner = sheet(&mut doc, "a{}");
+        let retained = doc.retain_stylesheet(owner).unwrap();
+        doc.mutate().remove_node(owner);
+        assert_eq!(
+            doc.retained_stylesheet_insert_rule(&retained, &[], "@import url('/x.css') screen;", 0),
+            Ok(0)
+        );
+        assert_eq!(
+            doc.retained_stylesheet_rule_info(&retained, &[0])
+                .unwrap()
+                .interface,
+            "CSSImportRule"
+        );
+        assert!(
+            doc.retained_stylesheet_rule_info(&retained, &[0])
+                .unwrap()
+                .css_text
+                .contains("screen")
+        );
+    }
+
+    #[test]
+    fn retained_sheet_rejects_foreign_document_and_preserves_unrelated_identity() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let node = sheet(&mut doc, "a{}");
+        let retained = doc.retain_stylesheet(node).unwrap();
+        let other = sheet(&mut doc, "b{}");
+        doc.mutate().set_text_content(other, "c{}");
+        assert!(doc.stylesheet_is_current(&retained));
+        let mut foreign = BaseDocument::new(DocumentConfig::default());
+        assert_eq!(foreign.retained_stylesheet_rule_count(&retained, &[]), None);
+        assert_eq!(
+            foreign.retained_stylesheet_insert_rule(&retained, &[], "a{}", 0),
+            Err(super::CssomError::NotFound)
+        );
+        assert_eq!(
+            foreign.retained_stylesheet_delete_rule(&retained, &[], 0),
+            Err(super::CssomError::NotFound)
+        );
     }
 }
