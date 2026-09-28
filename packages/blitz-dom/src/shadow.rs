@@ -321,6 +321,9 @@ impl BaseDocument {
                 let guard = self.guard.clone();
                 let guard = guard.read();
                 let mut author_styles = style::author_styles::AuthorStyles::new();
+                // Stylo must recognize the prior cascade when CSSOM mutates a
+                // sheet in place; starting from empty would reuse stale cache data.
+                author_styles.data = styles.author_styles.data.clone();
                 let custom_media = style::stylesheets::CustomMediaMap::default();
                 for sheet in styles.sheets.values() {
                     author_styles.stylesheets.append_stylesheet(
@@ -336,6 +339,7 @@ impl BaseDocument {
                 let host_node = &mut self.nodes[host];
                 host_node.insert_damage(ALL_DAMAGE);
                 host_node.set_restyle_hint(RestyleHint::restyle_subtree());
+                host_node.mark_ancestors_dirty();
             }
             self.nodes[root].shadow_styles = Some(styles);
         }
@@ -360,5 +364,59 @@ impl BaseDocument {
             node.insert_damage(ALL_DAMAGE);
             node.set_restyle_hint(RestyleHint::restyle_subtree());
         }
+    }
+}
+
+/// The requested flattened assignment exceeded the embedder's work/output limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotFlattenLimit;
+
+/// Flatten named slot assignments iteratively, bounded before allocating output.
+/// DOM: find flattened slottables. Missing/non-slot receivers yield no nodes.
+impl BaseDocument {
+    pub fn flattened_assigned_nodes(
+        &self,
+        slot: NodeId,
+        limit: usize,
+    ) -> Result<Vec<NodeId>, SlotFlattenLimit> {
+        let mut output = Vec::new();
+        let mut pending = vec![(slot, true)];
+        let mut visited = 0usize;
+        while let Some((id, expand)) = pending.pop() {
+            visited += 1;
+            if visited > limit {
+                return Err(SlotFlattenLimit);
+            }
+            let Some(node) = self.get_node(id) else {
+                continue;
+            };
+            if !expand {
+                output.push(id);
+                continue;
+            }
+            let assigned = self.assigned_nodes(id);
+            let children = if assigned.is_empty() {
+                node.children.as_slice()
+            } else {
+                assigned.as_slice()
+            };
+            if children.len() > limit.saturating_sub(pending.len() + output.len()) {
+                return Err(SlotFlattenLimit);
+            }
+            for &child in children.iter().rev() {
+                let Some(child_node) = self.get_node(child) else {
+                    continue;
+                };
+                let nested = child_node.element_data().is_some_and(|el| {
+                    el.name.ns == markup5ever::ns!(html) && &*el.name.local == "slot"
+                });
+                if child_node.is_element()
+                    || matches!(child_node.data, crate::node::NodeData::Text(_))
+                {
+                    pending.push((child, nested));
+                }
+            }
+        }
+        Ok(output)
     }
 }

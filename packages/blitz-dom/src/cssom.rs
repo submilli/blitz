@@ -334,7 +334,7 @@ impl BaseDocument {
         Some(CssomSheet {
             document: self.id(),
             owner,
-            sheet: self.nodes_to_stylesheet.get(&owner)?.clone(),
+            sheet: self.active_stylesheet(owner)?.clone(),
         })
     }
 
@@ -342,9 +342,28 @@ impl BaseDocument {
     pub fn stylesheet_is_current(&self, handle: &CssomSheet) -> bool {
         handle.document == self.id()
             && self
-                .nodes_to_stylesheet
-                .get(&handle.owner)
+                .active_stylesheet(handle.owner)
                 .is_some_and(|sheet| ServoArc::ptr_eq(&sheet.0, &handle.sheet.0))
+    }
+
+    fn active_stylesheet(&self, owner: NodeId) -> Option<&DocumentStyleSheet> {
+        if let Some(root) = self.containing_shadow_root(owner) {
+            return self
+                .get_node(root)?
+                .shadow_styles
+                .as_ref()?
+                .sheets
+                .get(&owner);
+        }
+        self.nodes_to_stylesheet.get(&owner)
+    }
+
+    fn invalidate_shadow_stylesheet(&mut self, owner: NodeId) {
+        if let Some(root) = self.containing_shadow_root(owner)
+            && let Some(styles) = self.nodes[root].shadow_styles.as_mut()
+        {
+            styles.dirty = true;
+        }
     }
 
     fn retained_sheet<'a>(&self, handle: &'a CssomSheet) -> Option<&'a DocumentStyleSheet> {
@@ -618,6 +637,10 @@ impl BaseDocument {
             self.stylist
                 .rule_changed(&sheet, &new_rule, &guard, change_kind, &ancestor_refs);
         }
+        drop(guard);
+        if attached {
+            self.invalidate_shadow_stylesheet(handle.owner);
+        }
         Ok(index)
     }
 
@@ -684,6 +707,10 @@ impl BaseDocument {
         if attached {
             self.stylist
                 .rule_changed(&sheet, &removed_rule, &guard, change_kind, &ancestor_refs);
+        }
+        drop(guard);
+        if attached {
+            self.invalidate_shadow_stylesheet(handle.owner);
         }
         Ok(())
     }

@@ -86,12 +86,17 @@ impl BaseDocument {
     /// Start or stop recording custom element reactions. Stopping discards
     /// pending ones.
     pub fn set_custom_element_reactions(&mut self, on: bool) {
+        if !on {
+            self.custom_element_reaction_bytes = 0;
+            self.custom_element_reaction_overflow = false;
+        }
         self.custom_element_reactions =
             on.then(|| self.custom_element_reactions.take().unwrap_or_default());
     }
 
     /// Reactions since the last call, oldest first.
     pub fn take_custom_element_reactions(&mut self) -> Vec<CustomElementReaction> {
+        self.custom_element_reaction_bytes = 0;
         match &mut self.custom_element_reactions {
             Some(reactions) => std::mem::take(reactions),
             None => Vec::new(),
@@ -124,11 +129,66 @@ impl BaseDocument {
 
     pub(crate) fn record_custom_element_reaction(&mut self, reaction: CustomElementReaction) {
         if let Some(reactions) = &mut self.custom_element_reactions {
+            let bytes = match &reaction {
+                CustomElementReaction::AttributeChanged {
+                    name,
+                    namespace,
+                    old_value,
+                    new_value,
+                    ..
+                } => {
+                    name.len()
+                        + namespace.as_ref().map_or(0, String::len)
+                        + old_value.as_ref().map_or(0, String::len)
+                        + new_value.as_ref().map_or(0, String::len)
+                }
+                _ => 0,
+            };
+            if reactions.len() >= 4096
+                || bytes > (8 * 1024 * 1024usize).saturating_sub(self.custom_element_reaction_bytes)
+            {
+                self.custom_element_reaction_overflow = true;
+                return;
+            }
+            self.custom_element_reaction_bytes += bytes;
             reactions.push(reaction);
         }
     }
 
+    /// Consume the overflow diagnostic; a bounded queue is never silently complete.
+    pub fn take_custom_element_reaction_overflow(&mut self) -> bool {
+        std::mem::take(&mut self.custom_element_reaction_overflow)
+    }
+
     pub(crate) fn is_recording_custom_element_reactions(&self) -> bool {
         self.custom_element_reactions.is_some()
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+    #[test]
+    fn reaction_count_and_retained_bytes_are_bounded() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        doc.set_custom_element_reactions(true);
+        let id = doc.root_node().id;
+        for _ in 0..5000 {
+            doc.record_custom_element_reaction(CustomElementReaction::Connected(id));
+        }
+        assert_eq!(doc.take_custom_element_reactions().len(), 4096);
+        assert!(doc.take_custom_element_reaction_overflow());
+        assert!(!doc.take_custom_element_reaction_overflow());
+        doc.record_custom_element_reaction(CustomElementReaction::AttributeChanged {
+            element: id,
+            name: "x".into(),
+            namespace: None,
+            old_value: None,
+            new_value: Some("x".repeat(8 * 1024 * 1024)),
+        });
+        assert!(doc.take_custom_element_reactions().is_empty());
+        assert!(doc.take_custom_element_reaction_overflow());
+        doc.record_custom_element_reaction(CustomElementReaction::Connected(id));
+        assert_eq!(doc.take_custom_element_reactions().len(), 1);
     }
 }

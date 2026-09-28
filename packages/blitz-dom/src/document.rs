@@ -335,6 +335,8 @@ pub struct BaseDocument {
     pub(crate) mutation_log_overflowed: bool,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
     pub(crate) custom_element_reactions: Option<Vec<crate::custom_elements::CustomElementReaction>>,
+    pub(crate) custom_element_reaction_bytes: usize,
+    pub(crate) custom_element_reaction_overflow: bool,
     /// DOM event listeners, per target.
     pub event_listeners: crate::dom_events::EventListeners,
     /// Set of changed nodes for updating the accessibility tree
@@ -520,6 +522,8 @@ impl BaseDocument {
             mutation_log_bytes: 0,
             mutation_log_overflowed: false,
             custom_element_reactions: None,
+            custom_element_reaction_bytes: 0,
+            custom_element_reaction_overflow: false,
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
             pending_images: HashMap::new(),

@@ -148,6 +148,13 @@ pub trait DispatchHost {
     fn composed(&self) -> bool {
         false
     }
+    /// The original related target, before retargeting for a listener.
+    fn related_target(&self) -> Option<EventTargetId> {
+        None
+    }
+    fn set_related_target(&mut self, _target: Option<EventTargetId>) {}
+    /// Snapshot visible to the listener whose current target is about to be set.
+    fn set_composed_path(&mut self, _path: Vec<EventTargetId>) {}
     /// Update the event's `eventPhase` and `currentTarget`.
     fn set_phase(&mut self, phase: EventPhase, current_target: Option<EventTargetId>);
     fn set_target(&mut self, target: Option<EventTargetId>);
@@ -185,7 +192,7 @@ impl BaseDocument {
             path.push(EventTargetId::Node(id));
             let Some(n) = self.get_node(id) else { break };
             current = if let Some(data) = &n.shadow_root_data {
-                if !composed {
+                if !composed && self.tree_root(node) == id {
                     break;
                 }
                 Some(data.host)
@@ -242,71 +249,162 @@ impl BaseDocument {
     }
 }
 
-/// Dispatch the event to `target`. Returns false if it was canceled
-/// (`preventDefault()` in a non-passive listener of a cancelable event).
+/// One immutable dispatch entry. Topology and retargeting are captured before script.
+struct PathEntry {
+    current: EventTargetId,
+    target: EventTargetId,
+    related: Option<EventTargetId>,
+    closed_root: Option<NodeId>,
+}
+
+impl BaseDocument {
+    fn closest_closed_root(&self, target: EventTargetId) -> Option<NodeId> {
+        let EventTargetId::Node(mut node) = target else {
+            return None;
+        };
+        loop {
+            let root = self.tree_root(node);
+            let data = self.get_node(root)?.shadow_root_data.as_ref()?;
+            if !data.open {
+                return Some(root);
+            }
+            node = data.host;
+        }
+    }
+}
+
+/// Shared parent links keep snapshot storage linear even with nested closed roots.
+fn closed_ancestors(doc: &BaseDocument, path: &[PathEntry]) -> HashMap<NodeId, Option<NodeId>> {
+    let mut parents = HashMap::new();
+    for entry in path {
+        let mut current = entry.closed_root;
+        while let Some(root) = current {
+            if parents.contains_key(&root) {
+                break;
+            }
+            let parent = doc
+                .shadow_host_of(root)
+                .and_then(|host| doc.closest_closed_root(EventTargetId::Node(host)));
+            parents.insert(root, parent);
+            current = parent;
+        }
+    }
+    parents
+}
+fn visible_path(
+    path: &[PathEntry],
+    entry: &PathEntry,
+    parents: &HashMap<NodeId, Option<NodeId>>,
+) -> Vec<EventTargetId> {
+    let mut visible_roots = std::collections::HashSet::new();
+    let mut current = entry.closed_root;
+    while let Some(root) = current {
+        visible_roots.insert(root);
+        current = parents.get(&root).copied().flatten();
+    }
+    path.iter()
+        .filter(|candidate| {
+            candidate
+                .closed_root
+                .is_none_or(|root| visible_roots.contains(&root))
+        })
+        .map(|candidate| candidate.current)
+        .collect()
+}
+
+fn prepare_entry(
+    host: &mut dyn DispatchHost,
+    path: &[PathEntry],
+    entry: &PathEntry,
+    phase: EventPhase,
+    closed_parents: &HashMap<NodeId, Option<NodeId>>,
+) {
+    host.set_target(Some(entry.target));
+    host.set_related_target(entry.related);
+    host.set_composed_path(visible_path(path, entry, closed_parents));
+    host.set_phase(phase, Some(entry.current));
+}
+
+/// Dispatch from a snapshot. Reparenting inside a listener cannot reveal a closed root.
 pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
-    host.set_target(Some(target));
-    let path = host.document().composed_event_path(target, host.composed());
-    let bubbles = host.bubbles();
-    // Each listener sees the target retargeted to its own tree.
-    let targets: Vec<EventTargetId> = {
+    let related = host.related_target();
+    let (path, closed_parents, outside, outside_related) = {
         let doc = host.document();
-        path.iter()
-            .map(|&current| doc.retarget(target, current))
-            .collect()
+        let path: Vec<PathEntry> = doc
+            .composed_event_path(target, host.composed())
+            .into_iter()
+            .map(|current| PathEntry {
+                current,
+                target: doc.retarget(target, current),
+                related: related.map(|r| doc.retarget(r, current)),
+                closed_root: doc.closest_closed_root(current),
+            })
+            .filter(|entry| entry.related != Some(entry.target))
+            .collect();
+        let parents = closed_ancestors(&doc, &path);
+        (
+            path,
+            parents,
+            doc.retarget(target, EventTargetId::Window),
+            related.map(|r| doc.retarget(r, EventTargetId::Window)),
+        )
     };
-
-    // Capturing phase: root to target (excluding the target).
-    for (i, &current) in path.iter().enumerate().skip(1).rev() {
+    host.set_target(Some(target));
+    for entry in path.iter().skip(1).rev() {
         if host.propagation_stopped() {
             break;
         }
-        host.set_target(Some(targets[i]));
-        host.set_phase(EventPhase::Capturing, Some(current));
-        invoke_listeners(host, current, Some(true));
+        let phase = if entry.target == entry.current {
+            EventPhase::AtTarget
+        } else {
+            EventPhase::Capturing
+        };
+        if has_listeners(host, entry.current, true) {
+            prepare_entry(host, &path, entry, phase, &closed_parents);
+            invoke_listeners(host, entry.current, Some(true));
+        }
     }
-
-    // At target: capture listeners first, then non-capture, as the DOM
-    // Standard now specifies.
-    if !host.propagation_stopped() {
-        host.set_target(Some(target));
-        host.set_phase(EventPhase::AtTarget, Some(target));
-        invoke_listeners(host, target, Some(true));
+    if !host.propagation_stopped()
+        && let Some(entry) = path.first()
+    {
+        prepare_entry(host, &path, entry, EventPhase::AtTarget, &closed_parents);
+        invoke_listeners(host, entry.current, Some(true));
         if !host.propagation_stopped() {
-            invoke_listeners(host, target, Some(false));
+            invoke_listeners(host, entry.current, Some(false));
         }
     }
-
-    // Bubbling phase: target's parent to root.
-    // Bubbling phase: target's parent to root. A shadow host on the path is
-    // "at target" for its tree's listeners, so it hears non-bubbling events
-    // too.
-    for (i, &current) in path.iter().enumerate().skip(1) {
+    for entry in path.iter().skip(1) {
         if host.propagation_stopped() {
             break;
         }
-        let at_host = targets[i] == current;
-        if !bubbles && !at_host {
+        let at_target = entry.target == entry.current;
+        if !host.bubbles() && !at_target {
             continue;
         }
-        host.set_target(Some(targets[i]));
-        host.set_phase(
-            if at_host {
-                EventPhase::AtTarget
-            } else {
-                EventPhase::Bubbling
-            },
-            Some(current),
-        );
-        invoke_listeners(host, current, Some(false));
+        let phase = if at_target {
+            EventPhase::AtTarget
+        } else {
+            EventPhase::Bubbling
+        };
+        if has_listeners(host, entry.current, false) {
+            prepare_entry(host, &path, entry, phase, &closed_parents);
+            invoke_listeners(host, entry.current, Some(false));
+        }
     }
-
-    // Afterwards the target is as seen from the document.
-    let outside = host.document().retarget(target, EventTargetId::Window);
     host.set_target(Some(outside));
+    host.set_related_target(outside_related);
+    host.set_composed_path(Vec::new());
     host.set_phase(EventPhase::None, None);
     host.clear_propagation_flags();
     !host.canceled()
+}
+
+fn has_listeners(host: &dyn DispatchHost, target: EventTargetId, capture: bool) -> bool {
+    host.document()
+        .event_listeners
+        .listeners(target, &host.event_type())
+        .iter()
+        .any(|listener| listener.capture == capture)
 }
 
 /// "Inner invoke": run matching listeners registered on `target` (with the
