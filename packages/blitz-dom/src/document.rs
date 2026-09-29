@@ -1117,7 +1117,7 @@ impl BaseDocument {
         for &child_id in &new_children {
             self.nodes[child_id].parent = Some(new_node_id);
         }
-        self.nodes[new_node_id].children = new_children;
+        self.nodes[new_node_id].children = new_children.into();
 
         new_node_id
     }
@@ -1141,7 +1141,7 @@ impl BaseDocument {
         // Update child_idx values
         if let Some(parent_id) = node.as_ref().and_then(|node| node.parent) {
             let parent = &mut self.nodes[parent_id];
-            parent.children.retain(|id| *id != node_id);
+            parent.children.remove_id(node_id);
         }
 
         node

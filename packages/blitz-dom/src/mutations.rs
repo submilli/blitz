@@ -151,7 +151,7 @@ impl BaseDocument {
     ) -> Option<(NodeId, Option<NodeId>, Option<NodeId>)> {
         let parent = self.nodes[node].parent?;
         let siblings = &self.nodes[parent].children;
-        let i = siblings.iter().position(|&c| c == node)?;
+        let i = siblings.position(node)?;
         let previous = i.checked_sub(1).map(|j| siblings[j]);
         Some((parent, previous, siblings.get(i + 1).copied()))
     }

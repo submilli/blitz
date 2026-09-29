@@ -20,7 +20,7 @@ pub(super) fn collect_list_item_children(
     reversed: bool,
     node_id: NodeId,
 ) {
-    let mut children = doc.nodes[node_id].children.clone();
+    let mut children = doc.nodes[node_id].children.to_vec();
     if reversed {
         children.reverse();
     }

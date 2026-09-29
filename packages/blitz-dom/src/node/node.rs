@@ -122,7 +122,7 @@ pub struct Node {
     /// Our parent's ID
     pub parent: Option<NodeId>,
     // What are our children?
-    pub children: ThinVec<NodeId>,
+    pub children: super::Children,
     /// Our parent in the layout hierachy: a separate list that includes anonymous collections of inline elements
     pub layout_parent: Cell<Option<NodeId>>,
     /// A separate child list that includes anonymous collections of inline elements
@@ -449,7 +449,7 @@ impl Node {
 
             id,
             parent: None,
-            children: ThinVec::new(),
+            children: super::Children::default(),
             layout_parent: Cell::new(None),
             oof_containing_block: Cell::new(None),
             layout_children: RefCell::new(None),
@@ -1060,28 +1060,25 @@ impl Node {
 
     // Get the index of the current node in the parents child list
     pub fn index_of_child(&self, child_id: NodeId) -> Option<usize> {
-        self.children.iter().position(|id| *id == child_id)
+        self.children.position(child_id)
     }
 
     // Get the index of the current node in the parents child list
     pub fn child_index(&self) -> Option<usize> {
-        self.tree()[self.parent?]
-            .children
-            .iter()
-            .position(|id| *id == self.id)
+        self.tree()[self.parent?].children.position(self.id)
     }
 
     // Get the nth node in the parents child list
     pub fn forward(&self, n: usize) -> Option<&Node> {
-        let child_idx = self.child_index().unwrap_or(0);
+        let child_idx = self.child_index()?;
         self.tree()[self.parent?]
             .children
-            .get(child_idx + n)
+            .get(child_idx.checked_add(n)?)
             .map(|id| self.with(*id))
     }
 
     pub fn backward(&self, n: usize) -> Option<&Node> {
-        let child_idx = self.child_index().unwrap_or(0);
+        let child_idx = self.child_index()?;
         if child_idx < n {
             return None;
         }

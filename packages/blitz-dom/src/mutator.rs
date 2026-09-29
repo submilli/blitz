@@ -117,7 +117,7 @@ impl DocumentMutator<'_> {
     }
 
     pub fn child_ids(&self, node_id: NodeId) -> ThinVec<NodeId> {
-        self.doc.nodes[node_id].children.clone()
+        self.doc.nodes[node_id].children.iter().copied().collect()
     }
 
     pub fn element_name(&self, node_id: NodeId) -> Option<&QualName> {
@@ -662,9 +662,7 @@ impl DocumentMutator<'_> {
         let Some(parent_id) = self.unlink(node_id) else {
             return;
         };
-        self.doc.nodes[parent_id]
-            .children
-            .retain(|id| *id != node_id);
+        self.doc.nodes[parent_id].children.remove_id(node_id);
         self.detached_from(parent_id);
     }
 
@@ -744,7 +742,7 @@ impl DocumentMutator<'_> {
                 parent.mark_ancestors_dirty();
             }
 
-            parent.children.retain(|id| *id != node_id);
+            parent.children.remove_id(node_id);
             self.maybe_record_node(parent_id);
         }
 
@@ -806,9 +804,7 @@ impl DocumentMutator<'_> {
         let parent_id = self.doc.nodes[anchor_node_id].parent.unwrap();
         self.add_children_to_parent(parent_id, new_node_ids, &|parent, child_ids| {
             let node_child_idx = parent.index_of_child(anchor_node_id).unwrap();
-            parent
-                .children
-                .splice(node_child_idx..node_child_idx, child_ids.iter().copied());
+            parent.children.insert_slice(node_child_idx, child_ids);
         });
     }
 
@@ -865,7 +861,7 @@ impl DocumentMutator<'_> {
 
             if recording {
                 // Each record names the siblings as they are at its removal.
-                old_parent.children.retain(|id| *id != child_id);
+                old_parent.children.remove_id(child_id);
             } else {
                 detached.entry(old_parent_id).or_default().insert(child_id);
             }
@@ -931,7 +927,7 @@ impl DocumentMutator<'_> {
 
         if self.doc.is_recording_mutations() && !child_ids.is_empty() {
             let siblings = &self.doc.nodes[parent_id].children;
-            if let Some(first) = siblings.iter().position(|&c| c == child_ids[0]) {
+            if let Some(first) = siblings.position(child_ids[0]) {
                 let previous_sibling = first.checked_sub(1).map(|i| siblings[i]);
                 let next_sibling = siblings.get(first + child_ids.len()).copied();
                 self.doc.record_mutation(MutationRecord::ChildList {
