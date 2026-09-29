@@ -223,6 +223,8 @@ impl crate::document::BaseDocument {
         };
         let styles = resolve_style(&mut context, node, RuleInclusion::All, None, None);
 
+        // Dropping the context drains sequential style tasks, which require LAYOUT.
+        drop(thread_local);
         style::thread_state::exit(ThreadState::LAYOUT);
 
         Some(styles.primary().clone())
