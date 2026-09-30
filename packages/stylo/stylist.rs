@@ -4040,6 +4040,15 @@ impl CascadeData {
                     let has_nested_rules = style_rule.rules.is_some();
                     let mut replaced_selectors = ReplacedSelectors::new();
                     let ancestor_selectors = containing_rule_state.ancestor_selector_lists.last();
+                    // Check expanded selectors before hashing, invalidation or registration.
+                    // Reject the entire subtree rather than broadening a rejected parent.
+                    let expanded = match ancestor_selectors {
+                        Some(parent) => style_rule.selectors.replace_parent_selector(parent),
+                        None => style_rule.selectors.clone(),
+                    };
+                    if !crate::selector_limits::allowed(&expanded) {
+                        continue;
+                    }
                     let collect_replaced_selectors =
                         has_nested_rules && ancestor_selectors.is_some();
                     let mut inner_dependencies: Option<Vec<Dependency>> = containing_rule_state
@@ -4340,6 +4349,22 @@ impl CascadeData {
                         .insert(RuleCascadeFlags::APPEARANCE_BASE);
                 },
                 CssRule::Scope(ref rule) => {
+                    let start = rule.bounds.start.as_ref().map(|selector| {
+                        match containing_rule_state.ancestor_selector_lists.last() {
+                            Some(parent) => selector.replace_parent_selector(parent),
+                            None => selector.clone(),
+                        }
+                    });
+                    let implicit_scope_selector = &*IMPLICIT_SCOPE;
+                    let end = rule.bounds.end.as_ref().map(|selector| {
+                        selector.replace_parent_selector(implicit_scope_selector)
+                    });
+                    if start.iter().chain(end.iter()).any(|list| {
+                        !crate::selector_limits::allowed(list)
+                    }) {
+                        containing_rule_state.restore(&saved_containing_rule_state);
+                        continue;
+                    }
                     containing_rule_state.nested_declarations_context =
                         NestedDeclarationsContext::Scope;
                     let id = ScopeConditionId(self.scope_conditions.len() as u16);
@@ -4376,23 +4401,10 @@ impl CascadeData {
                         }
                     };
 
-                    let replaced =
-                        {
-                            let start = rule.bounds.start.as_ref().map(|selector| {
-                                match containing_rule_state.ancestor_selector_lists.last() {
-                                    Some(s) => selector.replace_parent_selector(s),
-                                    None => selector.clone(),
-                                }
-                            });
-                            let implicit_scope_selector = &*IMPLICIT_SCOPE;
-                            let end = rule.bounds.end.as_ref().map(|selector| {
-                                selector.replace_parent_selector(implicit_scope_selector)
-                            });
-                            containing_rule_state
-                                .ancestor_selector_lists
-                                .push(implicit_scope_selector.clone());
-                            ScopeBoundsWithHashes::new(quirks_mode, start, end)
-                        };
+                    containing_rule_state
+                        .ancestor_selector_lists
+                        .push(implicit_scope_selector.clone());
+                    let replaced = ScopeBoundsWithHashes::new(quirks_mode, start, end);
 
                     if let Some(selectors) = replaced.start.as_ref() {
                         self.scope_subject_map

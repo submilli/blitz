@@ -7,4 +7,11 @@ dependency traversal must reject page-created recursion before it can overflow
 the browser guest's fixed 8 MiB stack.
 
 Apart from this notice and the included MPL 2.0 license text, the fork changes
-only `custom_properties.rs` and `properties/cascade.rs` from that release.
+`custom_properties.rs` and `properties/cascade.rs` from that release. SUB-1080
+also adds `selector_limits.rs`, registers it in `lib.rs`, and guards DOM query
+entrypoints in `dom_apis.rs` and expanded style/scope registration in `stylist.rs`.
+The selector admission walk allows at most two combinator-bearing search levels,
+128 nested AST levels and 4096 component visits per list. nth-of sibling searches
+also consume a search level. Rejected DOM raw queries return no match; Blitz's
+string queries return a parse error. Rejected stylesheet rules/scopes do not
+participate in matching, including their nested children.

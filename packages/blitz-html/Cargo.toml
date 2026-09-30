@@ -31,3 +31,7 @@ tracing = { workspace = true, optional = true }
 blitz-dom = { workspace = true, features = ["svg", "woff", "accessibility"] }
 keyboard-types = { workspace = true }
 accesskit = { workspace = true }
+
+# Exercise raw selector AST admission independently of Blitz string parsing.
+style = { workspace = true }
+style_config = { workspace = true }

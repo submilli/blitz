@@ -233,7 +233,14 @@ impl BaseDocument {
             });
         }
         let url_extra_data = self.url.url_extra_data();
-        SelectorParser::parse_author_origin_no_namespace(input, &url_extra_data)
+        let selectors = SelectorParser::parse_author_origin_no_namespace(input, &url_extra_data)?;
+        if !style::selector_limits::allowed(&selectors) {
+            return Err(ParseError {
+                kind: ParseErrorKind::Custom(StyleParseErrorKind::UnspecifiedError),
+                location: SourceLocation { line: 0, column: 1 },
+            });
+        }
+        Ok(selectors)
     }
 }
 

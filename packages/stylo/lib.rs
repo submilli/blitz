@@ -100,6 +100,7 @@ pub mod rule_cache;
 pub mod rule_collector;
 pub mod rule_tree;
 pub mod scoped_tls;
+pub mod selector_limits;
 pub mod selector_map;
 pub mod selector_parser;
 pub mod shared_lock;

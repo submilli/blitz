@@ -983,6 +983,8 @@ dependencies = [
  "blitz-traits",
  "html5ever",
  "keyboard-types 0.7.0",
+ "stylo",
+ "stylo_static_prefs",
  "tracing",
  "xml5ever",
 ]

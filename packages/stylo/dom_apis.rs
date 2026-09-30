@@ -33,6 +33,9 @@ pub fn element_matches<E>(
 where
     E: Element,
 {
+    if !crate::selector_limits::allowed(selector_list) {
+        return false;
+    }
     let mut selector_caches = SelectorCaches::default();
 
     let mut context = MatchingContext::new(
@@ -57,6 +60,9 @@ pub fn element_closest<E>(
 where
     E: Element,
 {
+    if !crate::selector_limits::allowed(selector_list) {
+        return None;
+    }
     let mut selector_caches = SelectorCaches::default();
 
     let mut context = MatchingContext::new(
@@ -872,6 +878,9 @@ pub fn query_selector<E, Q>(
 {
     use crate::invalidation::element::invalidator::TreeStyleInvalidator;
 
+    if !crate::selector_limits::allowed(selector_list) {
+        return;
+    }
     let mut selector_caches = SelectorCaches::default();
     let quirks_mode = root.owner_doc().quirks_mode();
 
