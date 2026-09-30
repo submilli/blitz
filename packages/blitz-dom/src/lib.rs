@@ -49,6 +49,7 @@ mod config;
 /// CSSOM stylesheet access (`document.styleSheets`, `CSSStyleSheet`, `CSSRule`)
 mod cssom;
 mod debug;
+mod dom_string;
 mod events;
 mod font_metrics;
 mod form;
@@ -66,6 +67,7 @@ mod resolved_style;
 mod scrolling;
 mod selection;
 mod serialize;
+pub use dom_string::DomString;
 /// Implementations that interact with servo's style engine
 mod stylo;
 mod stylo_device;

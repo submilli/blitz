@@ -583,7 +583,11 @@ impl Node {
 
     pub fn is_whitespace_node(&self) -> bool {
         match &self.data {
-            NodeData::Text(data) => data.content.chars().all(|c| c.is_ascii_whitespace()),
+            NodeData::Text(data) => data
+                .content
+                .as_str_lossy()
+                .chars()
+                .all(|c| c.is_ascii_whitespace()),
             _ => false,
         }
     }
@@ -597,7 +601,12 @@ impl Node {
         if data.content.is_empty() {
             return true;
         }
-        if !data.content.chars().all(|c| c.is_ascii_whitespace()) {
+        if !data
+            .content
+            .as_str_lossy()
+            .chars()
+            .all(|c| c.is_ascii_whitespace())
+        {
             return false;
         }
         let white_space_collapse = self
@@ -606,7 +615,7 @@ impl Node {
             .map(|style| style.clone_white_space_collapse());
         match white_space_collapse {
             Some(WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces) => false,
-            Some(WhiteSpaceCollapse::PreserveBreaks) => !data.content.contains('\n'),
+            Some(WhiteSpaceCollapse::PreserveBreaks) => !data.content.as_str_lossy().contains('\n'),
             Some(WhiteSpaceCollapse::Collapse) | None => true,
         }
     }
@@ -925,7 +934,7 @@ pub enum NodeData {
     /// A comment.
     Comment {
         /// The textual content of the comment
-        contents: String,
+        contents: crate::DomString,
     },
 
     /// A `DocumentFragment`: a parentless container whose children are moved
@@ -942,7 +951,10 @@ pub enum NodeData {
 
     /// A processing instruction (`<?target contents?>`), as produced by the
     /// XML parser. The HTML parser turns these into comments.
-    ProcessingInstruction { target: String, contents: String },
+    ProcessingInstruction {
+        target: String,
+        contents: crate::DomString,
+    },
 }
 
 impl NodeData {
@@ -999,12 +1011,14 @@ impl NodeData {
 #[derive(Debug, Clone)]
 pub struct TextNodeData {
     /// The textual content of the text node
-    pub content: String,
+    pub content: crate::DomString,
 }
 
 impl TextNodeData {
-    pub fn new(content: String) -> Self {
-        Self { content }
+    pub fn new(content: impl Into<crate::DomString>) -> Self {
+        Self {
+            content: content.into(),
+        }
     }
 }
 
@@ -1138,7 +1152,7 @@ impl Node {
             NodeData::Document(_) => write!(s, "DOCUMENT"),
             // NodeData::Doctype { name, .. } => write!(s, "DOCTYPE {name}"),
             NodeData::Text(data) => {
-                let bytes = data.content.as_bytes();
+                let bytes = data.content.as_str_lossy().as_bytes();
                 write!(
                     s,
                     "TEXT {}",
@@ -1176,15 +1190,24 @@ impl Node {
 
     /// Serializes this node and its descendants per the HTML fragment
     /// serialization algorithm (the `outerHTML` getter).
-    pub fn outer_html(&self) -> String {
+    pub fn outer_html_dom(&self) -> crate::DomString {
         crate::serialize::outer_html(self)
     }
 
-    /// Serializes this node's children per the HTML fragment serialization
-    /// algorithm (the `innerHTML` getter). For `<template>` this serializes
-    /// the template contents.
-    pub fn inner_html(&self) -> String {
+    /// Lossless DOMString serialization of children (template contents for templates).
+    pub fn inner_html_dom(&self) -> crate::DomString {
         crate::serialize::inner_html(self)
+    }
+
+    /// Scalar UTF-8 markup for byte consumers; lone surrogates become U+FFFD.
+    pub fn outer_html(&self) -> String {
+        self.outer_html_dom().as_str_lossy().to_owned()
+    }
+
+    /// Scalar UTF-8 serialization of children (template contents for templates).
+    /// Lone surrogates become U+FFFD; DOM getters use `inner_html_dom` instead.
+    pub fn inner_html(&self) -> String {
+        self.inner_html_dom().as_str_lossy().to_owned()
     }
 
     /// XML-flavoured markup (self-closing empty elements, `currentColor`
@@ -1243,7 +1266,7 @@ impl Node {
                         writer.push_str(INDENT);
                     }
                 }
-                writer.push_str(data.content.as_str());
+                writer.push_str(data.content.as_str_lossy());
                 if matches!(style, OutputStyle::Pretty) {
                     writer.push('\n');
                 }
@@ -1367,18 +1390,18 @@ impl Node {
     /// It walks with an explicit stack, so a deep tree cannot overflow the
     /// native stack.
     pub fn text_content(&self) -> String {
-        let mut out = String::new();
+        let mut out = crate::DomString::new();
         let mut stack = vec![self];
         while let Some(node) = stack.pop() {
             match &node.data {
-                NodeData::Text(data) => out.push_str(&data.content),
+                NodeData::Text(data) => out.push_dom(&data.content),
                 NodeData::Element(..) | NodeData::AnonymousBlock(..) => {
                     stack.extend(node.children.iter().rev().map(|&child| node.with(child)));
                 }
                 _ => {}
             }
         }
-        out
+        out.as_str_lossy().to_owned()
     }
 
     pub fn flush_style_attribute(&mut self, url_extra_data: &UrlExtraData) {

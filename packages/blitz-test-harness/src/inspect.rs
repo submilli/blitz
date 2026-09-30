@@ -153,7 +153,7 @@ fn write_node(out: &mut String, doc: &blitz_dom::BaseDocument, node: &Node, dept
         NodeData::Document(_) => writeln!(out, "#document").unwrap(),
         NodeData::AnonymousBlock(_) => writeln!(out, "#anonymous{geometry}").unwrap(),
         NodeData::Text(data) => {
-            let content = data.content.trim();
+            let content = data.content.as_str_lossy().trim();
             if content.is_empty() {
                 return;
             }

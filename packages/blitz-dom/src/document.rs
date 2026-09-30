@@ -1082,8 +1082,8 @@ impl BaseDocument {
         self.changed_nodes.is_empty()
     }
 
-    pub fn create_text_node(&mut self, text: &str) -> NodeId {
-        let content = text.to_string();
+    pub fn create_text_node(&mut self, text: impl Into<crate::DomString>) -> NodeId {
+        let content = text.into();
         let data = NodeData::Text(TextNodeData::new(content));
         self.create_node(data)
     }

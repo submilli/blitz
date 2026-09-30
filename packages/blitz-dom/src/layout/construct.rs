@@ -842,8 +842,8 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: NodeId) {
             match (existing_text_node_id, new_text) {
                 (Some(text_node_id), Some(new_text)) => {
                     let text_data = doc.nodes[text_node_id].text_data_mut().unwrap();
-                    if text_data.content != new_text {
-                        text_data.content = new_text;
+                    if text_data.content != new_text.as_str() {
+                        text_data.content = new_text.into();
                         doc.nodes[node_id].insert_damage(ALL_DAMAGE);
                     }
                 }
@@ -1425,13 +1425,13 @@ pub(crate) fn build_inline_layout_into(
                 // TODO: optimize case transforms to be non-allocating
                 match parent_text_transform {
                     TextTransform::UPPERCASE => {
-                        builder.push_text(&data.content.to_uppercase());
+                        builder.push_text(&data.content.as_str_lossy().to_uppercase());
                     }
                     TextTransform::LOWERCASE => {
-                        builder.push_text(&data.content.to_lowercase());
+                        builder.push_text(&data.content.as_str_lossy().to_lowercase());
                     }
                     _ => {
-                        builder.push_text(&data.content);
+                        builder.push_text(data.content.as_str_lossy());
                     }
                 }
             }

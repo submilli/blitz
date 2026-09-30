@@ -807,7 +807,7 @@ pub(crate) fn handle_click(
                     let text_data = doc.nodes[child_text_id]
                         .text_data_mut()
                         .expect("Text data not found");
-                    text_data.content = text_content;
+                    text_data.content = text_content.into();
                 }
                 _ => {}
             }

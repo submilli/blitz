@@ -6,6 +6,7 @@
 
 use markup5ever::{local_name, ns};
 
+use crate::DomString;
 use crate::node::{Node, NodeData};
 
 /// Elements whose start tag is serialized without children or an end tag.
@@ -51,15 +52,15 @@ fn is_raw_text_parent(name: &markup5ever::LocalName) -> bool {
 
 /// `innerHTML`: serialize the children of `node` (the template contents for
 /// a `<template>` element).
-pub fn inner_html(node: &Node) -> String {
+pub fn inner_html(node: &Node) -> DomString {
     let mut steps = Vec::new();
     push_children(node, &mut steps);
-    write_steps(steps, String::new())
+    write_steps(steps, DomString::new())
 }
 
 /// `outerHTML`: serialize `node` itself followed by its descendants.
-pub fn outer_html(node: &Node) -> String {
-    write_steps(vec![Step::Node(node)], String::new())
+pub fn outer_html(node: &Node) -> DomString {
+    write_steps(vec![Step::Node(node)], DomString::new())
 }
 
 /// Serialization work still to do, popped from the end: a node to write,
@@ -70,7 +71,7 @@ enum Step<'a> {
     EndTag(String),
 }
 
-fn write_steps(mut steps: Vec<Step<'_>>, mut out: String) -> String {
+fn write_steps(mut steps: Vec<Step<'_>>, mut out: DomString) -> DomString {
     while let Some(step) = steps.pop() {
         match step {
             Step::Node(node) => write_node(node, &mut steps, &mut out),
@@ -96,7 +97,7 @@ fn push_children<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>) {
 }
 
 /// Write `node`'s own markup, and queue its children and end tag.
-fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut String) {
+fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut DomString) {
     match &node.data {
         NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
             // AnonymousBlocks are layout artefacts, not part of the DOM.
@@ -127,21 +128,21 @@ fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut String) {
                 .and_then(|p| node.tree()[p].element_data())
                 .is_some_and(|el| el.name.ns == ns!(html) && is_raw_text_parent(&el.name.local));
             if raw {
-                out.push_str(&text.content);
+                out.push_dom(&text.content);
             } else {
-                escape(&text.content, false, out);
+                escape_text(&text.content, out);
             }
         }
         NodeData::Comment { contents } => {
             out.push_str("<!--");
-            out.push_str(contents);
+            out.push_dom(contents);
             out.push_str("-->");
         }
         NodeData::ProcessingInstruction { target, contents } => {
             out.push_str("<?");
             out.push_str(target);
             out.push(' ');
-            out.push_str(contents);
+            out.push_dom(contents);
             out.push('>');
         }
         NodeData::Doctype { name, .. } => {
@@ -166,7 +167,7 @@ fn qualified_tag_name(name: &markup5ever::QualName) -> String {
     }
 }
 
-fn write_attribute_name(name: &markup5ever::QualName, out: &mut String) {
+fn write_attribute_name(name: &markup5ever::QualName, out: &mut DomString) {
     if name.ns == ns!() {
         out.push_str(&name.local);
     } else if name.ns == ns!(xml) {
@@ -191,7 +192,7 @@ fn write_attribute_name(name: &markup5ever::QualName, out: &mut String) {
 
 /// "Escaping a string": `&`, U+00A0, and either `"` (attribute mode) or
 /// `<` and `>` (text mode).
-fn escape(s: &str, attribute_mode: bool, out: &mut String) {
+fn escape(s: &str, attribute_mode: bool, out: &mut DomString) {
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
@@ -202,4 +203,23 @@ fn escape(s: &str, attribute_mode: bool, out: &mut String) {
             c => out.push(c),
         }
     }
+}
+
+/// Escape markup characters while copying every other UTF-16 code unit verbatim.
+fn escape_text(text: &DomString, out: &mut DomString) {
+    let units = text.to_utf16();
+    let mut start = 0;
+    for (i, &unit) in units.iter().enumerate() {
+        let escaped = match unit {
+            38 => "&amp;",
+            160 => "&nbsp;",
+            60 => "&lt;",
+            62 => "&gt;",
+            _ => continue,
+        };
+        out.push_units(&units[start..i]);
+        out.push_str(escaped);
+        start = i + 1;
+    }
+    out.push_units(&units[start..]);
 }

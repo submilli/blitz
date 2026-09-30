@@ -23,7 +23,7 @@ pub enum MutationRecord {
     },
     CharacterData {
         target: NodeId,
-        old_value: String,
+        old_value: crate::DomString,
     },
 }
 
@@ -42,7 +42,7 @@ impl MutationRecord {
                 .len()
                 .saturating_add(namespace.as_ref().map_or(0, String::len))
                 .saturating_add(old_value.as_ref().map_or(0, String::len)),
-            Self::CharacterData { old_value, .. } => old_value.len(),
+            Self::CharacterData { old_value, .. } => old_value.retained_bytes(),
         }
     }
 
@@ -163,7 +163,7 @@ mod bounds_tests {
     fn record(target: NodeId) -> MutationRecord {
         MutationRecord::CharacterData {
             target,
-            old_value: String::new(),
+            old_value: String::new().into(),
         }
     }
     #[test]
@@ -193,7 +193,7 @@ mod bounds_tests {
         let target = doc.root_node().id;
         doc.record_mutation(MutationRecord::CharacterData {
             target,
-            old_value: "x".repeat(16 * 1024 * 1024),
+            old_value: "x".repeat(16 * 1024 * 1024).into(),
         });
         assert!(doc.mutation_recording_overflowed());
         assert!(doc.take_logged_mutations().is_empty());

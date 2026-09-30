@@ -135,9 +135,9 @@ impl DocumentMutator<'_> {
 
     // Node creation methods
 
-    pub fn create_comment_node(&mut self, contents: &str) -> NodeId {
+    pub fn create_comment_node(&mut self, contents: impl Into<crate::DomString>) -> NodeId {
         self.doc.create_node(NodeData::Comment {
-            contents: contents.to_string(),
+            contents: contents.into(),
         })
     }
 
@@ -160,14 +160,18 @@ impl DocumentMutator<'_> {
         })
     }
 
-    pub fn create_processing_instruction(&mut self, target: &str, contents: &str) -> NodeId {
+    pub fn create_processing_instruction(
+        &mut self,
+        target: &str,
+        contents: impl Into<crate::DomString>,
+    ) -> NodeId {
         self.doc.create_node(NodeData::ProcessingInstruction {
             target: target.to_string(),
-            contents: contents.to_string(),
+            contents: contents.into(),
         })
     }
 
-    pub fn create_text_node(&mut self, text: &str) -> NodeId {
+    pub fn create_text_node(&mut self, text: impl Into<crate::DomString>) -> NodeId {
         self.doc.create_text_node(text)
     }
 
@@ -229,7 +233,8 @@ impl DocumentMutator<'_> {
 
     // Node mutation methods
 
-    pub fn set_node_text(&mut self, node_id: NodeId, value: &str) {
+    pub fn set_node_text(&mut self, node_id: NodeId, value: impl Into<crate::DomString>) {
+        let value = value.into();
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if let NodeData::Text(text) = &self.doc.nodes[node_id].data {
             let old_value = text.content.clone();
@@ -249,8 +254,7 @@ impl DocumentMutator<'_> {
         let changed = text.content != value;
         if changed {
             self.mutations_occurred |= node_is_in_document;
-            text.content.clear();
-            text.content.push_str(value);
+            text.content = value;
             node.insert_damage(ALL_DAMAGE);
             // Mark ancestors dirty so the style traversal visits this subtree.
             // Without this, the traversal may skip nodes with pending damage.
@@ -286,7 +290,7 @@ impl DocumentMutator<'_> {
         node.mark_ancestors_dirty();
         match node.text_data_mut() {
             Some(data) => {
-                data.content += text;
+                data.content.push_str(text);
                 self.mutations_occurred |= node_is_in_document;
                 // A `<style>` (or `<title>`) whose text grew must be
                 // re-processed; the parser appends long text in chunks.

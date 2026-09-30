@@ -335,11 +335,11 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
     }
 
     fn create_comment(&self, text: StrTendril) -> Self::Handle {
-        self.with(|m| m.create_comment_node(&text))
+        self.with(|m| m.create_comment_node(text.as_ref()))
     }
 
     fn create_pi(&self, target: StrTendril, data: StrTendril) -> Self::Handle {
-        self.with(|m| m.create_processing_instruction(&target, &data))
+        self.with(|m| m.create_processing_instruction(&target, data.as_ref()))
     }
 
     fn append(&self, parent_id: &Self::Handle, child: NodeOrText<Self::Handle>) {
@@ -355,7 +355,7 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
                     false
                 };
                 if !has_appended {
-                    let new_child_id = m.create_text_node(&text);
+                    let new_child_id = m.create_text_node(text.as_ref());
                     m.append_children(*parent_id, &[new_child_id]);
                 }
             }),
@@ -377,7 +377,7 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
                     false
                 };
                 if !has_appended {
-                    let new_child_id = m.create_text_node(&text);
+                    let new_child_id = m.create_text_node(text.as_ref());
                     m.insert_nodes_before(*sibling_id, &[new_child_id]);
                 }
             }),

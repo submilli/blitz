@@ -133,6 +133,12 @@ impl BaseDocument {
 
     /// The data of a `CharacterData` node (Text, Comment, ProcessingInstruction).
     pub fn character_data(&self, id: NodeId) -> Option<&str> {
+        self.character_data_dom(id)
+            .map(crate::DomString::as_str_lossy)
+    }
+
+    /// Original character data, including lone UTF-16 surrogates.
+    pub fn character_data_dom(&self, id: NodeId) -> Option<&crate::DomString> {
         match &self.nodes[id].data {
             NodeData::Text(t) => Some(&t.content),
             NodeData::Comment { contents } => Some(contents),
@@ -143,13 +149,19 @@ impl BaseDocument {
 
     /// `Node.textContent` getter. `None` (JS `null`) for documents and doctypes.
     pub fn text_content_of(&self, id: NodeId) -> Option<String> {
+        self.text_content_dom(id)
+            .map(|s| s.as_str_lossy().to_owned())
+    }
+
+    /// DOMString textContent without scalar-value conversion.
+    pub fn text_content_dom(&self, id: NodeId) -> Option<crate::DomString> {
         match &self.nodes[id].data {
             NodeData::Document(_) | NodeData::Doctype { .. } => None,
             NodeData::Text(_)
             | NodeData::Comment { .. }
-            | NodeData::ProcessingInstruction { .. } => self.character_data(id).map(str::to_string),
+            | NodeData::ProcessingInstruction { .. } => self.character_data_dom(id).cloned(),
             _ => {
-                let mut out = String::new();
+                let mut out = crate::DomString::new();
                 self.collect_descendant_text(id, &mut out);
                 Some(out)
             }
@@ -159,11 +171,11 @@ impl BaseDocument {
     /// Append the data of `id`'s descendant Text nodes, in tree order,
     /// walking with an explicit stack so a deep tree cannot overflow the
     /// native stack.
-    fn collect_descendant_text(&self, id: NodeId, out: &mut String) {
+    fn collect_descendant_text(&self, id: NodeId, out: &mut crate::DomString) {
         let mut stack: Vec<NodeId> = self.nodes[id].children.iter().rev().copied().collect();
         while let Some(node) = stack.pop() {
             match &self.nodes[node].data {
-                NodeData::Text(t) => out.push_str(&t.content),
+                NodeData::Text(t) => out.push_dom(&t.content),
                 NodeData::Element(_) | NodeData::AnonymousBlock(_) => {
                     stack.extend(self.nodes[node].children.iter().rev().copied());
                 }
@@ -769,10 +781,11 @@ impl DocumentMutator<'_> {
     }
 
     /// `Node.textContent` setter.
-    pub fn set_text_content(&mut self, id: NodeId, value: &str) {
+    pub fn set_text_content(&mut self, id: NodeId, value: impl Into<crate::DomString>) {
+        let value = value.into();
         match self.doc.node_type(id) {
             node_type::ELEMENT | node_type::DOCUMENT_FRAGMENT => {
-                let text = (!value.is_empty()).then(|| self.create_text_node(value));
+                let text = (!value.is_empty()).then(|| self.create_text_node(&value));
                 self.replace_all(id, text);
             }
             node_type::TEXT | node_type::COMMENT | node_type::PROCESSING_INSTRUCTION => {
@@ -783,7 +796,8 @@ impl DocumentMutator<'_> {
     }
 
     /// Replace the data of a Text, Comment or ProcessingInstruction node.
-    pub fn set_character_data(&mut self, id: NodeId, value: &str) {
+    pub fn set_character_data(&mut self, id: NodeId, value: impl Into<crate::DomString>) {
+        let value = value.into();
         if matches!(self.doc.nodes[id].data, NodeData::Text(_)) {
             // Text changes affect layout, which set_node_text takes care of.
             self.set_node_text(id, value);
@@ -803,7 +817,7 @@ impl DocumentMutator<'_> {
         if let NodeData::Comment { contents } | NodeData::ProcessingInstruction { contents, .. } =
             &mut self.doc.nodes[id].data
         {
-            *contents = value.to_string();
+            *contents = value;
         }
     }
 

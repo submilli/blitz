@@ -105,7 +105,12 @@ impl Point<f64> {
 pub fn walk_tree(indent: usize, node: &Node) {
     // Skip all-whitespace text nodes entirely
     if let NodeData::Text(data) = &node.data {
-        if data.content.chars().all(|c| c.is_ascii_whitespace()) {
+        if data
+            .content
+            .as_str_lossy()
+            .chars()
+            .all(|c| c.is_ascii_whitespace())
+        {
             return;
         }
     }
@@ -116,10 +121,15 @@ pub fn walk_tree(indent: usize, node: &Node) {
         NodeData::Document(_) => println!("#Document {id}"),
 
         NodeData::Text(data) => {
-            if data.content.chars().all(|c| c.is_ascii_whitespace()) {
+            if data
+                .content
+                .as_str_lossy()
+                .chars()
+                .all(|c| c.is_ascii_whitespace())
+            {
                 println!("{id} #text: <whitespace>");
             } else {
-                let content = data.content.trim();
+                let content = data.content.as_str_lossy().trim();
                 if content.len() > 10 {
                     println!(
                         "#text {id}: {}...",
@@ -129,7 +139,10 @@ pub fn walk_tree(indent: usize, node: &Node) {
                             .escape_default()
                     )
                 } else {
-                    println!("#text {id}: {}", data.content.trim().escape_default())
+                    println!(
+                        "#text {id}: {}",
+                        data.content.as_str_lossy().trim().escape_default()
+                    )
                 }
             }
         }
