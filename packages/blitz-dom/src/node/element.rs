@@ -708,7 +708,7 @@ impl ElementData {
     pub fn flush_style_attribute(&mut self, guard: &SharedRwLock, url_extra_data: &UrlExtraData) {
         self.style_attribute = self.attr(local_name!("style")).map(|style_str| {
             ServoArc::new(guard.wrap(parse_style_attribute(
-                style_str,
+                crate::css_limits::bounded(style_str),
                 url_extra_data,
                 None,
                 QuirksMode::NoQuirks,
@@ -724,6 +724,9 @@ impl ElementData {
         guard: &SharedRwLock,
         url_extra_data: UrlExtraData,
     ) -> bool {
+        if !crate::css_limits::allowed(value) {
+            return false;
+        }
         let context = ParserContext::new(
             Origin::Author,
             &url_extra_data,

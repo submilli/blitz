@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use blitz_traits::node_id::NodeId;
-use cssparser::{ParseErrorKind, Parser, ParserInput, SourceLocation, Token};
+use cssparser::{ParseErrorKind, SourceLocation};
 use selectors::SelectorList;
 use smallvec::SmallVec;
 use style::dom::{TDocument, TNode};
@@ -226,7 +226,7 @@ impl BaseDocument {
         &self,
         input: &'input str,
     ) -> Result<SelectorList<SelectorImpl>, ParseError<'input>> {
-        if nesting_exceeds(input, MAX_SELECTOR_NESTING) {
+        if crate::css_limits::nesting_exceeds(input, MAX_SELECTOR_NESTING) {
             return Err(ParseError {
                 kind: ParseErrorKind::Custom(StyleParseErrorKind::UnspecifiedError),
                 location: SourceLocation { line: 0, column: 1 },
@@ -243,46 +243,7 @@ impl BaseDocument {
 /// overflow an 8 MiB stack (between 2,000 and 5,000 in an optimized native
 /// build), so a page's `querySelector` could abort the process. Real
 /// selectors nest a handful of levels.
-pub const MAX_SELECTOR_NESTING: usize = 128;
-
-/// Whether `css` nests blocks (functions, parentheses, square and curly
-/// brackets) more than `limit` deep, as cssparser tokenizes it: nothing in
-/// a comment, string or unquoted `url(` counts. The walk recurses at most
-/// `limit` levels; cssparser skips a block it is not asked to enter
-/// without recursing.
-fn nesting_exceeds(css: &str, limit: usize) -> bool {
-    let mut input = ParserInput::new(css);
-    blocks_exceed(&mut Parser::new(&mut input), limit)
-}
-
-/// Whether a block in the rest of `parser`'s input nests more than
-/// `remaining` further levels.
-fn blocks_exceed(parser: &mut Parser<'_, '_>, remaining: usize) -> bool {
-    loop {
-        let opens_block = match parser.next_including_whitespace_and_comments() {
-            Ok(token) => matches!(
-                token,
-                Token::Function(_)
-                    | Token::ParenthesisBlock
-                    | Token::SquareBracketBlock
-                    | Token::CurlyBracketBlock
-            ),
-            Err(_) => return false,
-        };
-        if !opens_block {
-            continue;
-        }
-        if remaining == 0 {
-            return true;
-        }
-        let nested = parser.parse_nested_block(|nested| {
-            Ok::<_, cssparser::ParseError<'_, ()>>(blocks_exceed(nested, remaining - 1))
-        });
-        if nested == Ok(true) {
-            return true;
-        }
-    }
-}
+pub const MAX_SELECTOR_NESTING: usize = crate::css_limits::MAX_CSS_NESTING;
 
 impl Node {
     /// Find the first descendant of this node that matches the selector(s)

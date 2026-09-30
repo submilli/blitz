@@ -546,6 +546,9 @@ impl BaseDocument {
         rule: &str,
         index: usize,
     ) -> Result<usize, CssomError> {
+        if !crate::css_limits::allowed_with_ancestors(rule, path.len()) {
+            return Err(CssomError::Syntax);
+        }
         let sheet = self
             .retained_sheet(handle)
             .ok_or(CssomError::NotFound)?
@@ -861,6 +864,9 @@ impl BaseDocument {
         value: &str,
         important: bool,
     ) -> Result<(), CssomError> {
+        if !crate::css_limits::allowed_with_ancestors(value, path.len()) {
+            return Ok(());
+        }
         if value.trim().is_empty() {
             self.stylesheet_rule_style_remove_property(node_id, path, property)?;
             return Ok(());
@@ -1002,6 +1008,9 @@ impl BaseDocument {
         path: &[usize],
         selectors: &str,
     ) -> Result<(), CssomError> {
+        if !crate::css_limits::allowed_with_ancestors(selectors, path.len()) {
+            return Ok(());
+        }
         let sheet = self
             .nodes_to_stylesheet
             .get(&node_id)
@@ -1086,7 +1095,11 @@ impl BaseDocument {
             return Err(CssomError::NotSupported);
         };
         let new_block = style::properties::declaration_block::parse_style_attribute(
-            css,
+            if crate::css_limits::allowed_with_ancestors(css, path.len()) {
+                css
+            } else {
+                ""
+            },
             &self.url.url_extra_data(),
             None,
             QuirksMode::NoQuirks,

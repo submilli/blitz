@@ -153,7 +153,7 @@ impl NetHandler for ResourceHandler<StylesheetHandler> {
         // let escaped_css = html_escape::decode_html_entities(css);
 
         let sheet = Stylesheet::from_str(
-            css,
+            crate::css_limits::bounded(css),
             self.data.source_url.clone().into(),
             Origin::Author,
             ServoArc::new(self.data.guard.wrap(MediaList::empty())),
@@ -270,7 +270,7 @@ impl NetHandler for ResourceHandler<NestedStylesheetHandler> {
         // let escaped_css = html_escape::decode_html_entities(css);
 
         let sheet = ServoArc::new(Stylesheet::from_str(
-            css,
+            crate::css_limits::bounded(css),
             UrlExtraData(self.data.url.clone()),
             Origin::Author,
             self.data.media.clone(),

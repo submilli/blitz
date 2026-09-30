@@ -55,6 +55,9 @@ impl BaseDocument {
     /// Evaluate a media query list (`matchMedia`) against the document's
     /// current device (viewport, media type).
     pub fn evaluate_media_query(&mut self, query: &str) -> bool {
+        if !crate::css_limits::allowed(query) {
+            return false;
+        }
         use style::media_queries::MediaList;
         use style::parser::ParserContext;
         use style::stylesheets::{CssRuleType, Origin};
@@ -84,6 +87,9 @@ impl BaseDocument {
 
     /// Serialize a media query list as `MediaQueryList.media` does.
     pub fn serialize_media_query(&self, query: &str) -> String {
+        if !crate::css_limits::allowed(query) {
+            return "not all".into();
+        }
         use style::media_queries::MediaList;
         use style::parser::ParserContext;
         use style::stylesheets::{CssRuleType, Origin};

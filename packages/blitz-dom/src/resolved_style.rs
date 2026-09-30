@@ -112,6 +112,9 @@ pub fn css_property_is_supported(name: &str) -> bool {
 /// Returns `None` if the string fails to parse as a transform list or uses
 /// relative lengths (which cannot be resolved without a context).
 pub fn parse_transform_matrix(value: &str) -> Option<([f64; 16], bool)> {
+    if !crate::css_limits::allowed(value) {
+        return None;
+    }
     use style::properties::longhands::transform;
     // Transform lists cannot contain URLs, so any base URL will do
     let url_data = UrlExtraData(ServoArc::new(Url::parse("about:blank").unwrap()));
@@ -162,6 +165,9 @@ impl BaseDocument {
     /// Used by CSSOM APIs (`element.style.setProperty` and friends), which must
     /// ignore invalid declarations.
     pub fn css_declaration_is_valid(&self, property: &str, value: &str) -> bool {
+        if !crate::css_limits::allowed(value) {
+            return false;
+        }
         let Ok(property_id) = PropertyId::parse_enabled_for_all_content(property) else {
             return false;
         };
@@ -184,7 +190,7 @@ impl BaseDocument {
     /// Invalid declarations are dropped (per CSS error recovery).
     fn parse_style_attr_block(&self, style_attr: &str) -> PropertyDeclarationBlock {
         parse_style_attribute(
-            style_attr,
+            crate::css_limits::bounded(style_attr),
             &self.url.url_extra_data(),
             None,
             QuirksMode::NoQuirks,
@@ -247,6 +253,9 @@ impl BaseDocument {
         value: &str,
         important: bool,
     ) -> Option<String> {
+        if !crate::css_limits::allowed(value) {
+            return None;
+        }
         let property_id = PropertyId::parse_enabled_for_all_content(property).ok()?;
         let mut block = self.parse_style_attr_block(style_attr);
 
@@ -311,6 +320,9 @@ impl BaseDocument {
     /// used by the CSSOM `CSS.supports(conditionText)` API. Returns `false`
     /// for unparseable conditions.
     pub fn css_supports_condition(&self, condition: &str) -> bool {
+        if !crate::css_limits::allowed(condition) {
+            return false;
+        }
         let mut input = ParserInput::new(condition);
         let mut parser = Parser::new(&mut input);
         let Ok(condition) = parser.parse_entirely(parse_condition_or_declaration) else {
@@ -342,6 +354,12 @@ impl BaseDocument {
         inherits: bool,
         initial_value: Option<&str>,
     ) -> RegisterCustomPropertyResult {
+        if !crate::css_limits::allowed(syntax) {
+            return RegisterCustomPropertyResult::InvalidSyntax;
+        }
+        if initial_value.is_some_and(|value| !crate::css_limits::allowed(value)) {
+            return RegisterCustomPropertyResult::InvalidInitialValue;
+        }
         let url_data = self.url.url_extra_data();
         let result =
             self.stylist

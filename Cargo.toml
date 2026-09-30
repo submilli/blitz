@@ -27,7 +27,7 @@ members = [
     "examples/wgpu_texture",
     "examples/wasm_hello",
 ]
-exclude = ["sites"]
+exclude = ["sites", "packages/stylo"]
 resolver = "2"
 
 [workspace.package]
@@ -58,7 +58,7 @@ browser-persistence = { path = "./apps/browser/persistence" }
 blitz-test-harness = { path = "./packages/blitz-test-harness" }
 
 # Servo dependencies
-style = { version = "0.21.0", package = "stylo" }
+style = { version = "0.21.0", package = "stylo", path = "./packages/stylo" }
 style_traits = { version = "0.21.0", package = "stylo_traits" }
 style_atoms = { version = "0.21.0", package = "stylo_atoms" }
 style_config = { version = "0.21.0", package = "stylo_static_prefs" }

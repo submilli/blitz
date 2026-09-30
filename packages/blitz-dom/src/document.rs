@@ -1207,7 +1207,7 @@ impl BaseDocument {
 
     pub fn make_stylesheet(&self, css: impl AsRef<str>, origin: Origin) -> DocumentStyleSheet {
         let data = Stylesheet::from_str(
-            css.as_ref(),
+            crate::css_limits::bounded(css.as_ref()),
             self.url.url_extra_data(),
             origin,
             ServoArc::new(self.guard.wrap(MediaList::empty())),
