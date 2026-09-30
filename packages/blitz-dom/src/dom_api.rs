@@ -204,6 +204,18 @@ impl BaseDocument {
         false
     }
 
+    /// DOM host-including ancestry prevents insertion cycles across shadow roots.
+    fn is_host_including_inclusive_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if id == ancestor {
+                return true;
+            }
+            current = self.nodes[id].parent.or_else(|| self.shadow_host_of(id));
+        }
+        false
+    }
+
     /// The root of `node`'s tree (the document, or the top of a detached subtree).
     pub fn tree_root(&self, node: NodeId) -> NodeId {
         let mut id = node;
@@ -242,7 +254,7 @@ impl BaseDocument {
         ) {
             return Err(DomError::HierarchyRequest);
         }
-        if self.is_inclusive_ancestor(node, parent) {
+        if self.is_host_including_inclusive_ancestor(node, parent) {
             return Err(DomError::HierarchyRequest);
         }
         if let Some(child) = child {
@@ -725,7 +737,7 @@ impl DocumentMutator<'_> {
         ) {
             return Err(DomError::HierarchyRequest);
         }
-        if doc.is_inclusive_ancestor(node, parent) {
+        if doc.is_host_including_inclusive_ancestor(node, parent) {
             return Err(DomError::HierarchyRequest);
         }
         if doc.nodes[child].parent != Some(parent) {
@@ -768,7 +780,7 @@ impl DocumentMutator<'_> {
 
     /// Run `f`, which replaces `parent`'s children, recording it as a single
     /// childList record (removed: the old children, added: the new ones).
-    fn with_one_child_list_record(&mut self, parent: NodeId, f: impl FnOnce(&mut Self)) {
+    pub(crate) fn with_one_child_list_record(&mut self, parent: NodeId, f: impl FnOnce(&mut Self)) {
         let Some(log) = self.doc.mutation_log.take() else {
             return f(self);
         };

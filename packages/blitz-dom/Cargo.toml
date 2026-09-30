@@ -73,6 +73,11 @@ linebender_resource_handle = { workspace = true }
 color = { workspace = true }
 kurbo = { workspace = true }
 
+# Unicode casing uses the existing ICU family for contextual and locale-aware CSS transforms.
+icu_casemap = "2.3"
+icu_locale_core = "2.3"
+icu_properties = "2.3"
+
 # Other dependencies
 slotmap = { workspace = true }
 bitflags = { workspace = true }

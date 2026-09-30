@@ -58,6 +58,7 @@ mod form;
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;
+mod inner_text;
 /// Integration of taffy and the DOM.
 mod layout;
 mod mutator;
