@@ -48,7 +48,8 @@ use usvg::fontdb;
 #[cfg(feature = "svg")]
 pub(crate) type SvgFonts = crate::SvgFontDb;
 #[cfg(not(feature = "svg"))]
-pub(crate) type SvgFonts = ();
+#[derive(Clone)]
+pub(crate) struct SvgFonts;
 
 /// SVG fonts for documents whose embedder supplies none: the system fonts
 /// (loaded once per process), or none without the `system-fonts` feature.

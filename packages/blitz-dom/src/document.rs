@@ -495,7 +495,7 @@ impl BaseDocument {
                 .svg_fonts
                 .unwrap_or_else(crate::util::default_svg_fonts),
             #[cfg(not(feature = "svg"))]
-            svg_fonts: (),
+            svg_fonts: crate::util::SvgFonts,
             #[cfg(feature = "parallel-construct")]
             thread_font_contexts: ThreadLocal::new(),
             layout_ctx: parley::LayoutContext::new(),

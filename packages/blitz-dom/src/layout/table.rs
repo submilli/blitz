@@ -45,6 +45,17 @@ pub struct TableContext {
     calc_values: Vec<LengthPercentage>,
 }
 
+impl TableContext {
+    pub(crate) fn references_missing_node(&self, live: &std::collections::HashSet<NodeId>) -> bool {
+        self.cells.iter().any(|cell| !live.contains(&cell.node_id))
+            || self.rows.iter().any(|row| !live.contains(&row.node_id))
+            || self
+                .columns
+                .iter()
+                .any(|column| !live.contains(&column.node_id))
+    }
+}
+
 // #[derive(Debug, Clone, Eq, PartialEq)]
 // pub enum TableItemKind {
 //     Row,

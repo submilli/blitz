@@ -61,8 +61,10 @@ mod layout;
 mod mutator;
 mod node_budget;
 mod node_teardown;
+mod reclamation;
 mod resource_roots;
 pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
+pub use reclamation::NodeReachability;
 mod query_selector;
 mod resolve;
 /// Computation of resolved CSS property values (`getComputedStyle()`)
