@@ -1,4 +1,4 @@
-use crate::Document;
+use crate::{Document, NodeLease};
 use blitz_traits::events::{
     BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData, EventState, Point, PointerCoords,
     UiEvent,
@@ -32,7 +32,7 @@ impl EventHandler for NoopEventHandler {
 pub struct EventDriver<'doc, Handler: EventHandler> {
     doc: &'doc mut dyn Document,
     handler: Handler,
-    queue: VecDeque<DomEvent>,
+    queue: VecDeque<(DomEvent, NodeLease)>,
 }
 
 impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
@@ -66,6 +66,11 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             .unwrap_or_default();
         old_chain.reverse();
         new_chain.reverse();
+        let _continuations: Vec<_> = old_chain
+            .iter()
+            .chain(&new_chain)
+            .map(|&id| doc.lease_node(id))
+            .collect();
 
         // Find the difference in the node chain of the last hovered objected and the newest
         let old_len = old_chain.len();
@@ -151,6 +156,11 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         let mut should_clear_hover = false;
         let mut hover_node_id = doc.hover_node_id;
         let focussed_node_id = doc.focus_node_id;
+        let _input_roots: Vec<_> = hover_node_id
+            .into_iter()
+            .chain(focussed_node_id)
+            .map(|id| doc.lease_node(id))
+            .collect();
         drop(doc);
 
         // Update document input state (hover, focus, active, etc)
@@ -269,7 +279,8 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     }
 
     pub fn handle_dom_event(&mut self, event: DomEvent) {
-        self.queue.push_back(event);
+        let lease = self.doc.inner().lease_node(event.target);
+        self.queue.push_back((event, lease));
         self.process_queue();
     }
 
@@ -281,6 +292,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         make_mouse_data: Option<impl FnOnce(BlitzPointerEvent) -> DomEventData>,
         make_touch_data: impl FnOnce(BlitzPointerEvent) -> DomEventData,
     ) {
+        let _target = self.doc.inner().lease_node(target);
         let mut ptr_event = DomEvent::new(target, make_ptr_data(data.clone()));
         let mut event_state = EventState::default();
         event_state = self.run_handler_event(&mut ptr_event, event_state);
@@ -311,7 +323,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     }
 
     fn process_queue(&mut self) {
-        while let Some(mut event) = self.queue.pop_front() {
+        while let Some((mut event, _target)) = self.queue.pop_front() {
             let event_state = self.run_handler_event(&mut event, EventState::default());
             if !event_state.is_cancelled() {
                 self.run_default_action(&mut event);
@@ -343,6 +355,10 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             vec![event.target]
         };
 
+        let _path: Vec<_> = {
+            let doc = self.doc.inner();
+            chain.iter().map(|&id| doc.lease_node(id)).collect()
+        };
         match &mut event.data {
             DomEventData::PointerMove(data)
             | DomEventData::PointerDown(data)
@@ -383,6 +399,11 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
 
     fn run_default_action(&mut self, event: &mut DomEvent) {
         let mut doc = self.doc.inner_mut();
-        doc.handle_dom_event(event, |new_evt| self.queue.push_back(new_evt));
+        let mut generated = Vec::new();
+        doc.handle_dom_event(event, |new_evt| generated.push(new_evt));
+        for event in generated {
+            let lease = doc.lease_node(event.target);
+            self.queue.push_back((event, lease));
+        }
     }
 }
