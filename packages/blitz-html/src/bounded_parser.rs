@@ -112,7 +112,7 @@ pub(crate) fn parse_xml<A: DocAccess>(
     if tokenizer.sink.0.sink.node_limit_exceeded() {
         Err(blitz_dom::NodeBudgetExceeded)
     } else {
-        Ok(())
+        tokenizer.sink.0.sink.finish_xml()
     }
 }
 

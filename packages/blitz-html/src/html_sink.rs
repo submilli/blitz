@@ -202,6 +202,37 @@ impl<A: DocAccess> HtmlSink<A> {
         self.exhausted.get()
     }
 
+    pub(crate) fn finish_xml(&self) -> Result<(), blitz_dom::NodeBudgetExceeded> {
+        if self.errors.borrow().is_empty() {
+            return Ok(());
+        }
+        self.with(|m| {
+            let document = self.document_node.unwrap_or_else(|| m.doc.root_node().id);
+            let children = m
+                .doc
+                .get_node(document)
+                .expect("parser document remains live")
+                .children
+                .to_vec();
+            for child in children {
+                m.remove_and_drop_node(child);
+            }
+            m.doc.check_node_allocation(2)?;
+            let error = m.try_create_element(
+                QualName::new(
+                    None,
+                    "http://www.mozilla.org/newlayout/xml/parsererror.xml".into(),
+                    "parsererror".into(),
+                ),
+                Vec::new(),
+            )?;
+            let text = m.try_create_text_node("XML parsing error")?;
+            m.append_children(error, &[text]);
+            m.append_children(document, &[error]);
+            Ok(())
+        })
+    }
+
     fn allocate(
         &self,
         create: impl FnOnce(&mut DocumentMutator<'_>) -> Result<NodeId, blitz_dom::NodeBudgetExceeded>,
@@ -290,6 +321,11 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         markup: &str,
         xml: bool,
     ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
+        let metadata = mutr.document_metadata_mut(document);
+        if xml && metadata.document_type.is_html() {
+            metadata.document_type = blitz_dom::DocumentType::Xml;
+        }
+        metadata.quirks = false;
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.document_node = Some(document);
         sink.fragment = true;
@@ -328,6 +364,8 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
     /// information (a `Content-Type` header or an `.xht`/`.xhtml` file extension) should use
     /// this method instead.
     pub fn parse_xml_into_mutator<'a, 'd>(mutr: &'a mut DocumentMutator<'d>, xml: &str) {
+        let root = mutr.doc.root_node().id;
+        mutr.document_metadata_mut(root).document_type = blitz_dom::DocumentType::Xml;
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.is_xml = true;
         let _ = crate::bounded_parser::parse_xml(sink, xml);
@@ -555,6 +593,10 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
 
     fn set_quirks_mode(&self, mode: QuirksMode) {
         self.quirks_mode.set(mode);
+        self.with(|m| {
+            let document = self.document_node.unwrap_or_else(|| m.doc.root_node().id);
+            m.document_metadata_mut(document).quirks = mode == QuirksMode::Quirks;
+        });
     }
 
     fn add_attrs_if_missing(&self, target: &Self::Handle, attrs: Vec<html5ever::Attribute>) {

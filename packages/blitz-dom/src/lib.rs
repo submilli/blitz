@@ -36,7 +36,9 @@ pub mod custom_elements;
 ///
 /// This is the primary entry point for this crate.
 mod document;
+mod document_metadata;
 mod document_ownership;
+pub use document_metadata::{DocumentMetadata, DocumentType};
 pub mod dom_api;
 pub mod dom_events;
 pub mod mutations;

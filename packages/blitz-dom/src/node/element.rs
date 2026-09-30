@@ -226,6 +226,7 @@ impl DocumentData {
 /// carries the same style/layout fields that were previously stored directly on
 /// [`Node`](super::Node).
 pub struct DocumentData {
+    pub metadata: crate::DocumentMetadata,
     pub stylo_element_data: StyloData,
     /// Selector flags deposited here by `apply_selector_flags` when a
     /// `for_parent()` flag is applied while matching the root `<html>` element,
@@ -250,6 +251,7 @@ pub struct DocumentData {
 impl std::fmt::Debug for DocumentData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DocumentData")
+            .field("metadata", &self.metadata)
             .field("stylo_element_data", &self.stylo_element_data)
             .field("guard", &self.guard)
             .field("dirty_descendants", &self.dirty_descendants)
@@ -267,6 +269,7 @@ impl std::fmt::Debug for DocumentData {
 impl DocumentData {
     pub fn new() -> Self {
         Self {
+            metadata: Default::default(),
             stylo_element_data: Default::default(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
             guard: None,
@@ -294,6 +297,7 @@ impl Clone for DocumentData {
         // meaningfully cloneable), matching `ElementData`'s clone semantics.
         Self {
             guard: self.guard.clone(),
+            metadata: self.metadata.clone(),
             ..Self::new()
         }
     }
