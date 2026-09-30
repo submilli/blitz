@@ -39,6 +39,7 @@ mod document;
 pub mod dom_api;
 pub mod dom_events;
 pub mod mutations;
+pub mod tree_notifications;
 
 /// The nodes themsleves, and their data.
 pub mod node;

@@ -674,6 +674,7 @@ impl DocumentMutator<'_> {
     /// leaving the parent's child list to the caller. Returns the old
     /// parent.
     fn unlink(&mut self, node_id: NodeId) -> Option<NodeId> {
+        self.doc.notify_removing(node_id);
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         // Process the subtree *before* severing the parent link so that
         // interaction state referencing removed nodes can retarget to the
@@ -695,9 +696,9 @@ impl DocumentMutator<'_> {
         self.maybe_record_node(parent_id);
     }
 
-    /// Detach every child of `parent` without dropping them, clearing its
-    /// child list once rather than searching it per child, so emptying a
-    /// large list stays linear. It records no mutations: its caller,
+    /// Detach every child without dropping it. Indexed removals preserve the
+    /// topology seen by each notification while keeping the batch linear.
+    /// It records no mutations: its caller,
     /// `replace_all`, records one for the whole replacement.
     pub(crate) fn detach_children(&mut self, parent_id: NodeId) {
         let children = self.doc.nodes[parent_id].children.to_vec();
@@ -706,6 +707,7 @@ impl DocumentMutator<'_> {
         }
         for child_id in children {
             self.unlink(child_id);
+            self.doc.nodes[parent_id].children.remove_id(child_id);
         }
         self.doc.nodes[parent_id].children.clear();
         self.detached_from(parent_id);
@@ -722,6 +724,7 @@ impl DocumentMutator<'_> {
         node_id: NodeId,
         on_drop: &mut dyn FnMut(NodeId),
     ) -> Option<Node> {
+        self.doc.notify_removing(node_id);
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         self.process_removed_subtree(node_id);
 
@@ -769,10 +772,12 @@ impl DocumentMutator<'_> {
             parent.mark_ancestors_dirty();
         }
 
-        let children = mem::take(&mut parent.children);
+        let children = parent.children.to_vec();
         self.mutations_occurred |= parent_is_in_doc && !children.is_empty();
         for child_id in children {
+            self.doc.notify_removing(child_id);
             self.process_removed_subtree(child_id);
+            self.doc.nodes[node_id].children.remove_id(child_id);
             let _ = self.doc.drop_node_ignoring_parent(child_id);
         }
         self.maybe_record_node(node_id);
@@ -829,6 +834,7 @@ impl DocumentMutator<'_> {
         let recording = self.doc.is_recording_mutations();
         let mut detached: HashMap<NodeId, HashSet<NodeId>> = HashMap::new();
         for child_id in child_ids.iter().copied() {
+            self.doc.notify_removing(child_id);
             let removal = recording
                 .then(|| self.doc.position_in_parent(child_id))
                 .flatten();
@@ -863,7 +869,7 @@ impl DocumentMutator<'_> {
                 old_parent.mark_ancestors_dirty();
             }
 
-            if recording {
+            if recording || self.doc.tree_observer.is_some() {
                 // Each record names the siblings as they are at its removal.
                 old_parent.children.remove_id(child_id);
             } else {
@@ -929,6 +935,10 @@ impl DocumentMutator<'_> {
             }
         }
 
+        for &child_id in child_ids {
+            self.doc.notify_inserted(child_id);
+        }
+
         if self.doc.is_recording_mutations() && !child_ids.is_empty() {
             let siblings = &self.doc.nodes[parent_id].children;
             if let Some(first) = siblings.position(child_ids[0]) {
@@ -959,7 +969,7 @@ impl DocumentMutator<'_> {
     }
 
     pub fn reparent_children(&mut self, old_parent_id: NodeId, new_parent_id: NodeId) {
-        let child_ids = std::mem::take(&mut self.doc.nodes[old_parent_id].children);
+        let child_ids = self.doc.nodes[old_parent_id].children.to_vec();
         self.maybe_record_node(old_parent_id);
         self.append_children(new_parent_id, &child_ids);
     }
@@ -1152,6 +1162,7 @@ impl<'doc> DocumentMutator<'doc> {
     /// Connect a shadow root attached to a connected host.
     pub(crate) fn connect_subtree(&mut self, node_id: NodeId) {
         self.process_added_subtree(node_id);
+        self.doc.notify_inserted(node_id);
     }
 
     fn process_added_subtree(&mut self, node_id: NodeId) {

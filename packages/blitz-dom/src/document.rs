@@ -331,6 +331,8 @@ pub struct BaseDocument {
     /// The embedder loads `<iframe>` documents itself (and runs their
     /// scripts); Blitz does not fetch them.
     pub embedder_loads_iframes: bool,
+    /// Synchronous, script-free embedder topology bookkeeping.
+    pub(crate) tree_observer: Option<Rc<dyn crate::tree_notifications::TreeObserver>>,
     /// Mutation records, while recording is on (see `mutations`).
     pub(crate) mutation_log: Option<Vec<crate::mutations::LoggedMutation>>,
     pub(crate) mutation_log_bytes: usize,
@@ -525,6 +527,7 @@ impl BaseDocument {
             connected_scripts: Vec::new(),
             shadow_hosts: HashSet::new(),
             embedder_loads_iframes: false,
+            tree_observer: None,
             mutation_log: None,
             mutation_log_bytes: 0,
             mutation_log_overflowed: false,
