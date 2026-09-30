@@ -1005,11 +1005,11 @@ pub use file_data::FileData;
 #[cfg(test)]
 mod tests {
     use super::TextInputData;
-    use parley::{FontContext, LayoutContext};
+    use parley::LayoutContext;
 
     /// Build a [`TextInputData`] with the given text laid out at scale 1.0.
     fn make_input(is_multiline: bool, text: &str) -> TextInputData {
-        let mut font_ctx = FontContext::new();
+        let mut font_ctx = crate::test_font_ctx();
         let mut layout_ctx = LayoutContext::new();
         let mut data = TextInputData::new(is_multiline);
         data.editor.set_scale(1.0);
@@ -1037,7 +1037,7 @@ mod tests {
 
         // Caret at the end of a string that overflows a narrow input should scroll right.
         data.editor
-            .driver(&mut FontContext::new(), &mut LayoutContext::new())
+            .driver(&mut crate::test_font_ctx(), &mut LayoutContext::new())
             .move_to_text_end();
         data.clamp_scroll_offset(content_box_width, content_box_height);
 
@@ -1055,7 +1055,7 @@ mod tests {
 
         // Moving the caret back to the start should reset the scroll offset.
         data.editor
-            .driver(&mut FontContext::new(), &mut LayoutContext::new())
+            .driver(&mut crate::test_font_ctx(), &mut LayoutContext::new())
             .move_to_text_start();
         data.clamp_scroll_offset(content_box_width, content_box_height);
         assert_eq!(data.scroll_offset, 0.0);
@@ -1071,14 +1071,14 @@ mod tests {
         // Constrain the width so wrapping is well-defined.
         data.editor.set_width(Some(200.0));
         data.editor
-            .driver(&mut FontContext::new(), &mut LayoutContext::new())
+            .driver(&mut crate::test_font_ctx(), &mut LayoutContext::new())
             .refresh_layout();
 
         let content_box_width = 200.0;
         let content_box_height = 30.0;
 
         data.editor
-            .driver(&mut FontContext::new(), &mut LayoutContext::new())
+            .driver(&mut crate::test_font_ctx(), &mut LayoutContext::new())
             .move_to_text_end();
         data.clamp_scroll_offset(content_box_width, content_box_height);
 
@@ -1100,7 +1100,7 @@ mod tests {
         let mut data = make_input(true, &text);
         data.editor.set_width(Some(200.0));
         data.editor
-            .driver(&mut FontContext::new(), &mut LayoutContext::new())
+            .driver(&mut crate::test_font_ctx(), &mut LayoutContext::new())
             .refresh_layout();
 
         let content_box_width = 200.0;

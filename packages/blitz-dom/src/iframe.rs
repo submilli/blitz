@@ -131,7 +131,7 @@ impl BaseDocument {
         let handler = ResourceHandler::new(
             self.tx.clone(),
             self.id(),
-            Some(node_id),
+            Some(self.resource_pin(node_id)),
             self.shell_provider.clone(),
             DocumentSrcHandler,
         );

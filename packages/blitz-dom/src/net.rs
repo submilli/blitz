@@ -71,7 +71,7 @@ pub enum Resource {
 pub(crate) struct ResourceHandler<T: Send + Sync + 'static> {
     doc_id: usize,
     request_id: usize,
-    node_id: Option<NodeId>,
+    node_id: Option<Arc<NodeId>>,
     tx: Sender<DocumentEvent>,
     shell_provider: Arc<dyn ShellProvider>,
     data: T,
@@ -81,7 +81,7 @@ impl<T: Send + Sync + 'static> ResourceHandler<T> {
     pub(crate) fn new(
         tx: Sender<DocumentEvent>,
         doc_id: usize,
-        node_id: Option<NodeId>,
+        node_id: Option<Arc<NodeId>>,
         shell_provider: Arc<dyn ShellProvider>,
         data: T,
     ) -> Self {
@@ -99,7 +99,7 @@ impl<T: Send + Sync + 'static> ResourceHandler<T> {
     pub(crate) fn boxed(
         tx: Sender<DocumentEvent>,
         doc_id: usize,
-        node_id: Option<NodeId>,
+        node_id: Option<Arc<NodeId>>,
         shell_provider: Arc<dyn ShellProvider>,
         data: T,
     ) -> Box<dyn NetHandler>
@@ -116,7 +116,8 @@ impl<T: Send + Sync + 'static> ResourceHandler<T> {
     fn respond(&self, resolved_url: String, result: Result<Resource, String>) {
         let response = ResourceLoadResponse {
             request_id: self.request_id,
-            node_id: self.node_id,
+            node_id: self.node_id.as_deref().copied(),
+            _node_pin: self.node_id.clone(),
             resolved_url: Some(resolved_url),
             result,
         };
@@ -127,6 +128,8 @@ impl<T: Send + Sync + 'static> ResourceHandler<T> {
 
 #[allow(unused)]
 pub struct ResourceLoadResponse {
+    // A completed response can remain queued after its handler is gone.
+    pub(crate) _node_pin: Option<Arc<NodeId>>,
     pub request_id: usize,
     pub node_id: Option<NodeId>,
     pub resolved_url: Option<String>,
@@ -282,7 +285,7 @@ impl NetHandler for ResourceHandler<NestedStylesheetHandler> {
         fetch_font_face(
             self.tx.clone(),
             self.doc_id,
-            self.node_id,
+            self.node_id.clone(),
             &sheet,
             &self.data.net_provider,
             &self.shell_provider,
@@ -381,7 +384,7 @@ impl FontFaceHandler {
 pub(crate) fn fetch_font_face(
     tx: Sender<DocumentEvent>,
     doc_id: usize,
-    node_id: Option<NodeId>,
+    node_id: Option<Arc<NodeId>>,
     sheet: &Stylesheet,
     network_provider: &Arc<dyn NetProvider>,
     shell_provider: &Arc<dyn ShellProvider>,
@@ -406,7 +409,7 @@ pub(crate) fn fetch_font_face_rules<'a>(
     rules: impl Iterator<Item = &'a CssRule>,
     tx: Sender<DocumentEvent>,
     doc_id: usize,
-    node_id: Option<NodeId>,
+    node_id: Option<Arc<NodeId>>,
     network_provider: &Arc<dyn NetProvider>,
     shell_provider: &Arc<dyn ShellProvider>,
     read_guard: &SharedRwLockReadGuard,
@@ -517,7 +520,7 @@ pub(crate) fn fetch_font_face_rules<'a>(
                     ResourceHandler::boxed(
                         tx.clone(),
                         doc_id,
-                        node_id,
+                        node_id.clone(),
                         shell_provider.clone(),
                         FontFaceHandler { format, overrides },
                     ),
@@ -656,5 +659,72 @@ mod tests {
             stylo_to_fontique_style(&oblique(10.0, 20.0)),
             Fq::Oblique(Some(10.0)),
         );
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+    use crate::{BaseDocument, DocumentConfig};
+
+    #[test]
+    fn resource_root_survives_handler_and_queued_response_then_releases() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let node = doc.mutate().try_create_text_node("x").unwrap();
+        let handler = ResourceHandler::new(
+            doc.tx.clone(),
+            doc.id(),
+            Some(doc.resource_pin(node)),
+            doc.shell_provider.clone(),
+            (),
+        );
+        assert_eq!(doc.pending_resource_nodes(), [node]);
+        handler.respond(String::new(), Err("local fixture failure".into()));
+        drop(handler);
+        assert_eq!(doc.pending_resource_nodes(), [node]);
+        let response = doc.rx.as_ref().unwrap().try_recv().unwrap();
+        assert_eq!(doc.pending_resource_nodes(), [node]);
+        drop(response);
+        assert!(doc.pending_resource_nodes().is_empty());
+    }
+
+    #[test]
+    fn canceled_resource_handler_releases_its_node() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let node = doc.mutate().try_create_text_node("x").unwrap();
+        let handler = ResourceHandler::new(
+            doc.tx.clone(),
+            doc.id(),
+            Some(doc.resource_pin(node)),
+            doc.shell_provider.clone(),
+            (),
+        );
+        drop(handler);
+        assert!(doc.pending_resource_nodes().is_empty());
+    }
+    #[test]
+    fn shared_handlers_and_failed_channel_send_release_the_last_pin() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let node = doc.mutate().try_create_text_node("x").unwrap();
+        let first = ResourceHandler::new(
+            doc.tx.clone(),
+            doc.id(),
+            Some(doc.resource_pin(node)),
+            doc.shell_provider.clone(),
+            (),
+        );
+        let second = ResourceHandler::new(
+            doc.tx.clone(),
+            doc.id(),
+            Some(doc.resource_pin(node)),
+            doc.shell_provider.clone(),
+            (),
+        );
+        drop(first);
+        assert_eq!(doc.pending_resource_nodes(), [node]);
+        drop(doc.rx.take());
+        second.respond(String::new(), Ok(Resource::None));
+        drop(second);
+        assert!(doc.pending_resource_nodes().is_empty());
     }
 }

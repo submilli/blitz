@@ -61,6 +61,7 @@ mod layout;
 mod mutator;
 mod node_budget;
 mod node_teardown;
+mod resource_roots;
 pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
 mod query_selector;
 mod resolve;
@@ -279,6 +280,14 @@ pub fn build_svg_font_db(fonts: &[(FontRole, &[u8])]) -> SvgFontDb {
         db.set_monospace_family(family);
     }
     std::sync::Arc::new(db)
+}
+
+/// Unit fixtures use the same packaged font with and without system discovery.
+#[cfg(test)]
+pub(crate) fn test_font_ctx() -> parley::FontContext {
+    build_single_font_ctx(include_bytes!(
+        "../assets/test-fonts/LiberationSans-Regular.ttf"
+    ))
 }
 
 #[cfg(test)]

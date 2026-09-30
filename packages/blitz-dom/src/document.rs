@@ -227,6 +227,7 @@ pub struct BaseDocument {
     /// There is no way to create the tree - publicly or privately - that would invalidate that invariant.
     pub(crate) nodes: Box<NodeTree>,
     pub(crate) node_limit: usize,
+    pub(crate) resource_roots: crate::resource_roots::ResourceRoots,
 
     /// The id of the root node (a Document node)
     pub(crate) root_node_id: NodeId,
@@ -471,6 +472,7 @@ impl BaseDocument {
                 .node_limit
                 .unwrap_or(crate::DEFAULT_NODE_LIMIT)
                 .max(1),
+            resource_roots: Default::default(),
             root_node_id: NodeId::default(),
             stylist,
             animations: DocumentAnimationSet::default(),
@@ -1152,7 +1154,7 @@ impl BaseDocument {
                             ResourceHandler::boxed(
                                 self.tx.clone(),
                                 self.id,
-                                Some(node_id),
+                                Some(self.resource_pin(node_id)),
                                 self.shell_provider.clone(),
                                 StylesheetHandler {
                                     source_url: resolved_href,
@@ -1258,7 +1260,7 @@ impl BaseDocument {
         crate::net::fetch_font_face(
             self.tx.clone(),
             self.id,
-            Some(node_id),
+            Some(self.resource_pin(node_id)),
             &stylesheet.0,
             &self.net_provider,
             &self.shell_provider,
@@ -3007,6 +3009,7 @@ mod hover_invalidation_tests {
     fn make_doc() -> (BaseDocument, NodeId, NodeId) {
         let mut doc = BaseDocument::new(DocumentConfig {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            font_ctx: Some(crate::test_font_ctx()),
             ..Default::default()
         });
         doc.add_user_agent_stylesheet(
@@ -3094,6 +3097,7 @@ mod hover_invalidation_tests {
     fn ancestor_hover_with_link_state_updates_descendant() {
         let mut doc = BaseDocument::new(DocumentConfig {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            font_ctx: Some(crate::test_font_ctx()),
             ..Default::default()
         });
         doc.add_user_agent_stylesheet(
@@ -3163,6 +3167,7 @@ mod hover_invalidation_tests {
     fn checkbox_toggle_updates_checked_styles() {
         let mut doc = BaseDocument::new(DocumentConfig {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            font_ctx: Some(crate::test_font_ctx()),
             ..Default::default()
         });
         doc.add_user_agent_stylesheet(
@@ -3242,6 +3247,7 @@ mod hover_invalidation_tests {
     fn hover_updates_existing_pseudo_element_style() {
         let mut doc = BaseDocument::new(DocumentConfig {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            font_ctx: Some(crate::test_font_ctx()),
             ..Default::default()
         });
         doc.add_user_agent_stylesheet(
@@ -3298,6 +3304,7 @@ mod hover_invalidation_tests {
     fn hover_updates_background_image_layers() {
         let mut doc = BaseDocument::new(DocumentConfig {
             viewport: Some(Viewport::new(400, 300, 1.0, ColorScheme::Light)),
+            font_ctx: Some(crate::test_font_ctx()),
             ..Default::default()
         });
         doc.add_user_agent_stylesheet(
@@ -3397,6 +3404,7 @@ mod font_face_override_tests {
         // valid font payload — its internal `name` table is irrelevant to
         // the assertion; what matters is whether the override wins.
         let response = ResourceLoadResponse {
+            _node_pin: None,
             request_id: 0,
             node_id: None,
             resolved_url: Some(String::from("test://aliased-family")),

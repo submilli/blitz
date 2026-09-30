@@ -94,14 +94,30 @@ impl EventListeners {
         })?;
         let listener = list.remove(pos);
         listener.removed.set(true);
+        if list.is_empty() {
+            self.map.remove(&target);
+        }
         Some(listener.callback)
     }
 
     fn remove_entry(&mut self, target: EventTargetId, listener: &Rc<Listener>) {
         if let Some(list) = self.map.get_mut(&target) {
             list.retain(|l| !Rc::ptr_eq(l, listener));
+            if list.is_empty() {
+                self.map.remove(&target);
+            }
         }
         listener.removed.set(true);
+    }
+
+    /// Forget a dead target's whole bucket, invalidating snapshots retained by
+    /// an in-progress dispatch just like explicit listener removal does.
+    pub fn remove_target(&mut self, target: EventTargetId) {
+        if let Some(listeners) = self.map.remove(&target) {
+            for listener in listeners {
+                listener.removed.set(true);
+            }
+        }
     }
 
     /// A snapshot of the listeners for `event_type` on `target`.
@@ -433,5 +449,39 @@ fn invoke_listeners(host: &mut dyn DispatchHost, target: EventTargetId, capture:
         if host.immediate_propagation_stopped() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+
+    #[test]
+    fn removal_and_once_dispatch_release_empty_target_buckets() {
+        let mut listeners = EventListeners::default();
+        for id in 0..20_000 {
+            let target = EventTargetId::Other(id);
+            listeners.add(target, "x", id, ListenerOptions::default());
+            let snapshot = listeners.listeners(target, "x");
+            if id % 2 == 0 {
+                listeners.remove(target, "x", id, false);
+            } else {
+                listeners.remove_entry(target, &snapshot[0]);
+            }
+            assert!(snapshot[0].removed.get());
+            assert!(listeners.map.is_empty());
+        }
+    }
+
+    #[test]
+    fn dead_target_teardown_invalidates_all_dispatch_snapshots() {
+        let mut listeners = EventListeners::default();
+        let target = EventTargetId::Other(1);
+        listeners.add(target, "x", 1, ListenerOptions::default());
+        listeners.add(target, "x", 2, ListenerOptions::default());
+        let snapshot = listeners.listeners(target, "x");
+        listeners.remove_target(target);
+        assert!(snapshot.iter().all(|listener| listener.removed.get()));
+        assert!(listeners.map.is_empty());
     }
 }

@@ -617,7 +617,7 @@ impl BaseDocument {
                 std::iter::once(&new_rule),
                 self.tx.clone(),
                 self.id(),
-                Some(handle.owner),
+                Some(self.resource_pin(handle.owner)),
                 &self.net_provider,
                 &self.shell_provider,
                 &guard,

@@ -1375,7 +1375,7 @@ impl<'doc> DocumentMutator<'doc> {
         let handler = ResourceHandler::new(
             self.doc.tx.clone(),
             self.doc.id(),
-            Some(node.id),
+            Some(self.doc.resource_pin(node.id)),
             self.doc.shell_provider.clone(),
             StylesheetHandler {
                 source_url: url.clone(),
