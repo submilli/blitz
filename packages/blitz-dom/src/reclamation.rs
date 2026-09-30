@@ -18,7 +18,7 @@ use crate::{BaseDocument, NodeId};
 
 /// Snapshot of the native references an embedder must add to its traced graph.
 ///
-/// Each edge is undirected. `roots` includes the active document and native work,
+/// Topology edges are undirected; document ownership edges are directed. `roots` includes the active document and native work,
 /// including registered parser/native leases. Unregistered JavaScript/native
 /// continuations remain the embedder's responsibility. A snapshot is
 /// invalid after document mutation; it grants no authority to free slots.
@@ -26,6 +26,7 @@ use crate::{BaseDocument, NodeId};
 pub struct NodeReachability {
     pub nodes: Vec<NodeId>,
     pub edges: Vec<(NodeId, NodeId)>,
+    pub directed_edges: Vec<(NodeId, NodeId)>,
     pub roots: Vec<NodeId>,
 }
 
@@ -39,6 +40,11 @@ impl NodeReachability {
             if live.contains(&left) && live.contains(&right) {
                 neighbors.entry(left).or_default().push(right);
                 neighbors.entry(right).or_default().push(left);
+            }
+        }
+        for &(from, to) in &self.directed_edges {
+            if live.contains(&from) && live.contains(&to) {
+                neighbors.entry(from).or_default().push(to);
             }
         }
         let mut retained = HashSet::new();
@@ -62,9 +68,16 @@ impl BaseDocument {
         let mut graph = NodeReachability {
             nodes: self.nodes.iter().map(|(id, _)| id).collect(),
             edges: Vec::new(),
+            directed_edges: Vec::new(),
             roots: roots::native_work(self),
         };
         for (id, node) in self.nodes.iter() {
+            if id != node.owner_document {
+                graph.directed_edges.push((id, node.owner_document));
+            }
+            if let Some(template) = node.template_document {
+                graph.directed_edges.push((id, template));
+            }
             graph.edges.extend(node.parent.map(|parent| (id, parent)));
             // Anonymous boxes borrow DOM children; those cached links may be
             // stale after removal and must not turn into permanent roots.

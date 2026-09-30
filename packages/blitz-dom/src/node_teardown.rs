@@ -24,6 +24,11 @@ impl BaseDocument {
             self.shadow_hosts.remove(&id);
             pending.extend(node.anonymous_blocks.iter().map(|&id| (id, false)));
             if owns_children {
+                pending.extend(
+                    node.template_document
+                        .filter(|&document| document != id)
+                        .map(|id| (id, true)),
+                );
                 pending.extend(node.children.iter().map(|&id| (id, true)));
                 pending.extend(node.before().into_iter().map(|id| (id, true)));
                 pending.extend(node.after().into_iter().map(|id| (id, true)));
@@ -80,7 +85,7 @@ mod tests {
         ids.extend([host, shadow]);
         drop(m);
         doc.mutate().remove_and_drop_node(root);
-        assert_eq!(doc.node_count(), 1);
+        assert_eq!(doc.node_count(), 2);
         assert_eq!(doc.changed_nodes.len(), 1);
         assert!(ids.into_iter().all(|id| doc.get_node(id).is_none()));
         assert!(doc.shadow_hosts.is_empty());

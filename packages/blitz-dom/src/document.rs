@@ -936,6 +936,23 @@ impl BaseDocument {
             .nodes
             .insert_with_key(|id| Node::new(tree_ptr, id, guard, node_data));
 
+        if !matches!(self.nodes[id].data, NodeData::Document(_)) {
+            self.nodes[id].owner_document = self.root_node_id;
+        } else if self.node_limit == 1 && self.nodes.len() == 1 {
+            // A one-slot arena cannot create a template or any other node.
+            // Keep the configured ceiling even for this minimal document.
+            self.nodes[id].template_document = Some(id);
+        } else {
+            // Allocate the inert template document together with its owner so
+            // adoption never allocates or fails halfway through a tree move.
+            let guard = self.guard.clone();
+            let inert = self.nodes.insert_with_key(|id| {
+                Node::new(tree_ptr, id, guard, NodeData::Document(Box::default()))
+            });
+            self.nodes[id].template_document = Some(inert);
+            self.nodes[inert].template_document = Some(inert);
+        }
+
         // Mark the new node as changed.
         self.changed_nodes.insert(id);
         id

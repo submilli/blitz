@@ -108,6 +108,7 @@ impl DocumentMutator<'_> {
         let root = self
             .try_create_document_fragment()
             .map_err(|_| AttachShadowError::NodeBudgetExceeded)?;
+        self.set_node_document(root, self.doc.node_document(host));
         self.doc.nodes[root].shadow_root_data = Some(Box::new(ShadowRootData {
             host,
             open: init.open,

@@ -67,7 +67,7 @@ fn active_formatting_amplification_stays_within_budget() {
 #[test]
 fn fragment_limits_handle_scratch_roots_templates_and_foster_parenting() {
     for spare in 0..16 {
-        let mut doc = document(5 + spare);
+        let mut doc = document(6 + spare);
         DocumentHtmlParser::parse_into_mutator(&mut doc.mutate(), "<body><div></div>");
         let target = doc.query_selector("div").unwrap().unwrap();
         DocumentHtmlParser::parse_inner_html_into_mutator(
@@ -147,12 +147,12 @@ fn implied_eof_nodes_and_detached_documents_obey_admission() {
 
 #[test]
 fn exact_capacity_parsing_keeps_coalescing_text() {
-    let doc = Rc::new(RefCell::new(document(5)));
+    let doc = Rc::new(RefCell::new(document(6)));
     let mut parser = StreamingParser::new(doc.clone());
     parser.feed("<body>first");
     assert!(matches!(parser.run(), ParseStep::Done));
     assert!(!parser.is_finished());
-    assert_eq!(doc.borrow().node_count(), 5);
+    assert_eq!(doc.borrow().node_count(), 6);
     parser.feed(" second");
     parser.end_of_input();
     assert!(matches!(parser.run(), ParseStep::Done));
@@ -162,7 +162,7 @@ fn exact_capacity_parsing_keeps_coalescing_text() {
         doc.borrow().text_content_of(body).as_deref(),
         Some("first second")
     );
-    assert_eq!(doc.borrow().node_count(), 5);
+    assert_eq!(doc.borrow().node_count(), 6);
 }
 
 #[test]
@@ -199,16 +199,16 @@ fn form_control_generated_children_share_parser_node_admission() {
 #[test]
 fn shadow_attachment_rejects_before_changing_the_host() {
     use blitz_dom::shadow::{AttachShadowError, ShadowRootInit};
-    let mut doc = document(5);
+    let mut doc = document(6);
     DocumentHtmlParser::parse_into_mutator(&mut doc.mutate(), "<div></div>");
     let host = doc.query_selector("div").unwrap().unwrap();
-    assert_eq!(doc.node_count(), 5);
+    assert_eq!(doc.node_count(), 6);
     assert_eq!(
         doc.mutate().attach_shadow(host, ShadowRootInit::default()),
         Err(AttachShadowError::NodeBudgetExceeded)
     );
     assert!(doc.shadow_root_of(host).is_none());
-    assert_eq!(doc.node_count(), 5);
+    assert_eq!(doc.node_count(), 6);
 }
 
 #[test]

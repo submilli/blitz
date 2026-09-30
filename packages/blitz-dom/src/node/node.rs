@@ -119,6 +119,10 @@ pub struct Node {
 
     /// Our Id
     pub id: NodeId,
+    /// Persistent node document; Document nodes point to themselves.
+    pub(crate) owner_document: NodeId,
+    /// Appropriate inert template document (Document nodes only).
+    pub(crate) template_document: Option<NodeId>,
     /// Our parent's ID
     pub parent: Option<NodeId>,
     // What are our children?
@@ -448,6 +452,8 @@ impl Node {
             tree,
 
             id,
+            owner_document: id,
+            template_document: None,
             parent: None,
             children: super::Children::default(),
             layout_parent: Cell::new(None),

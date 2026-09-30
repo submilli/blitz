@@ -12,7 +12,7 @@ fn element(doc: &mut BaseDocument, name: &str) -> NodeId {
 #[test]
 fn sweep_preserves_exposed_subtrees_and_recovers_admission_capacity() {
     let mut doc = BaseDocument::new(DocumentConfig::default());
-    doc.node_limit = 64;
+    doc.node_limit = 65;
     let parent = element(&mut doc, "div");
     let child = element(&mut doc, "span");
     doc.mutate().append_children(parent, &[child]);
@@ -23,13 +23,13 @@ fn sweep_preserves_exposed_subtrees_and_recovers_admission_capacity() {
             assert_ne!(Some(id), last_dead);
             last_dead = Some(id);
         }
-        assert_eq!(doc.node_count(), 64);
+        assert_eq!(doc.node_count(), 65);
         assert_eq!(doc.reclaim_detached_nodes(&[child]).len(), 61);
         assert_eq!(doc.nodes[child].parent, Some(parent));
-        assert_eq!(doc.node_count(), 3);
+        assert_eq!(doc.node_count(), 4);
     }
     assert_eq!(doc.reclaim_detached_nodes(&[]).len(), 2);
-    assert_eq!(doc.node_count(), 1);
+    assert_eq!(doc.node_count(), 2);
 }
 
 #[test]

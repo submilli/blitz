@@ -26,7 +26,10 @@ fn detached_descendant_keeps_ancestors_siblings_templates_and_shadows() {
         assert!(retained.contains(&id), "{id:?}");
     }
     assert!(!retained.contains(&unreferenced));
-    assert_eq!(graph.retained_nodes(&[]), HashSet::from([doc.root_node_id]));
+    assert_eq!(
+        graph.retained_nodes(&[]),
+        HashSet::from([doc.root_node_id, doc.template_document(doc.root_node_id)])
+    );
 }
 
 #[test]
@@ -72,7 +75,7 @@ fn deep_detached_graph_walk_is_iterative() {
     }
     let graph = doc.node_reachability();
     assert_eq!(graph.retained_nodes(&[last]).len(), doc.node_count());
-    assert_eq!(graph.retained_nodes(&[]).len(), 1);
+    assert_eq!(graph.retained_nodes(&[]).len(), 2);
 }
 
 #[test]
@@ -98,7 +101,7 @@ fn queued_reactions_and_images_release_their_native_roots() {
     doc.pending_style_image_nodes.clear();
     assert_eq!(
         doc.node_reachability().retained_nodes(&[]),
-        HashSet::from([doc.root_node_id])
+        HashSet::from([doc.root_node_id, doc.template_document(doc.root_node_id)])
     );
 }
 
@@ -128,7 +131,7 @@ fn frame_load_and_scroll_animation_release_their_native_roots() {
     doc.scroll_animation = ScrollAnimationState::None;
     assert_eq!(
         doc.node_reachability().retained_nodes(&[]),
-        HashSet::from([doc.root_node_id])
+        HashSet::from([doc.root_node_id, doc.template_document(doc.root_node_id)])
     );
 }
 
@@ -169,6 +172,6 @@ fn deferred_inline_layout_keeps_brush_and_box_nodes_until_drained() {
     doc.deferred_construction_nodes.clear();
     assert_eq!(
         doc.node_reachability().retained_nodes(&[]),
-        HashSet::from([doc.root_node_id])
+        HashSet::from([doc.root_node_id, doc.template_document(doc.root_node_id)])
     );
 }

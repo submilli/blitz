@@ -19,7 +19,8 @@ fn html_parses_into_a_detached_document_node() {
     drop(m);
     assert_eq!(doc.node_type(other), node_type::DOCUMENT);
     assert!(doc.get_node(other).unwrap().parent.is_none());
-    assert!(!doc.is_connected(other));
+    assert!(doc.is_connected(other));
+    assert!(!doc.get_node(other).unwrap().flags.is_in_document());
     let html = doc.get_node(other).unwrap().inner_html();
     assert!(html.starts_with(
         "<!DOCTYPE html><html><head><title>t</title></head><body><p id=\"x\">parsed</p>"

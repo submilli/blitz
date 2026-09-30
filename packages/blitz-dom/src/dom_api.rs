@@ -233,7 +233,7 @@ impl BaseDocument {
         while let Some(host) = self.shadow_host_of(root) {
             root = self.tree_root(host);
         }
-        root == self.root_node().id
+        self.node_type(root) == node_type::DOCUMENT
     }
 
     fn is_element(&self, id: NodeId) -> bool {
@@ -982,6 +982,7 @@ impl DocumentMutator<'_> {
             return id;
         }
         let copy = self.clone_one(id);
+        self.set_node_document(copy, self.doc.node_document(id));
         if !deep {
             return copy;
         }

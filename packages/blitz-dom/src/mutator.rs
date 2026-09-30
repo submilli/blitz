@@ -213,6 +213,7 @@ impl DocumentMutator<'_> {
             return contents_id;
         }
         let contents_id = self.create_document_fragment();
+        self.set_node_document(contents_id, self.doc.template_document(template_id));
         if let Some(element) = self
             .doc
             .get_node_mut(template_id)
@@ -903,6 +904,7 @@ impl DocumentMutator<'_> {
         insert_children_fn(new_parent, child_ids);
 
         for child_id in child_ids.iter().copied() {
+            self.set_node_document(child_id, self.doc.node_document(parent_id));
             let child = &mut self.doc.nodes[child_id];
             let child_was_in_doc = child.flags.is_in_document();
             child.parent = Some(parent_id);

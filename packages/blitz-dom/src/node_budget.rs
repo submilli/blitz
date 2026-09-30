@@ -121,7 +121,7 @@ impl DocumentMutator<'_> {
 
     /// Allocate an inert document node in the same bounded arena.
     pub fn try_create_document_node(&mut self) -> Result<NodeId, NodeBudgetExceeded> {
-        self.doc.check_node_allocation(1)?;
+        self.doc.check_node_allocation(2)?;
         Ok(self.create_document_node())
     }
 
@@ -173,22 +173,22 @@ mod tests {
     #[test]
     fn admission_is_atomic_and_reuses_released_capacity() {
         let mut document = BaseDocument::new(DocumentConfig {
-            node_limit: Some(2),
+            node_limit: Some(3),
             ..DocumentConfig::default()
         });
         let text = document.mutate().try_create_text_node("kept").unwrap();
-        assert_eq!(document.node_count(), 2);
+        assert_eq!(document.node_count(), 3);
         assert_eq!(
             document.mutate().try_create_comment_node("rejected"),
             Err(NodeBudgetExceeded)
         );
         assert_eq!(document.character_data(text), Some("kept"));
-        assert_eq!(document.node_count(), 2);
+        assert_eq!(document.node_count(), 3);
         document.mutate().remove_and_drop_node(text);
         let replacement = document.mutate().try_create_comment_node("new").unwrap();
         assert_ne!(text, replacement);
         assert!(document.get_node(text).is_none());
-        assert_eq!(document.node_count(), 2);
+        assert_eq!(document.node_count(), 3);
     }
 
     #[test]
@@ -209,13 +209,13 @@ mod tests {
     #[test]
     fn releasing_slots_also_releases_changed_node_bookkeeping() {
         let mut document = BaseDocument::new(DocumentConfig {
-            node_limit: Some(2),
+            node_limit: Some(3),
             ..Default::default()
         });
         for _ in 0..10_000 {
             let text = document.mutate().try_create_text_node("temporary").unwrap();
             document.mutate().remove_and_drop_node(text);
-            assert_eq!(document.node_count(), 1);
+            assert_eq!(document.node_count(), 2);
             assert_eq!(document.changed_nodes.len(), 1);
         }
     }
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn rejected_text_replacement_preserves_children_and_clear_still_works() {
         let mut document = BaseDocument::new(DocumentConfig {
-            node_limit: Some(3),
+            node_limit: Some(4),
             ..Default::default()
         });
         let element = document
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn clone_admission_counts_template_contents_before_allocating() {
         let mut document = BaseDocument::new(DocumentConfig {
-            node_limit: Some(6),
+            node_limit: Some(7),
             ..Default::default()
         });
         let template = document
@@ -269,13 +269,13 @@ mod tests {
             document.mutate().try_clone_node(template, true),
             Err(NodeBudgetExceeded)
         );
-        assert_eq!(document.node_count(), 4);
+        assert_eq!(document.node_count(), 5);
         assert_eq!(
             document.text_content_of(contents).as_deref(),
             Some("inside")
         );
         let copy = document.mutate().try_clone_node(template, false).unwrap();
         assert_ne!(copy, template);
-        assert_eq!(document.node_count(), 5);
+        assert_eq!(document.node_count(), 6);
     }
 }
