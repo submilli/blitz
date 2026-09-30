@@ -31,13 +31,12 @@ pub enum ParseStep {
 }
 
 pub struct StreamingParser {
-    tokenizer: Tokenizer<Sink>,
+    tokenizer: Option<Tokenizer<Sink>>,
     input: BufferQueue,
     /// Characters from `document.write`, parsed before the rest of the input
     /// (the "insertion point").
     written: BufferQueue,
     end_of_input: bool,
-    finished: bool,
 }
 
 impl StreamingParser {
@@ -55,17 +54,23 @@ impl StreamingParser {
             },
         );
         Self {
-            tokenizer: Tokenizer::new(BoundedHtml(tree_builder), TokenizerOpts::default()),
+            tokenizer: Some(Tokenizer::new(
+                BoundedHtml(tree_builder),
+                TokenizerOpts::default(),
+            )),
             input: BufferQueue::default(),
             written: BufferQueue::default(),
             end_of_input: false,
-            finished: false,
         }
     }
 
     /// Append network input.
     pub fn feed(&mut self, chunk: &str) {
-        if self.finished || self.tokenizer.sink.exhausted() {
+        if self
+            .tokenizer
+            .as_ref()
+            .is_none_or(|tokenizer| tokenizer.sink.exhausted())
+        {
             return;
         }
         self.input.push_back(StrTendril::from_slice(chunk));
@@ -79,7 +84,11 @@ impl StreamingParser {
     /// `document.write(text)`: insert at the insertion point, ahead of the
     /// remaining input.
     pub fn write(&mut self, text: &str) {
-        if self.finished || self.tokenizer.sink.exhausted() {
+        if self
+            .tokenizer
+            .as_ref()
+            .is_none_or(|tokenizer| tokenizer.sink.exhausted())
+        {
             return;
         }
         self.written.push_back(StrTendril::from_slice(text));
@@ -89,14 +98,21 @@ impl StreamingParser {
     /// call, stopping early at a script end tag. Used while a script is
     /// running, so its writes land in the document before it continues.
     pub fn run_written(&mut self) -> ParseStep {
-        let step = Self::feed_until_script(&self.tokenizer, &self.written);
+        let Some(tokenizer) = &self.tokenizer else {
+            return ParseStep::Done;
+        };
+        let step = Self::feed_until_script(tokenizer, &self.written);
         self.stop_if_exhausted();
         step
     }
 
     fn stop_if_exhausted(&mut self) {
-        if self.tokenizer.sink.exhausted() {
-            self.finished = true;
+        if self
+            .tokenizer
+            .as_ref()
+            .is_some_and(|tokenizer| tokenizer.sink.exhausted())
+        {
+            self.tokenizer.take();
             while self.input.pop_front().is_some() {}
             while self.written.pop_front().is_some() {}
         }
@@ -123,25 +139,33 @@ impl StreamingParser {
 
     /// Parse until the next script end tag, or until input runs out.
     pub fn run(&mut self) -> ParseStep {
-        if self.finished {
+        if self.is_finished() {
             return ParseStep::Done;
         }
         if let ParseStep::Script(node) = self.run_written() {
             return ParseStep::Script(node);
         }
-        if let ParseStep::Script(node) = Self::feed_until_script(&self.tokenizer, &self.input) {
+        let Some(tokenizer) = &self.tokenizer else {
+            return ParseStep::Done;
+        };
+        if let ParseStep::Script(node) = Self::feed_until_script(tokenizer, &self.input) {
             return ParseStep::Script(node);
         }
         self.stop_if_exhausted();
-        if !self.finished && self.end_of_input && self.input.is_empty() && self.written.is_empty() {
-            self.tokenizer.end();
-            self.finished = true;
+        if self.end_of_input
+            && self.input.is_empty()
+            && self.written.is_empty()
+            && let Some(tokenizer) = self.tokenizer.take()
+        {
+            // EOF can leave formatting/form handles in the tree builder. Release
+            // all of them now, even when the finished parser itself is retained.
+            tokenizer.end();
         }
         ParseStep::Done
     }
 
     /// Whether the whole input has been parsed.
     pub fn is_finished(&self) -> bool {
-        self.finished
+        self.tokenizer.is_none()
     }
 }

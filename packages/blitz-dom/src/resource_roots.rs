@@ -1,4 +1,4 @@
-//! Native node references carried through asynchronous resource work.
+//! Native node references carried by resource work, parsers and continuations.
 //!
 //! Handlers and queued completions share a small token, not the document. The
 //! document keeps weak tokens so cancellation and consumed responses release
@@ -9,6 +9,20 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use crate::{BaseDocument, NodeId};
+
+/// A native continuation's claim on a node during detached-node reclamation.
+///
+/// Clones share one token. Dropping the last clone releases the claim without
+/// borrowing or retaining the document. This does not prevent explicit removal
+/// with `remove_and_drop_node`; generation checks still apply after such removal.
+#[derive(Clone, Debug)]
+pub struct NodeLease(Arc<NodeId>);
+
+impl NodeLease {
+    pub fn id(&self) -> NodeId {
+        *self.0
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct ResourceRoots {
@@ -26,6 +40,12 @@ impl ResourceRoots {
 }
 
 impl BaseDocument {
+    /// Preserve this node and its native topology while a parser or other
+    /// native continuation may use it. A stale ID never preserves a new slot.
+    pub fn lease_node(&self, node: NodeId) -> NodeLease {
+        NodeLease(self.resource_pin(node))
+    }
+
     pub(crate) fn resource_pin(&self, node: NodeId) -> Arc<NodeId> {
         let mut roots = self.resource_roots.entries.borrow_mut();
         if let Some(pin) = roots.get(&node).and_then(Weak::upgrade) {
@@ -40,7 +60,7 @@ impl BaseDocument {
         pin
     }
 
-    /// Nodes used by in-flight handlers or queued resource completions. A
+    /// Nodes used by resource completions or registered native/parser leases. A
     /// reclamation checkpoint must preserve these nodes and their topology.
     /// Ordinary synchronous removal remains the embedder's responsibility.
     pub fn pending_resource_nodes(&self) -> Vec<NodeId> {

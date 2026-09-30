@@ -65,6 +65,7 @@ mod reclamation;
 mod resource_roots;
 pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
 pub use reclamation::NodeReachability;
+pub use resource_roots::NodeLease;
 mod query_selector;
 mod resolve;
 /// Computation of resolved CSS property values (`getComputedStyle()`)

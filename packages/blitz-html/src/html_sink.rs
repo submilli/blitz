@@ -131,7 +131,7 @@ pub struct HtmlSink<A: DocAccess> {
 pub struct ParserHandle(Rc<ParserNode>);
 
 struct ParserNode {
-    id: Option<NodeId>,
+    lease: Option<blitz_dom::NodeLease>,
     name: QualName,
 }
 
@@ -153,18 +153,18 @@ pub(crate) fn live_parser_handles() -> usize {
 }
 
 impl ParserHandle {
-    fn new(id: Option<NodeId>, name: QualName) -> Self {
+    fn new(lease: Option<blitz_dom::NodeLease>, name: QualName) -> Self {
         #[cfg(test)]
         LIVE_HANDLES.with(|count| count.set(count.get() + 1));
-        Self(Rc::new(ParserNode { id, name }))
+        Self(Rc::new(ParserNode { lease, name }))
     }
 
     pub(crate) fn node_id(&self) -> Option<NodeId> {
-        self.0.id
+        self.0.lease.as_ref().map(blitz_dom::NodeLease::id)
     }
 
-    pub(crate) fn non_element(id: Option<NodeId>) -> Self {
-        Self::new(id, QualName::new(None, html5ever::ns!(html), "".into()))
+    fn non_element(lease: Option<blitz_dom::NodeLease>) -> Self {
+        Self::new(lease, QualName::new(None, html5ever::ns!(html), "".into()))
     }
 }
 
@@ -187,6 +187,14 @@ impl<A: DocAccess> HtmlSink<A> {
 
     fn with<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
         self.access.with_mutator(f)
+    }
+
+    fn handle(&self, id: Option<NodeId>, name: QualName) -> ParserHandle {
+        ParserHandle::new(id.map(|id| self.with(|m| m.doc.lease_node(id))), name)
+    }
+
+    fn non_element(&self, id: Option<NodeId>) -> ParserHandle {
+        ParserHandle::non_element(id.map(|id| self.with(|m| m.doc.lease_node(id))))
     }
 
     /// Whether this parse has stopped admitting nodes.
@@ -349,7 +357,7 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
             mutr.remove_and_drop_node(scratch);
             return Ok(());
         };
-        let context = ParserHandle::new(Some(element_id), context_name);
+        let context = ParserHandle::new(Some(mutr.doc.lease_node(element_id)), context_name);
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.fragment = true;
         sink.document_node = Some(scratch);
@@ -404,7 +412,7 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
     }
 
     fn get_document(&self) -> Self::Handle {
-        ParserHandle::non_element(Some(
+        self.non_element(Some(
             self.document_node
                 .unwrap_or_else(|| self.with(|m| m.doc.root_node().id)),
         ))
@@ -430,15 +438,15 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
             }
             Ok(id)
         });
-        ParserHandle::new(id, name)
+        self.handle(id, name)
     }
 
     fn create_comment(&self, text: StrTendril) -> Self::Handle {
-        ParserHandle::non_element(self.allocate(|m| m.try_create_comment_node(text.as_ref())))
+        self.non_element(self.allocate(|m| m.try_create_comment_node(text.as_ref())))
     }
 
     fn create_pi(&self, target: StrTendril, data: StrTendril) -> Self::Handle {
-        ParserHandle::non_element(
+        self.non_element(
             self.allocate(|m| m.try_create_processing_instruction(&target, data.as_ref())),
         )
     }
@@ -520,7 +528,7 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         if let Some(child) = child {
             self.append(
                 &self.get_document(),
-                NodeOrText::AppendNode(ParserHandle::non_element(Some(child))),
+                NodeOrText::AppendNode(self.non_element(Some(child))),
             );
         }
     }
@@ -530,12 +538,12 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
             .node_id()
             .and_then(|id| self.with(|m| m.try_template_contents(id)))
         {
-            return ParserHandle::non_element(Some(existing));
+            return self.non_element(Some(existing));
         }
         let id = target
             .node_id()
             .and_then(|id| self.allocate(|m| m.try_ensure_template_contents(id)));
-        ParserHandle::non_element(id)
+        self.non_element(id)
     }
 
     fn same_node(&self, x: &Self::Handle, y: &Self::Handle) -> bool {

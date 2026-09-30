@@ -19,7 +19,8 @@ use crate::{BaseDocument, NodeId};
 /// Snapshot of the native references an embedder must add to its traced graph.
 ///
 /// Each edge is undirected. `roots` includes the active document and native work,
-/// but not parser/JavaScript continuations owned by the embedder. A snapshot is
+/// including registered parser/native leases. Unregistered JavaScript/native
+/// continuations remain the embedder's responsibility. A snapshot is
 /// invalid after document mutation; it grants no authority to free slots.
 #[derive(Debug)]
 pub struct NodeReachability {
