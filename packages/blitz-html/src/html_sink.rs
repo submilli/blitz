@@ -4,14 +4,14 @@ use html5ever::ParseOpts;
 use html5ever::tokenizer::TokenizerOpts;
 use html5ever::tree_builder::TreeBuilderOpts;
 use std::borrow::Cow;
-use std::cell::{Cell, Ref, RefCell};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use blitz_dom::node::Attribute;
 use blitz_dom::{BaseDocument, DocumentMutator, HtmlParserProvider, NodeId};
 use html5ever::{
     QualName,
-    tendril::{StrTendril, TendrilSink},
+    tendril::StrTendril,
     tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink},
 };
 
@@ -28,6 +28,25 @@ fn html5ever_to_blitz_attr(attr: html5ever::Attribute) -> Attribute {
 pub struct HtmlProvider;
 
 impl HtmlParserProvider for HtmlProvider {
+    fn try_parse_inner_html(
+        &self,
+        mutr: &mut DocumentMutator<'_>,
+        element_id: NodeId,
+        html: &str,
+    ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
+        DocumentHtmlParser::try_parse_inner_html_into_mutator(mutr, element_id, html)
+    }
+
+    fn try_parse_into_document_node(
+        &self,
+        mutr: &mut DocumentMutator<'_>,
+        document: NodeId,
+        markup: &str,
+        xml: bool,
+    ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
+        DocumentHtmlParser::try_parse_into_document_node(mutr, document, markup, xml)
+    }
+
     fn parse_inner_html<'m2, 'doc2>(
         &self,
         mutr: &'m2 mut DocumentMutator<'doc2>,
@@ -61,8 +80,6 @@ pub trait DocAccess {
     /// Run `f` with a mutator. Implementations may create a fresh mutator
     /// per call, so no borrow of the document outlives `f`.
     fn with_mutator<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R;
-    /// The qualified name of element `id`.
-    fn element_name(&self, id: NodeId) -> Ref<'_, QualName>;
 }
 
 /// A mutator borrowed for the whole parse (one-shot parsing).
@@ -72,13 +89,6 @@ impl DocAccess for BorrowedMutator<'_, '_> {
     fn with_mutator<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
         let mut guard = self.0.borrow_mut();
         f(&mut guard)
-    }
-
-    fn element_name(&self, id: NodeId) -> Ref<'_, QualName> {
-        Ref::map(self.0.borrow(), |docm| {
-            docm.element_name(id)
-                .expect("TreeSink::elem_name called on a node which is not an element!")
-        })
     }
 }
 
@@ -91,15 +101,6 @@ impl DocAccess for SharedDocument {
         let mut doc = self.0.borrow_mut();
         let mut mutator = doc.mutate();
         f(&mut mutator)
-    }
-
-    fn element_name(&self, id: NodeId) -> Ref<'_, QualName> {
-        Ref::map(self.0.borrow(), |doc| {
-            &doc.get_node(id)
-                .and_then(|n| n.element_data())
-                .expect("TreeSink::elem_name called on a node which is not an element!")
-                .name
-        })
     }
 }
 
@@ -117,6 +118,54 @@ pub struct HtmlSink<A: DocAccess> {
     pub fragment: bool,
     /// Build into this detached document node instead of the tree's root.
     pub document_node: Option<NodeId>,
+    /// Once admission fails, this parse stops changing the document.
+    exhausted: Cell<bool>,
+    /// Nodes created by this parse, including handles not yet attached when
+    /// admission failed. A transactional caller can release all of them.
+    allocations: Option<Rc<RefCell<Vec<NodeId>>>>,
+}
+
+/// An HTML tree-builder handle remains valid after node admission fails. Its
+/// name is retained without an arena allocation; it can never alias a live node.
+#[derive(Clone)]
+pub struct ParserHandle(Rc<ParserNode>);
+
+struct ParserNode {
+    id: Option<NodeId>,
+    name: QualName,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LIVE_HANDLES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+impl Drop for ParserNode {
+    fn drop(&mut self) {
+        LIVE_HANDLES.with(|count| count.set(count.get() - 1));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn live_parser_handles() -> usize {
+    LIVE_HANDLES.with(Cell::get)
+}
+
+impl ParserHandle {
+    fn new(id: Option<NodeId>, name: QualName) -> Self {
+        #[cfg(test)]
+        LIVE_HANDLES.with(|count| count.set(count.get() + 1));
+        Self(Rc::new(ParserNode { id, name }))
+    }
+
+    pub(crate) fn node_id(&self) -> Option<NodeId> {
+        self.0.id
+    }
+
+    pub(crate) fn non_element(id: Option<NodeId>) -> Self {
+        Self::new(id, QualName::new(None, html5ever::ns!(html), "".into()))
+    }
 }
 
 /// The one-shot parser over a borrowed mutator.
@@ -131,11 +180,39 @@ impl<A: DocAccess> HtmlSink<A> {
             is_xml: false,
             fragment: false,
             document_node: None,
+            exhausted: Cell::new(false),
+            allocations: None,
         }
     }
 
     fn with<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
         self.access.with_mutator(f)
+    }
+
+    /// Whether this parse has stopped admitting nodes.
+    pub fn node_limit_exceeded(&self) -> bool {
+        self.exhausted.get()
+    }
+
+    fn allocate(
+        &self,
+        create: impl FnOnce(&mut DocumentMutator<'_>) -> Result<NodeId, blitz_dom::NodeBudgetExceeded>,
+    ) -> Option<NodeId> {
+        if self.exhausted.get() {
+            return None;
+        }
+        match self.with(create) {
+            Ok(id) => {
+                if let Some(allocations) = &self.allocations {
+                    allocations.borrow_mut().push(id);
+                }
+                Some(id)
+            }
+            Err(_) => {
+                self.exhausted.set(true);
+                None
+            }
+        }
     }
 }
 
@@ -182,10 +259,7 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
                     quirks_mode: QuirksMode::NoQuirks,
                 },
             };
-            html5ever::parse_document(sink, opts)
-                .from_utf8()
-                .read_from(&mut html.as_bytes())
-                .unwrap();
+            let _ = crate::bounded_parser::parse_html(sink, opts, html, None);
         }
     }
 
@@ -198,16 +272,28 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         markup: &str,
         xml: bool,
     ) {
+        let _ = Self::try_parse_into_document_node(mutr, document, markup, xml);
+    }
+
+    /// Report admission exhaustion to callers creating an inert document.
+    pub fn try_parse_into_document_node(
+        mutr: &mut DocumentMutator<'_>,
+        document: NodeId,
+        markup: &str,
+        xml: bool,
+    ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.document_node = Some(document);
         sink.fragment = true;
+        let allocations = Rc::new(RefCell::new(Vec::new()));
+        sink.allocations = Some(allocations.clone());
         if xml {
             sink.is_xml = true;
-            xml5ever::driver::parse_document(sink, Default::default())
-                .from_utf8()
-                .read_from(&mut markup.as_bytes())
-                .unwrap();
-            return;
+            let result = crate::bounded_parser::parse_xml(sink, markup);
+            if result.is_err() {
+                discard_allocations(mutr, &allocations.borrow());
+            }
+            return result;
         }
         let opts = ParseOpts {
             tokenizer: TokenizerOpts::default(),
@@ -219,10 +305,11 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
                 quirks_mode: QuirksMode::NoQuirks,
             },
         };
-        html5ever::parse_document(sink, opts)
-            .from_utf8()
-            .read_from(&mut markup.as_bytes())
-            .unwrap();
+        let result = crate::bounded_parser::parse_html(sink, opts, markup, None);
+        if result.is_err() {
+            discard_allocations(mutr, &allocations.borrow());
+        }
+        result
     }
 
     /// Parse the input as XML (XHTML), regardless of its content.
@@ -235,10 +322,7 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
     pub fn parse_xml_into_mutator<'a, 'd>(mutr: &'a mut DocumentMutator<'d>, xml: &str) {
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.is_xml = true;
-        xml5ever::driver::parse_document(sink, Default::default())
-            .from_utf8()
-            .read_from(&mut xml.as_bytes())
-            .unwrap();
+        let _ = crate::bounded_parser::parse_xml(sink, xml);
     }
 
     pub fn parse_inner_html_into_mutator<'a, 'd>(
@@ -246,14 +330,31 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         element_id: NodeId,
         html: &str,
     ) {
+        let _ = Self::try_parse_inner_html_into_mutator(mutr, element_id, html);
+    }
+
+    /// Commit the parsed fragment only if all of it fits the node budget.
+    pub fn try_parse_inner_html_into_mutator(
+        mutr: &mut DocumentMutator<'_>,
+        element_id: NodeId,
+        html: &str,
+    ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
         // Parse under a detached document: html5ever puts the fragment's root
         // element under the document node, and under the real document the
         // parsed nodes would briefly be connected (visible to mutation
         // observers, which could then hold a node dropped below).
-        let scratch = mutr.create_document_node();
+        let scratch = mutr.try_create_document_node()?;
+        let context_name = mutr.element_name(element_id).cloned();
+        let Some(context_name) = context_name else {
+            mutr.remove_and_drop_node(scratch);
+            return Ok(());
+        };
+        let context = ParserHandle::new(Some(element_id), context_name);
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.fragment = true;
         sink.document_node = Some(scratch);
+        let allocations = Rc::new(RefCell::new(Vec::new()));
+        sink.allocations = Some(allocations.clone());
 
         let opts = ParseOpts {
             tokenizer: TokenizerOpts::default(),
@@ -265,52 +366,52 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
                 quirks_mode: QuirksMode::NoQuirks,
             },
         };
-        html5ever::driver::parse_fragment_for_element(sink, opts, element_id, false, None)
-            .from_utf8()
-            .read_from(&mut html.as_bytes())
-            .unwrap();
+        let result = crate::bounded_parser::parse_html(sink, opts, html, Some(context));
+        if result.is_err() {
+            discard_allocations(mutr, &allocations.borrow());
+        }
 
         // html5ever creates a fragment root under the (scratch) document node
         // and parses into it. Move its children to element_id, then drop the
         // scratch document and the root.
-        let fragment_root_id = mutr.last_child_id(scratch).unwrap();
-        let child_ids = mutr.child_ids(fragment_root_id);
-        mutr.append_children(element_id, &child_ids);
+        if result.is_ok()
+            && let Some(fragment_root_id) = mutr.last_child_id(scratch)
+        {
+            let child_ids = mutr.child_ids(fragment_root_id);
+            mutr.append_children(element_id, &child_ids);
+        }
         mutr.remove_and_drop_node(scratch);
+        result
     }
 }
 
 impl<A: DocAccess> TreeSink for HtmlSink<A> {
     type Output = ();
-
-    // we use the ID of the nodes in the tree as the handle
-    type Handle = NodeId;
-
+    type Handle = ParserHandle;
     type ElemName<'a>
-        = Ref<'a, QualName>
+        = &'a QualName
     where
         Self: 'a;
 
-    fn finish(self) -> Self::Output {
-        #[cfg(feature = "tracing")]
-        for error in self.errors.borrow().iter() {
-            tracing::error!("{error}");
-        }
-    }
+    fn finish(self) -> Self::Output {}
 
     fn parse_error(&self, msg: Cow<'static, str>) {
-        self.errors.borrow_mut().push(msg);
+        // Errors are diagnostics, not an unbounded copy of hostile markup.
+        let mut errors = self.errors.borrow_mut();
+        if errors.len() < 128 {
+            errors.push(msg);
+        }
     }
 
     fn get_document(&self) -> Self::Handle {
-        match self.document_node {
-            Some(node) => node,
-            None => self.with(|m| m.doc.root_node().id),
-        }
+        ParserHandle::non_element(Some(
+            self.document_node
+                .unwrap_or_else(|| self.with(|m| m.doc.root_node().id)),
+        ))
     }
 
     fn elem_name<'a>(&'a self, target: &'a Self::Handle) -> Self::ElemName<'a> {
-        self.access.element_name(*target)
+        &target.0.name
     }
 
     fn create_element(
@@ -319,81 +420,93 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         attrs: Vec<html5ever::Attribute>,
         _flags: ElementFlags,
     ) -> Self::Handle {
-        let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
         let is_script =
             name.local == html5ever::local_name!("script") && name.ns == html5ever::ns!(html);
-        let fragment = self.fragment;
-        self.with(|m| {
-            let id = m.create_element(name, attrs);
+        let id = self.allocate(|m| {
+            let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
+            let id = m.try_create_element(name.clone(), attrs)?;
             if is_script {
-                // The parser runs the scripts it creates; fragment parsing
-                // (innerHTML) never runs them.
-                m.mark_script(id, true, fragment);
+                m.mark_script(id, true, self.fragment);
             }
-            id
-        })
+            Ok(id)
+        });
+        ParserHandle::new(id, name)
     }
 
     fn create_comment(&self, text: StrTendril) -> Self::Handle {
-        self.with(|m| m.create_comment_node(text.as_ref()))
+        ParserHandle::non_element(self.allocate(|m| m.try_create_comment_node(text.as_ref())))
     }
 
     fn create_pi(&self, target: StrTendril, data: StrTendril) -> Self::Handle {
-        self.with(|m| m.create_processing_instruction(&target, data.as_ref()))
+        ParserHandle::non_element(
+            self.allocate(|m| m.try_create_processing_instruction(&target, data.as_ref())),
+        )
     }
 
-    fn append(&self, parent_id: &Self::Handle, child: NodeOrText<Self::Handle>) {
+    fn append(&self, parent: &Self::Handle, child: NodeOrText<Self::Handle>) {
+        let Some(parent) = parent.node_id().filter(|_| !self.exhausted.get()) else {
+            return;
+        };
         match child {
-            NodeOrText::AppendNode(id) => self.with(|m| m.append_children(*parent_id, &[id])),
-            // If content to append is text, first attempt to append it to the last child of parent.
-            // Else create a new text node and append it to the parent
-            NodeOrText::AppendText(text) => self.with(|m| {
-                let last_child_id = m.last_child_id(*parent_id);
-                let has_appended = if let Some(id) = last_child_id {
-                    m.append_text_to_node(id, &text).is_ok()
-                } else {
-                    false
-                };
-                if !has_appended {
-                    let new_child_id = m.create_text_node(text.as_ref());
-                    m.append_children(*parent_id, &[new_child_id]);
+            NodeOrText::AppendNode(child) => {
+                if let Some(child) = child.node_id() {
+                    self.with(|m| m.append_children(parent, &[child]));
                 }
-            }),
+            }
+            NodeOrText::AppendText(text) => {
+                let appended = self.with(|m| {
+                    m.last_child_id(parent)
+                        .is_some_and(|last| m.append_text_to_node(last, &text).is_ok())
+                });
+                if !appended {
+                    if let Some(child) = self.allocate(|m| m.try_create_text_node(text.as_ref())) {
+                        self.with(|m| m.append_children(parent, &[child]));
+                    }
+                }
+            }
         }
     }
 
-    // Note: The tree builder promises we won't have a text node after the insertion point.
-    // https://github.com/servo/html5ever/blob/main/rcdom/lib.rs#L338
-    fn append_before_sibling(&self, sibling_id: &Self::Handle, new_node: NodeOrText<Self::Handle>) {
-        match new_node {
-            NodeOrText::AppendNode(id) => self.with(|m| m.insert_nodes_before(*sibling_id, &[id])),
-            // If content to append is text, first attempt to append it to the node before sibling_node
-            // Else create a new text node and insert it before sibling_node
-            NodeOrText::AppendText(text) => self.with(|m| {
-                let previous_sibling_id = m.previous_sibling_id(*sibling_id);
-                let has_appended = if let Some(id) = previous_sibling_id {
-                    m.append_text_to_node(id, &text).is_ok()
-                } else {
-                    false
-                };
-                if !has_appended {
-                    let new_child_id = m.create_text_node(text.as_ref());
-                    m.insert_nodes_before(*sibling_id, &[new_child_id]);
-                }
-            }),
+    fn append_before_sibling(&self, sibling: &Self::Handle, child: NodeOrText<Self::Handle>) {
+        let Some(sibling) = sibling.node_id().filter(|_| !self.exhausted.get()) else {
+            return;
         };
+        match child {
+            NodeOrText::AppendNode(child) => {
+                if let Some(child) = child.node_id() {
+                    self.with(|m| m.insert_nodes_before(sibling, &[child]));
+                }
+            }
+            NodeOrText::AppendText(text) => {
+                let appended = self.with(|m| {
+                    m.previous_sibling_id(sibling)
+                        .is_some_and(|previous| m.append_text_to_node(previous, &text).is_ok())
+                });
+                if !appended {
+                    if let Some(child) = self.allocate(|m| m.try_create_text_node(text.as_ref())) {
+                        self.with(|m| m.insert_nodes_before(sibling, &[child]));
+                    }
+                }
+            }
+        }
     }
 
     fn append_based_on_parent_node(
         &self,
         element: &Self::Handle,
-        prev_element: &Self::Handle,
+        previous: &Self::Handle,
         child: NodeOrText<Self::Handle>,
     ) {
-        if self.with(|m| m.node_has_parent(*element)) {
+        if self.exhausted.get() {
+            return;
+        }
+        if element
+            .node_id()
+            .is_some_and(|id| self.with(|m| m.node_has_parent(id)))
+        {
             self.append_before_sibling(element, child);
         } else {
-            self.append(prev_element, child);
+            self.append(previous, child);
         }
     }
 
@@ -403,21 +516,33 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         public_id: StrTendril,
         system_id: StrTendril,
     ) {
-        let document = self.get_document();
-        self.with(|m| {
-            let doctype = m.create_doctype(&name, &public_id, &system_id);
-            m.append_children(document, &[doctype]);
-        });
+        let child = self.allocate(|m| m.try_create_doctype(&name, &public_id, &system_id));
+        if let Some(child) = child {
+            self.append(
+                &self.get_document(),
+                NodeOrText::AppendNode(ParserHandle::non_element(Some(child))),
+            );
+        }
     }
 
     fn get_template_contents(&self, target: &Self::Handle) -> Self::Handle {
-        // Parse a template element's children into its (detached, inert)
-        // "template contents" fragment node rather than into the element itself
-        self.with(|m| m.template_contents(*target))
+        if let Some(existing) = target
+            .node_id()
+            .and_then(|id| self.with(|m| m.try_template_contents(id)))
+        {
+            return ParserHandle::non_element(Some(existing));
+        }
+        let id = target
+            .node_id()
+            .and_then(|id| self.allocate(|m| m.try_ensure_template_contents(id)));
+        ParserHandle::non_element(id)
     }
 
     fn same_node(&self, x: &Self::Handle, y: &Self::Handle) -> bool {
-        x == y
+        match (x.node_id(), y.node_id()) {
+            (Some(x), Some(y)) => x == y,
+            _ => Rc::ptr_eq(&x.0, &y.0),
+        }
     }
 
     fn set_quirks_mode(&self, mode: QuirksMode) {
@@ -425,20 +550,39 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
     }
 
     fn add_attrs_if_missing(&self, target: &Self::Handle, attrs: Vec<html5ever::Attribute>) {
-        let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
-        self.with(|m| m.add_attrs_if_missing(*target, attrs));
+        if let Some(id) = target.node_id().filter(|_| !self.exhausted.get()) {
+            let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
+            self.with(|m| m.add_attrs_if_missing(id, attrs));
+        }
     }
 
     fn remove_from_parent(&self, target: &Self::Handle) {
-        self.with(|m| m.remove_node(*target));
+        if let Some(id) = target.node_id().filter(|_| !self.exhausted.get()) {
+            self.with(|m| m.remove_node(id));
+        }
     }
 
     fn mark_script_already_started(&self, node: &Self::Handle) {
-        self.with(|m| m.mark_script(*node, false, true));
+        if let Some(id) = node.node_id().filter(|_| !self.exhausted.get()) {
+            self.with(|m| m.mark_script(id, false, true));
+        }
     }
 
-    fn reparent_children(&self, old_parent_id: &Self::Handle, new_parent_id: &Self::Handle) {
-        self.with(|m| m.reparent_children(*old_parent_id, *new_parent_id));
+    fn reparent_children(&self, old: &Self::Handle, new: &Self::Handle) {
+        if self.exhausted.get() {
+            return;
+        }
+        if let (Some(old), Some(new)) = (old.node_id(), new.node_id()) {
+            self.with(|m| m.reparent_children(old, new));
+        }
+    }
+}
+
+fn discard_allocations(m: &mut DocumentMutator<'_>, allocated: &[NodeId]) {
+    for &id in allocated {
+        if m.doc.get_node(id).is_some() {
+            m.remove_and_drop_node(id);
+        }
     }
 }
 
@@ -451,10 +595,7 @@ fn parses_some_html() {
     let mut mutr = doc.mutate();
     let sink = DocumentHtmlParser::new(&mut mutr);
 
-    html5ever::parse_document(sink, Default::default())
-        .from_utf8()
-        .read_from(&mut html.as_bytes())
-        .unwrap();
+    let _ = crate::bounded_parser::parse_html(sink, Default::default(), html, None);
 
     drop(mutr);
     doc.print_tree()

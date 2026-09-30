@@ -127,6 +127,13 @@ impl LayoutChildren {
         doc: &mut BaseDocument,
     ) {
         if self.anonymous_block_id.is_none() {
+            // A DOM node remains observable even when there is no space for
+            // its anonymous layout wrapper. Omit that box rather than exceed
+            // the document limit or feed an unstyled text node to layout.
+            if doc.check_node_allocation(1).is_err() {
+                clear_omitted_layout(doc, child_id);
+                return;
+            }
             self.create_anonymous_block(container_node_id, doc);
         }
         doc.nodes[self.anonymous_block_id.unwrap()]
@@ -183,6 +190,27 @@ impl LayoutChildren {
         self.children.push(node_id);
         self.anonymous_block_id = Some(node_id);
         self.anonymous_blocks.push(node_id);
+    }
+}
+
+/// A reconstruction may have freed these nodes' former anonymous parents.
+/// Omitted boxes must expose empty geometry and retain no positioning links.
+fn clear_omitted_layout(doc: &mut BaseDocument, root: NodeId) {
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        let node = &mut doc.nodes[id];
+        pending.extend(node.flat_children().iter().copied());
+        pending.extend(node.before());
+        pending.extend(node.after());
+        node.layout_parent.set(None);
+        node.oof_containing_block.set(None);
+        node.flags.remove(NodeFlags::IS_INLINE_ROOT);
+        node.hoisted_children.get_mut().clear();
+        node.sc_contribution_cache.get_mut().clear();
+        node.stacking_context = None;
+        if let Some(layout) = node.try_layout_data_mut() {
+            *layout = Default::default();
+        }
     }
 }
 
@@ -792,6 +820,13 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: NodeId) {
 
         // Create pseudo element if it should exist but doesn't
         if let (None, Some(pe_style)) = (pe_node_id, &pe_style) {
+            let text = pe_content_text(pe_style);
+            if doc
+                .check_node_allocation(1 + usize::from(text.is_some()))
+                .is_err()
+            {
+                continue;
+            }
             let new_node_id = doc.create_node(NodeData::AnonymousBlock(Box::new(
                 ElementData::new(DUMMY_NAME, Vec::new()),
             )));
@@ -803,7 +838,7 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: NodeId) {
                     .insert(NodeFlags::IS_IN_DOCUMENT);
             }
 
-            if let Some(text) = pe_content_text(pe_style) {
+            if let Some(text) = text {
                 let text_node_id = doc.create_text_node(&text);
                 doc.nodes[text_node_id].parent = Some(new_node_id);
                 doc.nodes[new_node_id].children.push(text_node_id);
@@ -848,6 +883,9 @@ fn flush_pseudo_elements(doc: &mut BaseDocument, node_id: NodeId) {
                     }
                 }
                 (None, Some(new_text)) => {
+                    if doc.check_node_allocation(1).is_err() {
+                        continue;
+                    }
                     let text_node_id = doc.create_text_node(&new_text);
                     doc.nodes[text_node_id].parent = Some(pe_node_id);
                     doc.nodes[pe_node_id].children.push(text_node_id);

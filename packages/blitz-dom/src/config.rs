@@ -32,6 +32,9 @@ pub enum StyleThreading {
 /// Options used when constructing a [`BaseDocument`](crate::BaseDocument)
 #[derive(Default)]
 pub struct DocumentConfig {
+    /// Admission limit for fallible DOM and parser allocation. Includes the
+    /// document node; defaults to [`crate::DEFAULT_NODE_LIMIT`].
+    pub node_limit: Option<usize>,
     /// The initial `Viewport`
     pub viewport: Option<Viewport>,
     /// The base url which relative URLs are resolved against

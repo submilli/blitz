@@ -11,8 +11,8 @@ use crate::node::{CanvasData, NodeFlags, SpecialElementData};
 use crate::stylo_device::DeviceChanges;
 use crate::util::ImageType;
 use crate::{Attribute, BaseDocument, Document, ElementData, Node, NodeData, QualName, local_name};
-// Only the file-input widget and the tests construct names this way.
-#[cfg(any(feature = "file-input", test))]
+// The tests import this macro within their own module.
+#[cfg(feature = "file-input")]
 use crate::qual_name;
 use blitz_traits::shell::Viewport;
 use style::Atom;
@@ -1093,18 +1093,24 @@ impl<'doc> DocumentMutator<'doc> {
             self.doc.has_canvas = self.doc.compute_has_canvas();
         }
 
-        if let Some(id) = self.title_node {
-            let title = self.doc.nodes[id].text_content();
+        // A rollback or replacement can drop queued scratch nodes before
+        // this mutator is flushed. Only live identities still have work.
+        if let Some(node) = self.title_node.take().and_then(|id| self.doc.nodes.get(id)) {
+            let title = node.text_content();
             self.doc.shell_provider.set_window_title(title);
         }
 
         // Add/Update inline stylesheets (<style> elements)
         for id in self.style_nodes.drain() {
-            self.doc.process_style_element(id);
+            if self.doc.nodes.contains_key(id) {
+                self.doc.process_style_element(id);
+            }
         }
 
         for id in self.form_nodes.drain() {
-            self.doc.reset_form_owner(id);
+            if self.doc.nodes.contains_key(id) {
+                self.doc.reset_form_owner(id);
+            }
         }
 
         #[cfg(feature = "autofocus")]
@@ -1552,12 +1558,20 @@ impl<'doc> DocumentMutator<'doc> {
             (tagname, type_attr, value)
         {
             let value = value.to_string();
-            let id = self.create_text_node(&value);
+            let Ok(id) = self.try_create_text_node(&value) else {
+                return;
+            };
             self.append_children(target_id, &[id]);
+            #[cfg(feature = "file-input")]
             return;
         }
         #[cfg(feature = "file-input")]
         if let ("input", Some("file")) = (tagname, type_attr) {
+            // This generated subtree shares the page node budget. Admit all
+            // four nodes before creating any of the control representation.
+            if self.doc.check_node_allocation(4).is_err() {
+                return;
+            }
             let button_id = self.create_element(
                 qual_name!("button", html),
                 vec![

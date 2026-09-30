@@ -226,6 +226,7 @@ pub struct BaseDocument {
     /// We pin the tree to a guarantee to the nodes it creates that the tree is stable in memory.
     /// There is no way to create the tree - publicly or privately - that would invalidate that invariant.
     pub(crate) nodes: Box<NodeTree>,
+    pub(crate) node_limit: usize,
 
     /// The id of the root node (a Document node)
     pub(crate) root_node_id: NodeId,
@@ -466,6 +467,10 @@ impl BaseDocument {
 
             guard,
             nodes,
+            node_limit: config
+                .node_limit
+                .unwrap_or(crate::DEFAULT_NODE_LIMIT)
+                .max(1),
             root_node_id: NodeId::default(),
             stylist,
             animations: DocumentAnimationSet::default(),
@@ -936,6 +941,10 @@ impl BaseDocument {
     /// it so that stale NodeIds are never dereferenced after the slot is freed.
     pub(crate) fn remove_node_from_tree(&mut self, node_id: NodeId) -> Option<Node> {
         self.clear_interaction_state_for_removed_node(node_id);
+        self.changed_nodes.remove(&node_id);
+        if let Some(node) = self.nodes.get(node_id) {
+            self.snapshots.remove(&style::dom::TNode::opaque(&node));
+        }
         self.nodes.remove(node_id)
     }
 
@@ -1018,63 +1027,6 @@ impl BaseDocument {
             self.drag_mode = DragMode::None;
         }
         self.scrollbar_activity.remove(&node_id);
-    }
-
-    pub(crate) fn drop_node_ignoring_parent(&mut self, node_id: NodeId) -> Option<Node> {
-        self.drop_node_ignoring_parent_with(node_id, &mut |_| {})
-    }
-
-    /// Like [`Self::drop_node_ignoring_parent`], but calls `on_drop` with the id of
-    /// every dropped node (the node itself and all of its descendants).
-    pub(crate) fn drop_node_ignoring_parent_with(
-        &mut self,
-        node_id: NodeId,
-        on_drop: &mut dyn FnMut(NodeId),
-    ) -> Option<Node> {
-        let mut node = self.remove_node_from_tree(node_id);
-        if let Some(node) = &mut node {
-            on_drop(node_id);
-            if let Some(before) = node.before() {
-                self.drop_node_ignoring_parent_with(before, on_drop);
-            }
-            if let Some(after) = node.after() {
-                self.drop_node_ignoring_parent_with(after, on_drop);
-            }
-
-            for &child in &node.children {
-                self.drop_node_ignoring_parent_with(child, on_drop);
-            }
-            // A host's shadow tree goes with it.
-            if let Some(root) = node.element_data().and_then(|e| e.shadow_root) {
-                self.shadow_hosts.remove(&node_id);
-                self.drop_node_ignoring_parent_with(root, on_drop);
-            }
-
-            // Anonymous blocks live only in the slab, so deallocate the ones this
-            // node owns rather than leaking them.
-            for &anon_id in &node.anonymous_blocks {
-                self.deallocate_anonymous_block(anon_id);
-            }
-        }
-        node
-    }
-
-    /// Deallocate an anonymous block created in a previous construction
-    /// round, along with any anonymous blocks nested within it.
-    pub(crate) fn deallocate_anonymous_block(&mut self, anon_id: NodeId) {
-        // The block may already have been removed from the slab (e.g. a
-        // whitespace-only anonymous block dropped during construction).
-        if !self.nodes.contains_key(anon_id) {
-            return;
-        }
-
-        // Free any anonymous blocks that this block owns before removing it.
-        let nested = std::mem::take(&mut self.nodes[anon_id].anonymous_blocks);
-        for nested_id in nested {
-            self.deallocate_anonymous_block(nested_id);
-        }
-
-        self.remove_node_from_tree(anon_id);
     }
 
     /// Whether the document has been mutated

@@ -2,6 +2,31 @@ use crate::{BaseDocument, Document, DocumentConfig, DocumentMutator, PlainDocume
 use blitz_traits::node_id::NodeId;
 
 pub trait HtmlParserProvider {
+    /// Fallible fragment parsing. Providers with bounded allocation override
+    /// this to report exhaustion before the caller commits a replacement.
+    fn try_parse_inner_html(
+        &self,
+        mutr: &mut DocumentMutator<'_>,
+        element_id: NodeId,
+        html: &str,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
+        self.parse_inner_html(mutr, element_id, html);
+        Ok(())
+    }
+
+    /// Fallible inert-document parsing; normal page loads may instead stop
+    /// at the budget and retain their successfully parsed prefix.
+    fn try_parse_into_document_node(
+        &self,
+        mutr: &mut DocumentMutator<'_>,
+        document: NodeId,
+        markup: &str,
+        xml: bool,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
+        self.parse_into_document_node(mutr, document, markup, xml);
+        Ok(())
+    }
+
     fn parse_inner_html<'m, 'doc>(
         &self,
         mutr: &'m mut DocumentMutator<'doc>,

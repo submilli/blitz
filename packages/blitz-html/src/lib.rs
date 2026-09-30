@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if)]
 
+mod bounded_parser;
 mod html_document;
 mod html_sink;
 mod streaming;

@@ -59,6 +59,9 @@ mod iframe;
 /// Integration of taffy and the DOM.
 mod layout;
 mod mutator;
+mod node_budget;
+mod node_teardown;
+pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
 mod query_selector;
 mod resolve;
 /// Computation of resolved CSS property values (`getComputedStyle()`)

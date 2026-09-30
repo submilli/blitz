@@ -55,6 +55,7 @@ impl BaseDocument {
         abort_signal: AbortSignal,
     ) -> DocumentConfig {
         DocumentConfig {
+            node_limit: Some(self.node_limit()),
             viewport: None,
             base_url,
             ua_stylesheets: None,

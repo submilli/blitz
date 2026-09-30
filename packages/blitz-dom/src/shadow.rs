@@ -59,6 +59,8 @@ pub enum AttachShadowError {
     NotSupported,
     /// It already has one (`NotSupportedError` too).
     AlreadyAttached,
+    /// The document has no remaining node capacity (`QuotaExceededError`).
+    NodeBudgetExceeded,
 }
 
 /// Elements that may host a shadow root, besides autonomous custom elements.
@@ -103,7 +105,9 @@ impl DocumentMutator<'_> {
         if element.shadow_root.is_some() {
             return Err(AttachShadowError::AlreadyAttached);
         }
-        let root = self.create_document_fragment();
+        let root = self
+            .try_create_document_fragment()
+            .map_err(|_| AttachShadowError::NodeBudgetExceeded)?;
         self.doc.nodes[root].shadow_root_data = Some(Box::new(ShadowRootData {
             host,
             open: init.open,

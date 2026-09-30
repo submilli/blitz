@@ -22,6 +22,7 @@ pub enum DomError {
     InvalidCharacter,
     Syntax,
     NoModificationAllowed,
+    QuotaExceeded,
 }
 
 impl DomError {
@@ -34,6 +35,7 @@ impl DomError {
             Self::InvalidCharacter => "InvalidCharacterError",
             Self::Syntax => "SyntaxError",
             Self::NoModificationAllowed => "NoModificationAllowedError",
+            Self::QuotaExceeded => "QuotaExceededError",
         }
     }
 }
@@ -825,41 +827,58 @@ impl DocumentMutator<'_> {
     /// fragment in its context (the `innerHTML` setter). Old children are
     /// detached, not dropped. For `<template>`, replaces the template contents.
     pub fn set_inner_html_detaching(&mut self, id: NodeId, html: &str) {
-        let is_template = self.doc.nodes[id].element_data().is_some_and(|el| {
-            el.name.ns == ns!(html) && el.name.local == markup5ever::local_name!("template")
-        });
-        // The fragment parsing context is an element: a template parses in
-        // its own context into its contents, a shadow root in its host's.
-        let (target, context) = if is_template {
-            (self.template_contents(id), Some(id))
-        } else {
-            (id, self.doc.shadow_host_of(id))
+        let _ = self.try_set_inner_html_detaching(id, html);
+    }
+
+    /// Parse before replacing children. On quota failure the old subtree and
+    /// its identities remain intact, and the temporary parse tree is released.
+    pub fn try_set_inner_html_detaching(
+        &mut self,
+        id: NodeId,
+        html: &str,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
+        let context = self.doc.shadow_host_of(id).unwrap_or(id);
+        let Some(element) = self.doc.nodes[context].element_data() else {
+            return Ok(());
         };
-        self.with_one_child_list_record(target, |m| {
-            m.replace_all(target, None);
-            match context {
-                None => m
-                    .doc
-                    .html_parser_provider
-                    .clone()
-                    .parse_inner_html(m, target, html),
-                Some(context) => {
-                    let name = m.doc.nodes[context]
-                        .element_data()
-                        .expect("a parsing context is an element")
-                        .name
-                        .clone();
-                    let scratch = m.create_element(name, Vec::new());
-                    m.doc
-                        .html_parser_provider
-                        .clone()
-                        .parse_inner_html(m, scratch, html);
-                    let parsed = m.doc.nodes[scratch].children.to_vec();
-                    m.append_children(target, &parsed);
-                    m.remove_and_drop_node(scratch);
+        let name = element.name.clone();
+        let is_template =
+            name.ns == ns!(html) && name.local == markup5ever::local_name!("template");
+        if html.is_empty() {
+            let target = if is_template {
+                element.template_contents
+            } else {
+                Some(id)
+            };
+            if let Some(target) = target {
+                self.replace_all(target, None);
+            }
+            return Ok(());
+        }
+        let scratch = self.try_create_element(name, Vec::new())?;
+        let result = self.parse_temporary_fragment(scratch, html);
+        if let Err(error) = result {
+            self.remove_and_drop_node(scratch);
+            return Err(error);
+        }
+        let target = if is_template {
+            match self.try_ensure_template_contents(id) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    self.remove_and_drop_node(scratch);
+                    return Err(error);
                 }
             }
+        } else {
+            id
+        };
+        let parsed = self.doc.nodes[scratch].children.to_vec();
+        self.with_one_child_list_record(target, |m| {
+            m.replace_all(target, None);
+            m.append_children(target, &parsed);
         });
+        self.remove_and_drop_node(scratch);
+        Ok(())
     }
 
     /// `Element.insertAdjacentHTML(position, html)`: parse `html` as a
@@ -898,12 +917,17 @@ impl DocumentMutator<'_> {
                 !(name.ns == ns!(html) && name.local == markup5ever::local_name!("html"))
             })
             .unwrap_or_else(|| QualName::new(None, ns!(html), markup5ever::local_name!("body")));
-        let scratch = self.create_element(context_name, Vec::new());
-        self.doc
-            .html_parser_provider
-            .clone()
-            .parse_inner_html(self, scratch, html);
+        let scratch = self
+            .try_create_element(context_name, Vec::new())
+            .map_err(|_| DomError::QuotaExceeded)?;
+        if self.parse_temporary_fragment(scratch, html).is_err() {
+            self.remove_and_drop_node(scratch);
+            return Err(DomError::QuotaExceeded);
+        }
         let parsed = self.doc.nodes[scratch].children.to_vec();
+        // Moving out of an unobservable parser context must not expose its
+        // soon-to-be-freed ID through a removal record.
+        self.detach_children(scratch);
         if !parsed.is_empty() {
             match anchor {
                 Some(anchor) => self.insert_nodes_before(anchor, &parsed),
@@ -912,6 +936,23 @@ impl DocumentMutator<'_> {
         }
         self.remove_and_drop_node(scratch);
         Ok(())
+    }
+
+    /// Scratch construction is unobservable. Keep only the eventual mutation
+    /// of the real target, including when fragment parsing rolls back.
+    fn parse_temporary_fragment(
+        &mut self,
+        scratch: NodeId,
+        html: &str,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
+        let log = self.doc.mutation_log.take();
+        let result = self
+            .doc
+            .html_parser_provider
+            .clone()
+            .try_parse_inner_html(self, scratch, html);
+        self.doc.mutation_log = log;
+        result
     }
 
     /// `Node.cloneNode(deep)`: the clone is detached. A deep clone copies

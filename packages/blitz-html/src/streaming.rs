@@ -18,9 +18,10 @@ use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{BufferQueue, Tokenizer, TokenizerOpts};
 use html5ever::tree_builder::{QuirksMode, TreeBuilder, TreeBuilderOpts};
 
+use crate::bounded_parser::BoundedHtml;
 use crate::html_sink::{HtmlSink, SharedDocument};
 
-type Sink = HtmlSink<SharedDocument>;
+type Sink = BoundedHtml<SharedDocument>;
 
 pub enum ParseStep {
     /// A parser-inserted `<script>` just ended: run it, then call `run` again.
@@ -30,7 +31,7 @@ pub enum ParseStep {
 }
 
 pub struct StreamingParser {
-    tokenizer: Tokenizer<TreeBuilder<NodeId, Sink>>,
+    tokenizer: Tokenizer<Sink>,
     input: BufferQueue,
     /// Characters from `document.write`, parsed before the rest of the input
     /// (the "insertion point").
@@ -54,7 +55,7 @@ impl StreamingParser {
             },
         );
         Self {
-            tokenizer: Tokenizer::new(tree_builder, TokenizerOpts::default()),
+            tokenizer: Tokenizer::new(BoundedHtml(tree_builder), TokenizerOpts::default()),
             input: BufferQueue::default(),
             written: BufferQueue::default(),
             end_of_input: false,
@@ -64,6 +65,9 @@ impl StreamingParser {
 
     /// Append network input.
     pub fn feed(&mut self, chunk: &str) {
+        if self.finished || self.tokenizer.sink.exhausted() {
+            return;
+        }
         self.input.push_back(StrTendril::from_slice(chunk));
     }
 
@@ -75,6 +79,9 @@ impl StreamingParser {
     /// `document.write(text)`: insert at the insertion point, ahead of the
     /// remaining input.
     pub fn write(&mut self, text: &str) {
+        if self.finished || self.tokenizer.sink.exhausted() {
+            return;
+        }
         self.written.push_back(StrTendril::from_slice(text));
     }
 
@@ -82,18 +89,32 @@ impl StreamingParser {
     /// call, stopping early at a script end tag. Used while a script is
     /// running, so its writes land in the document before it continues.
     pub fn run_written(&mut self) -> ParseStep {
-        Self::feed_until_script(&self.tokenizer, &self.written)
+        let step = Self::feed_until_script(&self.tokenizer, &self.written);
+        self.stop_if_exhausted();
+        step
+    }
+
+    fn stop_if_exhausted(&mut self) {
+        if self.tokenizer.sink.exhausted() {
+            self.finished = true;
+            while self.input.pop_front().is_some() {}
+            while self.written.pop_front().is_some() {}
+        }
     }
 
     /// Feed `queue` until it is exhausted or a script ends. Encoding hints
     /// (`<meta charset>`) are ignored: input is already decoded.
-    fn feed_until_script(
-        tokenizer: &Tokenizer<TreeBuilder<NodeId, Sink>>,
-        queue: &BufferQueue,
-    ) -> ParseStep {
+    fn feed_until_script(tokenizer: &Tokenizer<Sink>, queue: &BufferQueue) -> ParseStep {
         loop {
+            if tokenizer.sink.exhausted() {
+                return ParseStep::Done;
+            }
             match tokenizer.feed(queue) {
-                TokenizerResult::Script(node) => return ParseStep::Script(node),
+                TokenizerResult::Script(node) => {
+                    if let Some(id) = node.node_id().filter(|_| !tokenizer.sink.exhausted()) {
+                        return ParseStep::Script(id);
+                    }
+                }
                 TokenizerResult::Done => return ParseStep::Done,
                 TokenizerResult::EncodingIndicator(_) => continue,
             }
@@ -111,7 +132,8 @@ impl StreamingParser {
         if let ParseStep::Script(node) = Self::feed_until_script(&self.tokenizer, &self.input) {
             return ParseStep::Script(node);
         }
-        if self.end_of_input && self.input.is_empty() && self.written.is_empty() {
+        self.stop_if_exhausted();
+        if !self.finished && self.end_of_input && self.input.is_empty() && self.written.is_empty() {
             self.tokenizer.end();
             self.finished = true;
         }
