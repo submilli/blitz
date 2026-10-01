@@ -33,6 +33,14 @@ impl DocumentMutator<'_> {
         if !self.doc.is_file_input(id) {
             return Err(FormFileError::NotFileInput);
         }
+        // Clearing cannot increase storage, even when cloned selections make
+        // conservative per-node accounting exceed the admission budget.
+        if files.is_empty() {
+            if let Some(e) = self.doc.nodes[id].element_data_mut() {
+                e.clear_file_selection();
+            }
+            return Ok(());
+        }
         if files.len() > 256 {
             return Err(FormFileError::DataLimit);
         }

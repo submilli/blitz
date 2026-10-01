@@ -290,7 +290,7 @@ fn shared_file_selections_fail_entry_admission_before_metadata_amplification() {
         .form_state
         .files
         .clone();
-    for _ in 0..16 {
+    for _ in 0..17 {
         let copy = doc.mutate().clone_node(input, false);
         doc.mutate().append_children(form, &[copy]);
         assert!(Arc::ptr_eq(
@@ -304,6 +304,18 @@ fn shared_file_selections_fail_entry_admission_before_metadata_amplification() {
         ));
     }
     assert_eq!(doc.form_entry_list(form, None), Err(FormDataLimit));
+    doc.mutate()
+        .set_attribute_by_name(input, "required", "")
+        .unwrap();
+    doc.mutate().set_form_files(input, vec![]).unwrap();
+    assert_eq!(doc.form_value(input).unwrap(), "");
+    assert!(doc.control_validity(input).unwrap().value_missing);
+    let last = q(&doc, "input:last-child");
+    assert!(!doc.form_value(last).unwrap().is_empty());
+    assert_eq!(
+        doc.mutate().set_form_files(form, vec![]),
+        Err(blitz_dom::FormFileError::NotFileInput)
+    );
 }
 
 #[test]
