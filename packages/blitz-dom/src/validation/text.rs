@@ -240,6 +240,14 @@ impl crate::DocumentMutator<'_> {
         {
             return;
         }
+        if &*name.local == "type" {
+            if let Some(e) = self.doc.nodes[id].element_data_mut() {
+                e.clear_file_selection();
+            }
+        }
+        let Some(e) = self.doc.nodes[id].element_data() else {
+            return;
+        };
         let old_value_mode = previous.as_ref().is_some_and(|(_, value_mode)| *value_mode);
         if !crate::dom_api::is_text_control(e) {
             if &*name.local == "type" && old_value_mode {

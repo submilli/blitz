@@ -81,6 +81,7 @@ impl DocumentMutator<'_> {
             self.write_checkedness(id, checked);
         }
         if let Some(el) = self.doc.nodes[id].element_data_mut() {
+            el.clear_file_selection();
             el.form_state.value_dirty = false;
             el.form_state.checked_dirty = false;
         }

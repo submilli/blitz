@@ -253,6 +253,9 @@ impl BaseDocument {
         match &*e.name.local {
             "input" if kind == "checkbox" => !self.checkedness(id),
             "input" if kind == "file" => {
+                if !e.form_state.files.is_empty() {
+                    return false;
+                }
                 #[cfg(feature = "file-input")]
                 {
                     e.file_data().is_none_or(|files| files.is_empty())

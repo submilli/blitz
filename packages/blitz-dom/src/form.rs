@@ -37,7 +37,13 @@ impl BaseDocument {
             return;
         };
 
-        let entry = self.form_entry_list(node_id, Some(submitter_id));
+        let entry = match self.form_entry_list(node_id, Some(submitter_id)) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.navigation_provider.submission_failed(error);
+                return;
+            }
+        };
 
         let method = get_form_attr(
             self,

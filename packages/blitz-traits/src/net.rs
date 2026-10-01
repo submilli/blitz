@@ -128,8 +128,10 @@ impl Serialize for Entry {
         serializer.serialize_element(&self.name)?;
         match &self.value {
             EntryValue::String(s) => serializer.serialize_element(s)?,
-            EntryValue::File(p) => serializer.serialize_element(p.to_str().unwrap_or_default())?,
+            EntryValue::File(p) => serializer
+                .serialize_element(p.file_name().and_then(|n| n.to_str()).unwrap_or_default())?,
             EntryValue::EmptyFile => serializer.serialize_element("")?,
+            EntryValue::FileContents(file) => serializer.serialize_element(&file.name)?,
         }
         serializer.end()
     }
@@ -140,13 +142,16 @@ pub enum EntryValue {
     String(String),
     File(PathBuf),
     EmptyFile,
+    /// Host-prepared bytes, never a filesystem path.
+    FileContents(FormFile),
 }
 impl AsRef<str> for EntryValue {
     fn as_ref(&self) -> &str {
         match self {
             EntryValue::String(s) => s,
-            EntryValue::File(p) => p.to_str().unwrap_or_default(),
+            EntryValue::File(p) => p.file_name().and_then(|n| n.to_str()).unwrap_or_default(),
             EntryValue::EmptyFile => "",
+            EntryValue::FileContents(file) => &file.name,
         }
     }
 }
@@ -210,3 +215,29 @@ impl AbortSignal {
         self.0.load(Ordering::SeqCst)
     }
 }
+
+/// Immutable file snapshot supplied by an embedder after its own authorization
+/// and asynchronous I/O. The name is presentation metadata, never a read target.
+#[derive(Clone, PartialEq)]
+pub struct FormFile {
+    pub name: String,
+    pub content_type: String,
+    pub bytes: std::sync::Arc<[u8]>,
+}
+impl std::fmt::Debug for FormFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FormFile")
+            .field("size", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Entry materialization exceeded its aggregate byte or count budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormDataLimit;
+impl std::fmt::Display for FormDataLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Form entry data limit exceeded")
+    }
+}
+impl std::error::Error for FormDataLimit {}

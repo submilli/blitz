@@ -434,6 +434,30 @@ impl ReqwestExt for RequestBuilder {
                                 .file(name, path_buf)
                                 .await
                                 .expect("Couldn't read form file from disk"),
+                            EntryValue::FileContents(file) => {
+                                let mime = if file.content_type.is_empty() {
+                                    "application/octet-stream"
+                                } else {
+                                    &file.content_type
+                                };
+                                let part = reqwest::multipart::Part::stream_with_length(
+                                    Bytes::from_owner(file.bytes.clone()),
+                                    file.bytes.len() as u64,
+                                )
+                                .file_name(file.name.clone());
+                                // Host metadata is advisory; invalid MIME syntax uses
+                                // the binary default rather than panicking.
+                                let part = part.mime_str(mime).unwrap_or_else(|_| {
+                                    reqwest::multipart::Part::stream_with_length(
+                                        Bytes::from_owner(file.bytes.clone()),
+                                        file.bytes.len() as u64,
+                                    )
+                                    .file_name(file.name)
+                                    .mime_str("application/octet-stream")
+                                    .expect("constant MIME is valid")
+                                });
+                                form.part(name, part)
+                            }
                             EntryValue::EmptyFile => form.part(
                                 name,
                                 reqwest::multipart::Part::bytes(&[])

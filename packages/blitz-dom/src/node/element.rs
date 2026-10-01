@@ -47,6 +47,8 @@ macro_rules! local_names {
 /// follows the `value`/`checked` attributes.
 #[derive(Debug, Clone, Default)]
 pub struct FormControlState {
+    /// Host-authorized immutable file snapshots; reset with file selection.
+    pub files: std::sync::Arc<[blitz_traits::net::FormFile]>,
     /// Authoritative current value; the text editor only owns its scalar projection.
     pub value: Option<crate::DomString>,
     pub value_dirty: bool,
@@ -1050,6 +1052,17 @@ mod file_data {
 }
 #[cfg(feature = "file-input")]
 pub use file_data::FileData;
+
+impl ElementData {
+    /// Replacing either form of file selection invalidates the other.
+    pub(crate) fn clear_file_selection(&mut self) {
+        self.form_state.files = Default::default();
+        #[cfg(feature = "file-input")]
+        if let Some(files) = self.file_data_mut() {
+            files.clear();
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

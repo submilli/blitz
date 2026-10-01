@@ -773,6 +773,7 @@ pub(crate) fn handle_click(
                         x => format!("{x} Files Selected"),
                     };
 
+                    el.clear_file_selection();
                     if files.is_empty() {
                         el.special_data = SpecialElementData::None;
                     } else {

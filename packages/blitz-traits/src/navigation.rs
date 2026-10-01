@@ -9,6 +9,8 @@ use crate::net::{Body, Request};
 /// or submitting a form.
 pub trait NavigationProvider: Send + Sync + 'static {
     fn navigate_to(&self, options: NavigationOptions);
+    /// A rejected submission must not be replaced with a partial request.
+    fn submission_failed(&self, _error: crate::net::FormDataLimit) {}
 }
 
 pub struct DummyNavigationProvider;

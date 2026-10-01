@@ -206,10 +206,138 @@ fn image_submission_preserves_pointer_coordinates_and_programmatic_origin() {
                 Some(format!("{prefix}x={x}&{prefix}y={y}").as_str())
             );
             let form = q(&doc, "form");
-            let entries = doc.form_entry_list(form, Some(button));
+            let entries = doc.form_entry_list(form, Some(button)).unwrap();
             assert_eq!(entries.0.len(), 2);
             assert_eq!(entries.0[0].value.as_ref(), x.to_string());
             assert_eq!(entries.0[1].value.as_ref(), y.to_string());
         }
     }
+}
+
+#[test]
+fn host_prepared_files_have_bounded_contents_and_selection_lifecycle() {
+    use blitz_traits::net::FormFile;
+    let mut doc = BaseDocument::new(DocumentConfig::default());
+    DocumentHtmlParser::parse_into_mutator(
+        &mut doc.mutate(),
+        "<form><input type=file name=f></form>",
+    );
+    let input = q(&doc, "input");
+    let form = q(&doc, "form");
+    let file = FormFile {
+        name: "sample.txt".into(),
+        content_type: "text/plain".into(),
+        bytes: Arc::from(&b"a\0b"[..]),
+    };
+    doc.mutate()
+        .set_form_files(input, vec![file.clone()])
+        .unwrap();
+    assert_eq!(doc.form_value(input).unwrap(), "C:\\fakepath\\sample.txt");
+    assert_eq!(
+        doc.form_entry_list(form, None).unwrap()[0].value,
+        EntryValue::FileContents(file.clone())
+    );
+    let mut invalid = file.clone();
+    invalid.name = "/private/path.txt".into();
+    assert_eq!(
+        doc.mutate().set_form_files(input, vec![invalid]),
+        Err(blitz_dom::FormFileError::InvalidMetadata)
+    );
+    assert_eq!(
+        doc.form_entry_list(form, None).unwrap()[0].value,
+        EntryValue::FileContents(file.clone())
+    );
+    let mut oversized = file.clone();
+    oversized.bytes = Arc::from(vec![0; 16 * 1024 * 1024]);
+    assert_eq!(
+        doc.mutate().set_form_files(input, vec![oversized]),
+        Err(blitz_dom::FormFileError::DataLimit)
+    );
+    doc.mutate().reset_form_controls(form).unwrap();
+    assert_eq!(
+        doc.form_entry_list(form, None).unwrap()[0].value,
+        EntryValue::EmptyFile
+    );
+    doc.mutate().set_form_files(input, vec![file]).unwrap();
+    doc.mutate().set_form_value(input, "");
+    assert_eq!(
+        doc.form_entry_list(form, None).unwrap()[0].value,
+        EntryValue::EmptyFile
+    );
+}
+
+#[test]
+fn shared_file_selections_fail_entry_admission_before_metadata_amplification() {
+    use blitz_traits::net::{FormDataLimit, FormFile};
+    let mut doc = BaseDocument::new(DocumentConfig::default());
+    DocumentHtmlParser::parse_into_mutator(
+        &mut doc.mutate(),
+        "<form><input type=file name=f></form>",
+    );
+    let input = q(&doc, "input");
+    let form = q(&doc, "form");
+    let file = FormFile {
+        name: "n".repeat(4096),
+        content_type: String::new(),
+        bytes: Arc::from(&b""[..]),
+    };
+    doc.mutate().set_form_files(input, vec![file; 256]).unwrap();
+    let shared = doc
+        .get_node(input)
+        .unwrap()
+        .element_data()
+        .unwrap()
+        .form_state
+        .files
+        .clone();
+    for _ in 0..16 {
+        let copy = doc.mutate().clone_node(input, false);
+        doc.mutate().append_children(form, &[copy]);
+        assert!(Arc::ptr_eq(
+            &shared,
+            &doc.get_node(copy)
+                .unwrap()
+                .element_data()
+                .unwrap()
+                .form_state
+                .files
+        ));
+    }
+    assert_eq!(doc.form_entry_list(form, None), Err(FormDataLimit));
+}
+
+#[test]
+fn prepared_selection_validity_type_change_and_clone_lifecycle() {
+    use blitz_traits::net::FormFile;
+    let mut doc = BaseDocument::new(DocumentConfig::default());
+    DocumentHtmlParser::parse_into_mutator(
+        &mut doc.mutate(),
+        "<form><input type=file name=f required></form>",
+    );
+    let input = q(&doc, "input");
+    let form = q(&doc, "form");
+    assert!(doc.control_validity(input).unwrap().value_missing);
+    let file = FormFile {
+        name: "f".into(),
+        content_type: String::new(),
+        bytes: Arc::from(&b""[..]),
+    };
+    doc.mutate().set_form_files(input, vec![file]).unwrap();
+    assert!(!doc.control_validity(input).unwrap().value_missing);
+    doc.mutate()
+        .set_attribute_by_name(input, "type", "FILE")
+        .unwrap();
+    assert_eq!(doc.form_value(input).unwrap(), "C:\\fakepath\\f");
+    let copy = doc.mutate().clone_node(input, false);
+    assert_eq!(doc.form_value(copy).unwrap(), "C:\\fakepath\\f");
+    doc.mutate()
+        .set_attribute_by_name(input, "type", "text")
+        .unwrap();
+    doc.mutate()
+        .set_attribute_by_name(input, "type", "file")
+        .unwrap();
+    assert_eq!(
+        doc.form_entry_list(form, None).unwrap()[0].value,
+        EntryValue::EmptyFile
+    );
 }

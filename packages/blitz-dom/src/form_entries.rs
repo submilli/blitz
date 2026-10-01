@@ -6,13 +6,22 @@ use std::collections::HashMap;
 
 impl BaseDocument {
     /// Construct current entries in tree order, including associated external
-    /// controls. Files remain native handles; bindings must not expose host paths.
+    /// controls. Construction retains at most 16,384 entries and 16 MiB of
+    /// metadata/text; file bytes remain shared. Legacy native paths are never
+    /// authority for a binding-side read. Failure returns no partial list.
     /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#constructing-the-entry-list
-    pub fn form_entry_list(&self, form: NodeId, submitter: Option<NodeId>) -> FormData {
+    pub fn form_entry_list(
+        &self,
+        form: NodeId,
+        submitter: Option<NodeId>,
+    ) -> Result<FormData, blitz_traits::net::FormDataLimit> {
         let controls: std::collections::HashSet<_> = self.form_controls(form).into_iter().collect();
         let mut contexts = HashMap::<NodeId, (bool, bool)>::new();
-        let mut entries = FormData::new();
+        let mut entries = Entries::default();
         for id in crate::traversal::TreeTraverser::new_with_root(self, self.tree_root(form)) {
+            if entries.failed {
+                break;
+            }
             let node = &self.nodes[id];
             let (mut disabled, mut datalist) = node
                 .parent
@@ -28,15 +37,14 @@ impl BaseDocument {
                 self.append_control_entries(id, submitter, &mut entries);
             }
         }
-        entries
+        if entries.failed {
+            Err(blitz_traits::net::FormDataLimit)
+        } else {
+            Ok(entries.data)
+        }
     }
 
-    fn append_control_entries(
-        &self,
-        id: NodeId,
-        submitter: Option<NodeId>,
-        entries: &mut FormData,
-    ) {
+    fn append_control_entries(&self, id: NodeId, submitter: Option<NodeId>, entries: &mut Entries) {
         let Some(e) = self.nodes[id].element_data() else {
             return;
         };
@@ -97,6 +105,9 @@ impl BaseDocument {
             }
             ("select", _) => {
                 for option in self.selected_enabled_options(id) {
+                    if entries.failed {
+                        break;
+                    }
                     push(
                         entries,
                         name,
@@ -112,7 +123,19 @@ impl BaseDocument {
         }
     }
 
-    fn append_file_entries(&self, id: NodeId, name: &str, entries: &mut FormData) {
+    fn append_file_entries(&self, id: NodeId, name: &str, entries: &mut Entries) {
+        if let Some(e) = self.nodes[id]
+            .element_data()
+            .filter(|e| !e.form_state.files.is_empty())
+        {
+            for file in e.form_state.files.iter() {
+                if entries.failed {
+                    break;
+                }
+                push(entries, name, EntryValue::FileContents(file.clone()));
+            }
+            return;
+        }
         #[cfg(feature = "file-input")]
         if let Some(files) = self.nodes[id]
             .element_data()
@@ -120,6 +143,9 @@ impl BaseDocument {
             .filter(|f| !f.is_empty())
         {
             for path in files.iter() {
+                if entries.failed {
+                    break;
+                }
                 push(entries, name, EntryValue::File(path.clone()));
             }
             return;
@@ -130,8 +156,30 @@ impl BaseDocument {
     }
 }
 
-fn push(entries: &mut FormData, name: &str, value: EntryValue) {
-    entries.0.push(Entry {
+#[derive(Default)]
+struct Entries {
+    data: FormData,
+    bytes: usize,
+    failed: bool,
+}
+
+fn push(entries: &mut Entries, name: &str, value: EntryValue) {
+    let value_size = match &value {
+        EntryValue::String(s) => s.len(),
+        EntryValue::File(p) => p.as_os_str().len(),
+        EntryValue::FileContents(f) => f.name.len().saturating_add(f.content_type.len()),
+        EntryValue::EmptyFile => 0,
+    };
+    let size = name.len().saturating_add(value_size);
+    if entries.failed
+        || entries.data.len() >= 16_384
+        || size > (16usize * 1024 * 1024).saturating_sub(entries.bytes)
+    {
+        entries.failed = true;
+        return;
+    }
+    entries.bytes += size;
+    entries.data.0.push(Entry {
         name: name.to_owned(),
         value,
     });

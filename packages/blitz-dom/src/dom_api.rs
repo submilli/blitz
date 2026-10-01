@@ -440,6 +440,14 @@ impl BaseDocument {
         if el.name.ns != ns!(html) {
             return None;
         }
+        if self.is_file_input(id) {
+            return Some(
+                el.selected_file_name()
+                    .map(|name| format!("C:\\fakepath\\{name}"))
+                    .unwrap_or_default()
+                    .into(),
+            );
+        }
         match &*el.name.local {
             "input" | "textarea" => {
                 let value = if let Some(value) =
@@ -492,6 +500,14 @@ impl DocumentMutator<'_> {
 
     /// Assign the current DOMString without a scalar round trip.
     pub fn set_form_value_dom(&mut self, id: NodeId, value: &crate::DomString) {
+        if self.doc.is_file_input(id) {
+            if value.is_empty() {
+                if let Some(e) = self.doc.nodes[id].element_data_mut() {
+                    e.clear_file_selection();
+                }
+            }
+            return;
+        }
         let is_text = self.doc.nodes[id]
             .element_data()
             .is_some_and(is_text_control);
@@ -998,6 +1014,7 @@ impl DocumentMutator<'_> {
                     target.form_state.value_dirty = state.value_dirty;
                     target.form_state.last_change_by_user = state.last_change_by_user;
                     if &*el.name.local == "input" {
+                        target.form_state.files = state.files;
                         target.form_state.checked = state.checked;
                         target.form_state.checked_dirty = state.checked_dirty;
                     }

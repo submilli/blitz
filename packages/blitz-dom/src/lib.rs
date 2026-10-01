@@ -60,6 +60,8 @@ mod events;
 mod font_metrics;
 mod form;
 mod form_entries;
+mod form_files;
+pub use form_files::FormFileError;
 mod form_owner;
 mod form_reset;
 mod parser_forms;

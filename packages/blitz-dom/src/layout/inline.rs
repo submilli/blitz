@@ -105,6 +105,8 @@ impl BaseDocument {
             }
         }
 
+        // Debug Stylo styles retain a runtime borrow guard.
+        #[cfg(debug_assertions)]
         drop(style);
 
         // Unwrap the block formatting context if one was passed, or else create a new one
@@ -233,6 +235,8 @@ impl BaseDocument {
             }
         };
 
+        // Debug Stylo styles retain a runtime borrow guard.
+        #[cfg(debug_assertions)]
         drop(style);
 
         // Short circuit if inline context contains no text or inline boxes
@@ -309,6 +313,8 @@ impl BaseDocument {
             let is_floated = false;
 
             let is_out_of_flow = style.position().is_out_of_flow();
+            // Debug Stylo styles retain a runtime borrow guard.
+            #[cfg(debug_assertions)]
             drop(style);
 
             if is_out_of_flow || is_floated {
@@ -764,6 +770,8 @@ impl BaseDocument {
                             .bottom
                             .maybe_resolve(container_content_size.height, resolve_calc_value),
                     };
+                    // Debug Stylo styles retain a runtime borrow guard.
+                    #[cfg(debug_assertions)]
                     drop(style);
 
                     if is_absolute {
