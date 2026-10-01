@@ -38,6 +38,52 @@ impl BaseDocument {
         AncestorTraverser::new(self, id).find(|&node| self.is_html_form(node))
     }
 
+    /// Batch form ownership for one current DOM tree in linear work. Radio
+    /// grouping must not repeat the explicit-ID tree search per control.
+    pub(crate) fn form_owners_in_tree(
+        &self,
+        root: NodeId,
+    ) -> std::collections::HashMap<NodeId, Option<NodeId>> {
+        use std::collections::HashMap;
+        let connected = self.is_connected(root);
+        let mut first_ids = HashMap::new();
+        if connected {
+            for id in TreeTraverser::new_with_root(self, root) {
+                if let Some(attribute) = self.attribute_by_name(id, "id") {
+                    first_ids.entry(attribute.value.as_str()).or_insert(id);
+                }
+            }
+        }
+        let mut ancestors = HashMap::new();
+        let mut owners = HashMap::new();
+        for id in TreeTraverser::new_with_root(self, root) {
+            let Some(node) = self.get_node(id) else {
+                continue;
+            };
+            let inherited = node
+                .parent
+                .and_then(|p| ancestors.get(&p).copied().flatten());
+            ancestors.insert(
+                id,
+                if self.is_html_form(id) {
+                    Some(id)
+                } else {
+                    inherited
+                },
+            );
+            let owner = if connected && let Some(attribute) = self.attribute_by_name(id, "form") {
+                first_ids
+                    .get(attribute.value.as_str())
+                    .copied()
+                    .filter(|&id| self.is_html_form(id))
+            } else {
+                inherited
+            };
+            owners.insert(id, owner);
+        }
+        owners
+    }
+
     fn is_html_form(&self, id: NodeId) -> bool {
         self.get_node(id)
             .and_then(|n| n.element_data())

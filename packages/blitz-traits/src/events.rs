@@ -90,6 +90,8 @@ pub struct DomEvent {
 
     pub data: DomEventData,
     pub request_redraw: bool,
+    /// Engine-owned checkable activation completion, independent of later DOM mutations.
+    pub checkable_completion: bool,
 }
 
 impl DomEvent {
@@ -100,6 +102,7 @@ impl DomEvent {
             cancelable: data.cancelable(),
             data,
             request_redraw: false,
+            checkable_completion: false,
         }
     }
 

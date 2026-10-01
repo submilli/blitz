@@ -575,29 +575,12 @@ impl DocumentMutator<'_> {
     /// `input.checked = ...`: sets the current checkedness and its dirty
     /// flag. Checking a radio button unchecks the others in its group.
     pub fn set_checkedness(&mut self, id: NodeId, checked: bool) {
-        let radio_group = self.doc.nodes[id].element_data().and_then(|el| {
-            (el.attr(markup5ever::local_name!("type")) == Some("radio"))
-                .then(|| {
-                    el.attr(markup5ever::local_name!("name"))
-                        .map(str::to_string)
-                })
-                .flatten()
-        });
-        if let (true, Some(group)) = (checked, radio_group) {
-            let others: Vec<NodeId> = self
-                .doc
-                .nodes
-                .iter()
-                .filter(|(i, node)| {
-                    *i != id
-                        && node.data.downcast_element().is_some_and(|el| {
-                            el.attr(markup5ever::local_name!("type")) == Some("radio")
-                                && el.attr(markup5ever::local_name!("name")) == Some(group.as_str())
-                        })
-                })
-                .map(|(i, _)| i)
-                .collect();
+        if checked {
+            let others = self.doc.radio_group_members(id);
             for other in others {
+                if other == id {
+                    continue;
+                }
                 self.write_checkedness(other, false);
             }
         }

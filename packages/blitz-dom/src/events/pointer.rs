@@ -5,15 +5,14 @@ use std::time::Duration;
 
 use blitz_traits::{
     events::{
-        BlitzInputEvent, BlitzPointerEvent, BlitzPointerId, BlitzWheelDelta, BlitzWheelEvent,
-        DomEvent, DomEventData, MouseEventButton, MouseEventButtons,
+        BlitzPointerEvent, BlitzPointerId, BlitzWheelDelta, BlitzWheelEvent, DomEvent,
+        DomEventData, MouseEventButton, MouseEventButtons,
     },
     navigation::NavigationOptions,
 };
 use keyboard_types::Modifiers;
 use markup5ever::local_name;
 use style::values::computed::{Overflow, TouchAction, UserSelect};
-use style_dom::ElementState;
 use taffy::AbsoluteAxis;
 
 use crate::{
@@ -636,26 +635,12 @@ pub(crate) fn handle_click(
             }
 
             match el.name.local {
-                local_name!("input") if el.attr(local_name!("type")) == Some("checkbox") => {
-                    let mut is_checked = false;
-                    doc.snapshot_node_and(node_id, ElementState::CHECKED, |node| {
-                        if let Some(el) = node.element_data_mut() {
-                            is_checked = BaseDocument::toggle_checkbox(el);
-                        }
-                        node.mark_ancestors_dirty();
-                    });
-                    let value = is_checked.to_string();
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Input(BlitzInputEvent {
-                            value: value.clone(),
-                        }),
-                    ));
-                    // Checkable inputs fire `change` after `input`.
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Change(BlitzInputEvent { value }),
-                    ));
+                local_name!("input")
+                    if el.attr(local_name!("type")).is_some_and(|t| {
+                        t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio")
+                    }) =>
+                {
+                    // The event driver owns pre-activation, rollback and completion.
                     generate_focus_events(
                         doc,
                         &mut |doc| {
@@ -663,43 +648,6 @@ pub(crate) fn handle_click(
                         },
                         dispatch_event,
                     );
-                    break 'matched true;
-                }
-                local_name!("input") if el.attr(local_name!("type")) == Some("radio") => {
-                    if let Some(radio_set) = el.attr(local_name!("name")).map(str::to_string) {
-                        BaseDocument::toggle_radio(doc, radio_set, node_id);
-                    } else if el.checkbox_input_checked().is_some() {
-                        doc.snapshot_node_and(node_id, ElementState::CHECKED, |node| {
-                            if let Some(el) = node.element_data_mut() {
-                                el.set_checkbox_input_checked(true);
-                                el.form_state.checked_dirty = true;
-                            }
-                            node.mark_ancestors_dirty();
-                        });
-                    }
-
-                    // TODO: make input event conditional on value actually changing
-                    let value = String::from("true");
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Input(BlitzInputEvent {
-                            value: value.clone(),
-                        }),
-                    ));
-                    // Checkable inputs fire `change` after `input`.
-                    dispatch_event(DomEvent::new(
-                        node_id,
-                        DomEventData::Change(BlitzInputEvent { value }),
-                    ));
-
-                    generate_focus_events(
-                        doc,
-                        &mut |doc| {
-                            doc.set_focus_to(node_id);
-                        },
-                        dispatch_event,
-                    );
-
                     break 'matched true;
                 }
                 // Activating the first <summary> of a <details> element toggles
@@ -734,10 +682,42 @@ pub(crate) fn handle_click(
                     if let Some(target_node_id) =
                         doc.label_bound_input_element(node_id).map(|n| n.id)
                     {
-                        // Apply default click event action for target node
+                        // Forwarding must not return a control's own click to its
+                        // label after a listener changes its type. Interactive
+                        // descendants likewise have their own activation behavior.
+                        let suppress = doc
+                            .node_chain(target)
+                            .into_iter()
+                            .take_while(|&id| id != node_id)
+                            .any(|id| {
+                                id == target_node_id
+                                    || doc.get_node(id).and_then(|n| n.element_data()).is_some_and(
+                                        |e| match &*e.name.local {
+                                            "a" => e.attr(local_name!("href")).is_some(),
+                                            "input" => !e
+                                                .attr(local_name!("type"))
+                                                .is_some_and(|t| t.eq_ignore_ascii_case("hidden")),
+                                            "audio" | "video" => {
+                                                e.attr(local_name!("controls")).is_some()
+                                            }
+                                            "img" | "object" => {
+                                                e.attr(local_name!("usemap")).is_some()
+                                            }
+                                            "button" | "select" | "textarea" | "summary"
+                                            | "details" | "embed" | "iframe" => true,
+                                            _ => false,
+                                        },
+                                    )
+                            });
+                        if suppress {
+                            break 'matched true;
+                        }
                         let target_node = doc.get_node_mut(target_node_id).unwrap();
                         let syn_event = target_node.synthetic_click_event_data(event.mods);
-                        handle_click(doc, target_node_id, &syn_event, dispatch_event);
+                        dispatch_event(DomEvent::new(
+                            target_node_id,
+                            DomEventData::Click(syn_event),
+                        ));
                         break 'matched true;
                     }
                 }

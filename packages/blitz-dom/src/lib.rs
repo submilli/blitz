@@ -48,6 +48,7 @@ pub mod tree_notifications;
 pub mod node;
 pub mod shadow;
 
+mod checkable_activation;
 mod clock;
 mod config;
 mod css_limits;
@@ -59,6 +60,7 @@ mod events;
 mod font_metrics;
 mod form;
 mod form_owner;
+pub use checkable_activation::CheckableActivation;
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;

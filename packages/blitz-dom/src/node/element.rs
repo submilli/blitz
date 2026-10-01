@@ -53,6 +53,8 @@ pub struct FormControlState {
     /// The current checkedness while no checkbox state exists yet.
     pub checked: Option<bool>,
     pub checked_dirty: bool,
+    /// The script-only visual mixed state of a checkbox.
+    pub indeterminate: bool,
 }
 
 /// HTML script element flags.

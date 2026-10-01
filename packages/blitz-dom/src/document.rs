@@ -759,30 +759,6 @@ impl BaseDocument {
         checked
     }
 
-    pub fn toggle_radio(&mut self, radio_set_name: String, target_radio_id: NodeId) {
-        let radio_ids: Vec<NodeId> = self
-            .nodes
-            .iter()
-            .filter_map(|(i, node)| {
-                let el = node.data.downcast_element()?;
-                (el.attr(local_name!("name")) == Some(&radio_set_name)
-                    && el.checkbox_input_checked().is_some())
-                .then_some(i)
-            })
-            .collect();
-
-        for i in radio_ids {
-            let checked = i == target_radio_id;
-            self.snapshot_node_and(i, ElementState::CHECKED, |node| {
-                if let Some(el) = node.element_data_mut() {
-                    el.set_checkbox_input_checked(checked);
-                    el.form_state.checked_dirty = true;
-                }
-                node.mark_ancestors_dirty();
-            });
-        }
-    }
-
     /// Toggle the `open` attribute of a `<details>` element, expanding or
     /// collapsing it. This is the default action triggered when the element's
     /// first `<summary>` child is activated.

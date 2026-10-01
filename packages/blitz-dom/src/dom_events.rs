@@ -159,6 +159,13 @@ pub trait DispatchHost {
     fn document_mut(&self) -> std::cell::RefMut<'_, BaseDocument>;
     fn event_type(&self) -> String;
     fn bubbles(&self) -> bool;
+    /// True only for MouseEvent click dispatch whose native driver does not
+    /// already own checkable pre-activation.
+    fn activates_checkable(&self) -> bool {
+        false
+    }
+    /// Embedder dispatches trusted input/change after successful activation.
+    fn checkable_activated(&mut self, _target: NodeId) {}
     /// Whether the event crosses shadow boundaries (`composed`): user input
     /// events do, script events only when created so.
     fn composed(&self) -> bool {
@@ -365,6 +372,20 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
             related.map(|r| doc.retarget(r, EventTargetId::Window)),
         )
     };
+    let activation = if host.activates_checkable() {
+        let mut doc = host.document_mut();
+        let activation_target = path
+            .iter()
+            .take(if host.bubbles() { path.len() } else { 1 })
+            .filter_map(|entry| match entry.current {
+                EventTargetId::Node(id) => Some(id),
+                _ => None,
+            })
+            .find(|&id| doc.is_checkable_input(id));
+        activation_target.and_then(|id| doc.begin_checkable_activation(id))
+    } else {
+        None
+    };
     host.set_target(Some(target));
     for entry in path.iter().skip(1).rev() {
         if host.propagation_stopped() {
@@ -412,7 +433,14 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     host.set_composed_path(Vec::new());
     host.set_phase(EventPhase::None, None);
     host.clear_propagation_flags();
-    !host.canceled()
+    let canceled = host.canceled();
+    if let Some(activation) = activation {
+        let activated = activation.finish(&mut host.document_mut(), canceled);
+        if let Some(target) = activated {
+            host.checkable_activated(target);
+        }
+    }
+    !canceled
 }
 
 fn has_listeners(host: &dyn DispatchHost, target: EventTargetId, capture: bool) -> bool {

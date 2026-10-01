@@ -324,7 +324,38 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
 
     fn process_queue(&mut self) {
         while let Some((mut event, _target)) = self.queue.pop_front() {
+            let activation = if matches!(event.data, DomEventData::Click(_)) {
+                let mut doc = self.doc.inner_mut();
+                let target = doc
+                    .node_chain(event.target)
+                    .into_iter()
+                    .find(|&id| doc.is_checkable_input(id))
+                    .filter(|&id| {
+                        !doc.get_node(id)
+                            .and_then(|n| n.element_data())
+                            .is_some_and(|e| e.has_attr(markup5ever::local_name!("disabled")))
+                    });
+                target.and_then(|id| doc.begin_checkable_activation(id))
+            } else {
+                None
+            };
             let event_state = self.run_handler_event(&mut event, EventState::default());
+            if let Some(activation) = activation {
+                let mut doc = self.doc.inner_mut();
+                if let Some(target) = activation.finish(&mut doc, event_state.is_cancelled()) {
+                    let value = doc.checkedness(target).to_string();
+                    for data in [
+                        DomEventData::Input(blitz_traits::events::BlitzInputEvent {
+                            value: value.clone(),
+                        }),
+                        DomEventData::Change(blitz_traits::events::BlitzInputEvent { value }),
+                    ] {
+                        let mut completion = DomEvent::new(target, data);
+                        completion.checkable_completion = true;
+                        self.queue.push_back((completion, doc.lease_node(target)));
+                    }
+                }
+            }
             if !event_state.is_cancelled() {
                 self.run_default_action(&mut event);
             }
