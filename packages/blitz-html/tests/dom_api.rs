@@ -132,7 +132,8 @@ fn attributes_by_qualified_name() {
     assert_eq!(m.toggle_attribute(a, "hidden", None), Ok(false));
     drop(m);
     assert_eq!(
-        doc.attribute_by_name(a, "DATA-x").map(|a| a.value.as_str()),
+        doc.attribute_by_name(a, "DATA-x")
+            .map(|a| a.value.as_str_lossy()),
         Some("1")
     );
     assert_eq!(doc.attribute_names(a), vec!["id", "data-x"]);

@@ -488,28 +488,34 @@ impl BaseDocument {
                         // Image is already being fetched, queue this node
                         #[cfg(feature = "tracing")]
                         tracing::info!("Image {url_str} already pending, queueing node {node_id}");
-                        waiting_list.push((node_id, kind.image_type(idx)));
+                        waiting_list.waiters.insert((node_id, kind.image_type(idx)));
                         Some(ImageResourceData::new(new_url.clone()))
                     } else {
                         // Start fetch and track as pending
                         #[cfg(feature = "tracing")]
                         tracing::info!("Fetching image {url_str}");
-                        self.pending_images
-                            .insert(url_str.to_string(), vec![(node_id, kind.image_type(idx))]);
-
+                        let handler = ResourceHandler::new(
+                            self.tx.clone(),
+                            doc_id,
+                            None,
+                            self.shell_provider.clone(),
+                            ImageHandler::new(kind.image_type(idx), self.svg_fonts.clone()),
+                        );
+                        self.pending_images.insert(
+                            url_str.to_string(),
+                            crate::image_request::PendingImage::new(
+                                handler.request_id(),
+                                node_id,
+                                kind.image_type(idx),
+                            ),
+                        );
                         self.net_provider.fetch(
                             doc_id,
                             crate::net::stamped_request(
                                 (**new_url).clone(),
                                 self.abort_signal.as_ref(),
                             ),
-                            ResourceHandler::boxed(
-                                self.tx.clone(),
-                                doc_id,
-                                None, // Don't pass node_id, we'll handle via pending_images
-                                self.shell_provider.clone(),
-                                ImageHandler::new(kind.image_type(idx), self.svg_fonts.clone()),
-                            ),
+                            Box::new(handler),
                         );
 
                         Some(ImageResourceData::new(new_url.clone()))

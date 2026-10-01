@@ -5,6 +5,7 @@
 use crate::NodeId;
 use std::collections::HashMap;
 use std::ops::{Deref, Range};
+use std::sync::OnceLock;
 use thin_vec::ThinVec;
 
 /// A DOM child list: callers supply unique node IDs and valid insertion offsets.
@@ -17,9 +18,35 @@ pub struct Children {
     nodes: ThinVec<NodeId>,
     start: usize,
     positions: HashMap<NodeId, usize>,
+    first_legend: OnceLock<Option<NodeId>>,
+    first_summary: OnceLock<Option<NodeId>>,
 }
 
 impl Children {
+    /// Tag names are immutable; child-list edits invalidate both lookups.
+    pub(crate) fn first_legend(&self, tree: &crate::NodeTree) -> Option<NodeId> {
+        self.first_html_child(&self.first_legend, "legend", tree)
+    }
+
+    pub(crate) fn first_summary(&self, tree: &crate::NodeTree) -> Option<NodeId> {
+        self.first_html_child(&self.first_summary, "summary", tree)
+    }
+
+    fn first_html_child(
+        &self,
+        cache: &OnceLock<Option<NodeId>>,
+        tag: &str,
+        tree: &crate::NodeTree,
+    ) -> Option<NodeId> {
+        *cache.get_or_init(|| {
+            self.iter().copied().find(|&id| {
+                tree[id]
+                    .element_data()
+                    .is_some_and(|e| e.name.ns == markup5ever::ns!(html) && &*e.name.local == tag)
+            })
+        })
+    }
+
     pub fn as_slice(&self) -> &[NodeId] {
         &self.nodes[self.start..]
     }
@@ -33,6 +60,8 @@ impl Children {
     }
 
     pub fn extend_from_slice(&mut self, ids: &[NodeId]) {
+        self.first_legend.take();
+        self.first_summary.take();
         self.compact_if_needed();
         for &id in ids {
             self.positions.insert(id, self.nodes.len());
@@ -42,12 +71,16 @@ impl Children {
 
     /// Insert a contiguous group; callers provide unique, detached node IDs.
     pub fn insert_slice(&mut self, index: usize, ids: &[NodeId]) {
+        self.first_legend.take();
+        self.first_summary.take();
         let index = self.start + index;
         self.nodes.splice(index..index, ids.iter().copied());
         self.reindex(index..self.nodes.len());
     }
 
     pub fn remove_id(&mut self, id: NodeId) -> bool {
+        self.first_legend.take();
+        self.first_summary.take();
         let Some(index) = self.positions.remove(&id) else {
             return false;
         };
@@ -66,12 +99,16 @@ impl Children {
     }
 
     pub fn clear(&mut self) {
+        self.first_legend.take();
+        self.first_summary.take();
         self.nodes.clear();
         self.positions.clear();
         self.start = 0;
     }
 
     pub fn retain(&mut self, mut keep: impl FnMut(&NodeId) -> bool) {
+        self.first_legend.take();
+        self.first_summary.take();
         let mut index = 0;
         let start = self.start;
         self.nodes.retain(|id| {

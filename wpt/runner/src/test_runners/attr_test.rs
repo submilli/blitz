@@ -142,7 +142,7 @@ pub fn check_node_layout(node: &Node) -> Vec<String> {
                 .iter()
                 .map(|attr| {
                     let name = attr.name.local.as_ref();
-                    let value = &attr.value;
+                    let value = attr.value.as_str_lossy();
                     match name {
                         "data-expected-width" => check_attr(name, value, layout.size.width),
                         "data-expected-height" => check_attr(name, value, layout.size.height),
@@ -193,7 +193,7 @@ pub fn check_node_layout(node: &Node) -> Vec<String> {
                                 .primary_styles()
                                 .map(|styles| styles.clone_display().to_css_string())
                                 .unwrap_or_default();
-                            if display == **value {
+                            if display == *value {
                                 Ok(())
                             } else {
                                 Err(format!(

@@ -25,12 +25,15 @@ impl BaseDocument {
         {
             return None;
         }
+        if let Some(owner) = self.parser_forms.owner(id) {
+            return Some(owner);
+        }
         if self.is_connected(id)
             && &*element.name.local != "img"
-            && let Some(attribute) = self.attribute_by_name(id, "form")
+            && let Some(attribute) = self.null_attribute(id, "form")
         {
             let first = TreeTraverser::new_with_root(self, self.tree_root(id)).find(|&node| {
-                self.attribute_by_name(node, "id")
+                self.null_attribute(node, "id")
                     .is_some_and(|a| a.value == attribute.value)
             });
             return first.filter(|&node| self.is_html_form(node));
@@ -38,8 +41,42 @@ impl BaseDocument {
         AncestorTraverser::new(self, id).find(|&node| self.is_html_form(node))
     }
 
+    /// Listed form-associated elements in current tree order, including external
+    /// controls. Resolving explicit IDs once avoids a tree search per control.
+    pub fn form_controls(&self, form: NodeId) -> Vec<NodeId> {
+        if !self.is_html_form(form) {
+            return Vec::new();
+        }
+        let root = self.tree_root(form);
+        let owners = self.form_owners_in_tree(root);
+        TreeTraverser::new_with_root(self, root)
+            .filter(|id| {
+                owners.get(id) == Some(&Some(form))
+                    && self
+                        .get_node(*id)
+                        .and_then(|n| n.element_data())
+                        .is_some_and(|e| {
+                            e.name.ns == ns!(html)
+                                && matches!(
+                                    &*e.name.local,
+                                    "button"
+                                        | "fieldset"
+                                        | "input"
+                                        | "object"
+                                        | "output"
+                                        | "select"
+                                        | "textarea"
+                                )
+                        })
+            })
+            .collect()
+    }
+
     /// Batch form ownership for one current DOM tree in linear work. Radio
     /// grouping must not repeat the explicit-ID tree search per control.
+    // DomString only caches its scalar projection; shared access cannot change
+    // the authoritative UTF-16 units used by both Hash and Eq.
+    #[allow(clippy::mutable_key_type)]
     pub(crate) fn form_owners_in_tree(
         &self,
         root: NodeId,
@@ -49,8 +86,8 @@ impl BaseDocument {
         let mut first_ids = HashMap::new();
         if connected {
             for id in TreeTraverser::new_with_root(self, root) {
-                if let Some(attribute) = self.attribute_by_name(id, "id") {
-                    first_ids.entry(attribute.value.as_str()).or_insert(id);
+                if let Some(attribute) = self.null_attribute(id, "id") {
+                    first_ids.entry(&attribute.value).or_insert(id);
                 }
             }
         }
@@ -71,9 +108,11 @@ impl BaseDocument {
                     inherited
                 },
             );
-            let owner = if connected && let Some(attribute) = self.attribute_by_name(id, "form") {
+            let owner = if let Some(owner) = self.parser_forms.owner(id) {
+                Some(owner)
+            } else if connected && let Some(attribute) = self.null_attribute(id, "form") {
                 first_ids
-                    .get(attribute.value.as_str())
+                    .get(&attribute.value)
                     .copied()
                     .filter(|&id| self.is_html_form(id))
             } else {

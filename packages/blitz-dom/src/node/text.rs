@@ -57,8 +57,11 @@ pub enum GeneratedTextInputEvent {
 pub struct TextInputData {
     /// A parley TextEditor instance
     pub editor: Box<parley::PlainEditor<TextBrush>>,
+    pub(crate) edits: Vec<super::edit::TextEdit>,
     /// Whether the input is a singleline or multiline input
     pub is_multiline: bool,
+    /// Restrict committed numeric edits while retaining incomplete numeric state.
+    pub(crate) numeric: bool,
     /// The scroll offset of the text content within the input, in CSS (unscaled) pixels.
     ///
     /// For single-line inputs this is a horizontal offset; for multi-line inputs it is a
@@ -79,7 +82,9 @@ impl TextInputData {
         let editor = Box::new(parley::PlainEditor::new(16.0));
         Self {
             editor,
+            edits: Vec::new(),
             is_multiline,
+            numeric: false,
             scroll_offset: 0.0,
         }
     }
@@ -90,9 +95,55 @@ impl TextInputData {
         layout_ctx: &mut LayoutContext<TextBrush>,
         text: &str,
     ) {
-        if self.editor.text() != text {
+        self.edits.clear();
+        if self.editor.raw_compose().is_some() || self.editor.raw_text() != text {
             self.editor.set_text(text);
             self.editor.driver(font_ctx, layout_ctx).refresh_layout();
+        }
+    }
+
+    /// Refresh the rendering projection when edits join surrogate halves. Preserve
+    /// selection/composition in code-unit coordinates across the UTF-8 change.
+    pub(crate) fn reproject(
+        &mut self,
+        value: &crate::DomString,
+        font_ctx: &mut FontContext,
+        layout_ctx: &mut LayoutContext<TextBrush>,
+    ) {
+        let text = value.as_str_lossy();
+        if self.editor.raw_text() == text {
+            return;
+        }
+        let offset = |byte| {
+            self.editor
+                .raw_text()
+                .get(..byte)
+                .map_or(0, |s| s.encode_utf16().count())
+        };
+        let selection = self.editor.raw_selection();
+        let anchor = offset(selection.anchor().index());
+        let focus = offset(selection.focus().index());
+        let compose = self
+            .editor
+            .raw_compose()
+            .clone()
+            .map(|r| offset(r.start)..offset(r.end));
+        self.editor.set_text(text);
+        let mut driver = self.editor.driver(font_ctx, layout_ctx);
+        driver.refresh_layout();
+        let byte = |unit| {
+            let mut count = 0;
+            for (byte, c) in text.char_indices() {
+                if count >= unit {
+                    return byte;
+                }
+                count += c.len_utf16();
+            }
+            text.len()
+        };
+        driver.select_byte_range(byte(anchor), byte(focus));
+        if let Some(range) = compose {
+            driver.set_compose_byte_range(byte(range.start), byte(range.end));
         }
     }
 
@@ -209,8 +260,10 @@ impl TextInputData {
         let action_mod = mods.contains(ACTION_MOD);
 
         let is_multiline = self.is_multiline;
+        let numeric = self.numeric;
         let editor = &mut self.editor;
-        let mut driver = editor.driver(font_ctx, layout_ctx);
+        let mut driver =
+            super::edit::EditingDriver::new(editor.driver(font_ctx, layout_ctx), &mut self.edits);
         match event.key {
             Key::Character(c) if action_mod && matches!(c.as_str(), "c" | "x" | "v") => {
                 match c.to_lowercase().as_str() {
@@ -227,6 +280,10 @@ impl TextInputData {
                     }
                     "v" => {
                         let text = shell_provider.get_clipboard_text().unwrap_or_default();
+                        let text = filter_numeric_edit(numeric, driver.editor, &text);
+                        if numeric && text.is_empty() {
+                            return None;
+                        }
                         driver.insert_or_replace_selection(&text)
                     }
                     _ => unreachable!(),
@@ -353,6 +410,10 @@ impl TextInputData {
             Key::Character(s)
                 if !mods.contains(Modifiers::CONTROL) && !mods.contains(Modifiers::SUPER) =>
             {
+                let s = filter_numeric_edit(numeric, driver.editor, &s);
+                if numeric && s.is_empty() {
+                    return None;
+                }
                 driver.insert_or_replace_selection(&s);
                 return Some(GeneratedTextInputEvent::Input);
             }
@@ -370,7 +431,8 @@ impl TextInputData {
         command: &str,
     ) -> Option<GeneratedTextInputEvent> {
         let editor = &mut self.editor;
-        let mut driver = editor.driver(font_ctx, layout_ctx);
+        let mut driver =
+            super::edit::EditingDriver::new(editor.driver(font_ctx, layout_ctx), &mut self.edits);
         let is_multiline = self.is_multiline;
 
         match command {
@@ -759,8 +821,10 @@ impl TextInputData {
         layout_ctx: &mut LayoutContext<TextBrush>,
         event: BlitzImeEvent,
     ) -> Option<GeneratedTextInputEvent> {
+        let numeric = self.numeric;
         let editor = &mut self.editor;
-        let mut driver = editor.driver(font_ctx, layout_ctx);
+        let mut driver =
+            super::edit::EditingDriver::new(editor.driver(font_ctx, layout_ctx), &mut self.edits);
 
         match event {
             BlitzImeEvent::Enabled => {
@@ -772,7 +836,17 @@ impl TextInputData {
                 Some(GeneratedTextInputEvent::PreEditChange)
             }
             BlitzImeEvent::Commit(text) => {
-                driver.insert_or_replace_selection(&text);
+                let range = driver
+                    .editor
+                    .raw_compose()
+                    .clone()
+                    .unwrap_or_else(|| driver.editor.raw_selection().text_range());
+                let text = filter_numeric_replacement(numeric, driver.editor, &text, range);
+                if numeric && text.is_empty() {
+                    driver.clear_compose();
+                    return Some(GeneratedTextInputEvent::PreEditChange);
+                }
+                driver.commit_compose(&text);
                 Some(GeneratedTextInputEvent::Input)
             }
             BlitzImeEvent::Preedit(text, cursor) => {
@@ -794,4 +868,52 @@ impl TextInputData {
             }
         }
     }
+}
+
+/// Filter inserted text before it reaches the numeric editor; rejected input
+/// must not delete a selection or produce an input event.
+fn filter_numeric_edit<'a>(
+    numeric: bool,
+    editor: &parley::PlainEditor<TextBrush>,
+    text: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    filter_numeric_replacement(numeric, editor, text, editor.raw_selection().text_range())
+}
+
+fn filter_numeric_replacement<'a>(
+    numeric: bool,
+    editor: &parley::PlainEditor<TextBrush>,
+    text: &'a str,
+    selection: std::ops::Range<usize>,
+) -> std::borrow::Cow<'a, str> {
+    if !numeric {
+        return text.into();
+    }
+    let raw = editor.raw_text();
+    let mut after_exponent = raw[..selection.start].contains(['e', 'E']);
+    let retained = raw[..selection.start]
+        .chars()
+        .chain(raw[selection.end..].chars());
+    let mut dot = false;
+    let mut exponent = false;
+    for c in retained {
+        dot |= c == '.';
+        exponent |= matches!(c, 'e' | 'E');
+    }
+    text.chars()
+        .filter(|&c| match c {
+            '.' if !dot && !after_exponent => {
+                dot = true;
+                true
+            }
+            'e' | 'E' if !exponent => {
+                exponent = true;
+                after_exponent = true;
+                true
+            }
+            '+' | '-' | '0'..='9' => true,
+            _ => false,
+        })
+        .collect::<String>()
+        .into()
 }

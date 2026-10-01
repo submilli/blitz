@@ -54,6 +54,14 @@ impl DomString {
         }
     }
 
+    /// Constant-time upper bound on code units, without creating a projection.
+    pub fn utf16_len_bound(&self) -> usize {
+        match &self.0 {
+            Repr::Utf8(s) => s.len(),
+            Repr::Utf16 { units, .. } => units.len(),
+        }
+    }
+
     /// Heap payload retained by a mutation record, including any cached view.
     pub fn retained_bytes(&self) -> usize {
         match &self.0 {
@@ -143,6 +151,12 @@ impl PartialEq for DomString {
     }
 }
 impl Eq for DomString {}
+impl std::hash::Hash for DomString {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.to_utf16().hash(state);
+    }
+}
+
 impl PartialEq<str> for DomString {
     fn eq(&self, s: &str) -> bool {
         self == &Self::from(s)
@@ -160,6 +174,17 @@ impl<'a> FromIterator<&'a DomString> for DomString {
             out.push_dom(s);
         }
         out
+    }
+}
+
+impl PartialOrd for DomString {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for DomString {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.to_utf16().as_ref().cmp(other.to_utf16().as_ref())
     }
 }
 
@@ -188,6 +213,24 @@ mod tests {
             DomString::from_utf16(vec![0xD83D, 0xDE00]),
             DomString::from("😀")
         );
+    }
+
+    #[test]
+    fn hashing_agrees_across_representations_and_ignores_scalar_cache() {
+        use std::hash::{Hash, Hasher};
+        fn hash(value: &DomString) -> u64 {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            value.hash(&mut hasher);
+            hasher.finish()
+        }
+        let utf8 = DomString::from("😀");
+        let utf16 = DomString::from_utf16(vec![0xD83D, 0xDE00]);
+        assert_eq!(hash(&utf8), hash(&utf16));
+        let lone = DomString::from_utf16(vec![0xD800]);
+        let before = hash(&lone);
+        assert_eq!(lone.as_str_lossy(), "�");
+        assert_eq!(before, hash(&lone));
+        assert_ne!(lone, DomString::from("�"));
     }
 
     #[test]

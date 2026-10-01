@@ -59,12 +59,18 @@ mod dom_string;
 mod events;
 mod font_metrics;
 mod form;
+mod form_entries;
 mod form_owner;
 mod form_reset;
+mod parser_forms;
 pub use checkable_activation::CheckableActivation;
+mod disabled;
+mod focus;
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;
+mod image_input;
+mod image_request;
 mod inner_text;
 /// Integration of taffy and the DOM.
 mod layout;
@@ -72,11 +78,14 @@ mod mutator;
 mod node_budget;
 mod node_teardown;
 mod option_state;
+mod output_state;
 mod reclamation;
 mod resource_roots;
+mod validation;
 pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
 pub use reclamation::NodeReachability;
 pub use resource_roots::NodeLease;
+pub use validation::{ValidationError, ValidityState};
 mod query_selector;
 mod resolve;
 /// Computation of resolved CSS property values (`getComputedStyle()`)
@@ -153,7 +162,10 @@ pub use style::invalidation::element::restyle_hints::RestyleHint;
 pub use style::media_queries::MediaType;
 pub use style::stylist::RegisterCustomPropertyResult;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;
-pub use events::{EventDriver, EventHandler, NoopEventHandler};
+pub use events::{
+    EventDriver, EventHandler, FocusTransition, FormAction, GeneratedEvent, ImplicitSubmission,
+    NoopEventHandler,
+};
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};
 pub use util::{Point, decode_font_bytes};
 

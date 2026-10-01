@@ -20,7 +20,7 @@ use html5ever::{
 fn html5ever_to_blitz_attr(attr: html5ever::Attribute) -> Attribute {
     Attribute {
         name: attr.name,
-        value: attr.value.to_string(),
+        value: attr.value.to_string().into(),
     }
 }
 
@@ -132,6 +132,7 @@ pub struct ParserHandle(Rc<ParserNode>);
 
 struct ParserNode {
     lease: Option<blitz_dom::NodeLease>,
+    parser_form: Cell<Option<NodeId>>,
     name: QualName,
 }
 
@@ -156,7 +157,11 @@ impl ParserHandle {
     fn new(lease: Option<blitz_dom::NodeLease>, name: QualName) -> Self {
         #[cfg(test)]
         LIVE_HANDLES.with(|count| count.set(count.get() + 1));
-        Self(Rc::new(ParserNode { lease, name }))
+        Self(Rc::new(ParserNode {
+            lease,
+            name,
+            parser_form: Cell::new(None),
+        }))
     }
 
     pub(crate) fn node_id(&self) -> Option<NodeId> {
@@ -495,8 +500,13 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         };
         match child {
             NodeOrText::AppendNode(child) => {
-                if let Some(child) = child.node_id() {
-                    self.with(|m| m.append_children(parent, &[child]));
+                if let Some(id) = child.node_id() {
+                    self.with(|m| {
+                        m.append_children(parent, &[id]);
+                        if let Some(form) = child.0.parser_form.take() {
+                            m.associate_parser_form(id, form);
+                        }
+                    });
                 }
             }
             NodeOrText::AppendText(text) => {
@@ -519,8 +529,13 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         };
         match child {
             NodeOrText::AppendNode(child) => {
-                if let Some(child) = child.node_id() {
-                    self.with(|m| m.insert_nodes_before(sibling, &[child]));
+                if let Some(id) = child.node_id() {
+                    self.with(|m| {
+                        m.insert_nodes_before(sibling, &[id]);
+                        if let Some(form) = child.0.parser_form.take() {
+                            m.associate_parser_form(id, form);
+                        }
+                    });
                 }
             }
             NodeOrText::AppendText(text) => {
@@ -603,6 +618,19 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         if let Some(id) = target.node_id().filter(|_| !self.exhausted.get()) {
             let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
             self.with(|m| m.add_attrs_if_missing(id, attrs));
+        }
+    }
+
+    fn associate_with_form(
+        &self,
+        target: &Self::Handle,
+        form: &Self::Handle,
+        _nodes: (&Self::Handle, Option<&Self::Handle>),
+    ) {
+        // Fragment insertion resets parser owners. Inert documents have no
+        // browsing context, matching Chrome's frame check for this association.
+        if !self.fragment {
+            target.0.parser_form.set(form.node_id());
         }
     }
 

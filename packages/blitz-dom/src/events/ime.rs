@@ -1,12 +1,12 @@
-use blitz_traits::events::{BlitzImeEvent, DomEvent};
+use blitz_traits::events::BlitzImeEvent;
 
 use crate::BaseDocument;
 
-pub(crate) fn handle_ime_event<F: FnMut(DomEvent)>(
+pub(crate) fn handle_ime_event<F: FnMut(super::GeneratedEvent)>(
     doc: &mut BaseDocument,
     event: BlitzImeEvent,
     dispatch_event: F,
-) {
+) -> Option<super::FormAction> {
     if let Some(node_id) = doc.focus_node_id {
         let node = &mut doc.nodes[node_id];
         let text_input_data = node
@@ -21,11 +21,16 @@ pub(crate) fn handle_ime_event<F: FnMut(DomEvent)>(
             );
 
             if let Some(generated_event) = generated_event {
-                doc.apply_generated_text_input_event(node_id, generated_event, dispatch_event);
+                return doc.apply_generated_text_input_event(
+                    node_id,
+                    generated_event,
+                    dispatch_event,
+                );
             }
 
             #[cfg(feature = "tracing")]
             tracing::debug!(node_id = ?node_id, "Sent ime event");
         }
     }
+    None
 }

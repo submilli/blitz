@@ -262,7 +262,9 @@ fn node_value(this: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<
     let node_id = this_node_id(this)?;
     let doc = ctx.doc.borrow();
     match doc.get_node(node_id).map(|node| &node.data) {
-        Some(NodeData::Text(data)) => Ok(js_str(&data.content)),
+        Some(NodeData::Text(data)) => {
+            Ok(boa_engine::JsString::from(data.content.to_utf16().as_ref()).into())
+        }
         Some(NodeData::Comment { .. }) => Ok(js_str("")),
         _ => Ok(JsValue::null()),
     }
@@ -568,7 +570,7 @@ fn clone_node(this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResu
 
     enum CloneSrc {
         Element(blitz_dom::QualName, Vec<blitz_dom::Attribute>),
-        Text(String),
+        Text(blitz_dom::DomString),
         Other,
     }
 

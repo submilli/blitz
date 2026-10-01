@@ -5,6 +5,7 @@ mod children;
 pub use children::Children;
 #[cfg(feature = "custom-widget")]
 mod custom_widget;
+mod edit;
 mod element;
 mod node;
 pub(crate) mod scrollbar;

@@ -480,7 +480,7 @@ impl selectors::Element for BlitzNode<'_> {
                     NamespaceConstraint::Any => true,
                     NamespaceConstraint::Specific(ns) => attr.name.ns == ns.0,
                 }
-                && operation.eval_str(&attr.value)
+                && operation.eval_str(attr.value.as_str_lossy())
         })
     }
 
@@ -500,8 +500,10 @@ impl selectors::Element for BlitzNode<'_> {
             NonTSPseudoClass::Defined => self
                 .element_data()
                 .is_some_and(|el| el.custom_element_state.is_defined()),
-            NonTSPseudoClass::Disabled => self.element_state().contains(ElementState::DISABLED),
-            NonTSPseudoClass::Enabled => self.element_state().contains(ElementState::ENABLED),
+            NonTSPseudoClass::Disabled => self.is_disabled(),
+            NonTSPseudoClass::Enabled => self
+                .effective_element_state()
+                .contains(ElementState::ENABLED),
             NonTSPseudoClass::Focus => self.element_state().contains(ElementState::FOCUS),
             NonTSPseudoClass::FocusWithin => false,
             NonTSPseudoClass::FocusVisible => false,
@@ -704,7 +706,7 @@ impl<'a> TElement for BlitzNode<'a> {
     }
 
     fn state(&self) -> ElementState {
-        *self.element_state()
+        self.effective_element_state()
     }
 
     fn has_part_attr(&self) -> bool {
@@ -875,7 +877,7 @@ impl<'a> TElement for BlitzNode<'a> {
         self.attrs()?
             .iter()
             .find(|a| a.name.local == attr.0 && a.name.ns == ns.0)
-            .map(|a| a.value.clone())
+            .map(|a| a.value.to_string())
     }
 
     fn lang_attr(&self) -> Option<style::selector_parser::AttrValue> {
@@ -1023,7 +1025,8 @@ impl<'a> TElement for BlitzNode<'a> {
         // case-insensitively, as attribute keywords always are.
         let is_image_input = *tag == local_name!("input")
             && elem.attrs().iter().any(|attr| {
-                attr.name.local == local_name!("type") && attr.value.eq_ignore_ascii_case("image")
+                attr.name.local == local_name!("type")
+                    && attr.value.as_str_lossy().eq_ignore_ascii_case("image")
             });
 
         // https://html.spec.whatwg.org/multipage/#the-lang-and-xml:lang-attributes
@@ -1032,7 +1035,7 @@ impl<'a> TElement for BlitzNode<'a> {
 
         for attr in elem.attrs() {
             let name = &attr.name.local;
-            let value = attr.value.as_str();
+            let value = attr.value.as_str_lossy();
 
             if *name == local_name!("lang") {
                 if attr.name.ns == ns!(xml) {

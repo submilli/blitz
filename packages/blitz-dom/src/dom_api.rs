@@ -382,6 +382,16 @@ impl BaseDocument {
             .find(|attr| attribute_qualified_name(attr) == name)
     }
 
+    /// HTML semantic attributes always belong to the empty namespace. Generic
+    /// DOM qualified-name lookup remains available through `attribute_by_name`.
+    pub fn null_attribute(&self, id: NodeId, name: &str) -> Option<&Attribute> {
+        self.get_node(id)?
+            .element_data()?
+            .attrs()
+            .iter()
+            .find(|attr| attr.name.ns == ns!() && attr.name.local.as_ref() == name)
+    }
+
     /// `Element.getAttributeNames()`
     pub fn attribute_names(&self, id: NodeId) -> Vec<String> {
         self.nodes[id]
@@ -421,41 +431,39 @@ impl BaseDocument {
     /// The `value` IDL attribute of `input`, `textarea`, `select`, `option`
     /// and `button`: the current value, falling back to the defaults.
     pub fn form_value(&self, id: NodeId) -> Option<String> {
+        self.form_value_dom(id).map(|v| v.as_str_lossy().to_owned())
+    }
+
+    /// Lossless current value. Rendering must never replace these code units.
+    pub fn form_value_dom(&self, id: NodeId) -> Option<crate::DomString> {
         let el = self.nodes[id].element_data()?;
         if el.name.ns != ns!(html) {
             return None;
         }
         match &*el.name.local {
             "input" | "textarea" => {
-                if let Some(editor) = el.text_input_data() {
-                    return Some(editor.editor.raw_text().to_string());
-                }
-                if el.form_state.value_dirty {
-                    return Some(el.form_state.value.clone().unwrap_or_default());
-                }
-                if &*el.name.local == "textarea" {
-                    return self.text_content_of(id);
-                }
-                // Checkboxes and radios default to "on".
-                let default = if is_checkable(el) { "on" } else { "" };
-                Some(
-                    el.attr(markup5ever::local_name!("value"))
-                        .unwrap_or(default)
-                        .to_string(),
-                )
+                let value = if let Some(value) =
+                    el.form_state.value.as_ref().filter(|_| is_text_control(el))
+                {
+                    value.clone()
+                } else if &*el.name.local == "textarea" {
+                    self.nodes[id].child_text_content()
+                } else {
+                    el.attr_dom(markup5ever::local_name!("value"))
+                        .cloned()
+                        .unwrap_or_else(|| if is_checkable(el) { "on" } else { "" }.into())
+                };
+                Some(crate::validation::text::api_text(el, &value))
             }
-            "option" => Some(match el.attr(markup5ever::local_name!("value")) {
-                Some(v) => v.to_string(),
-                None => self.option_text(id).to_string(),
+            "option" => Some(match el.attr_dom(markup5ever::local_name!("value")) {
+                Some(v) => v.clone(),
+                None => self.option_text(id),
             }),
-            "select" => {
-                let option = self.selected_option(id)?;
-                self.form_value(option)
-            }
+            "select" => self.form_value_dom(self.selected_option(id)?),
             "button" | "data" | "li" | "param" | "output" => Some(
-                el.attr(markup5ever::local_name!("value"))
-                    .unwrap_or("")
-                    .to_string(),
+                el.attr_dom(markup5ever::local_name!("value"))
+                    .cloned()
+                    .unwrap_or_default(),
             ),
             _ => None,
         }
@@ -479,12 +487,17 @@ impl DocumentMutator<'_> {
     /// `input.value = ...` / `textarea.value = ...`: sets the current value
     /// and its dirty flag; the `value` attribute is untouched.
     pub fn set_form_value(&mut self, id: NodeId, value: &str) {
+        self.set_form_value_dom(id, &value.into());
+    }
+
+    /// Assign the current DOMString without a scalar round trip.
+    pub fn set_form_value_dom(&mut self, id: NodeId, value: &crate::DomString) {
         let is_text = self.doc.nodes[id]
             .element_data()
             .is_some_and(is_text_control);
         if !is_text {
             // Other controls reflect `value` to the attribute.
-            let _ = self.set_attribute_by_name(id, "value", value);
+            self.set_attribute(id, QualName::new(None, ns!(), "value".into()), value);
             return;
         }
         let doc = &mut *self.doc;
@@ -493,10 +506,16 @@ impl DocumentMutator<'_> {
         let Some(el) = doc.nodes[id].element_data_mut() else {
             return;
         };
-        el.form_state.value = Some(value.to_string());
+        let value = crate::validation::text::sanitize_text(el, value);
+        el.form_state.value = Some(value.clone());
         el.form_state.value_dirty = true;
+        el.form_state.last_change_by_user = false;
         if let Some(input) = el.text_input_data_mut() {
-            input.set_text(&mut font_ctx.lock().unwrap(), layout_ctx, value);
+            input.set_text(
+                &mut font_ctx.lock().unwrap(),
+                layout_ctx,
+                value.as_str_lossy(),
+            );
         }
     }
 
@@ -524,7 +543,7 @@ impl DocumentMutator<'_> {
         {
             return;
         }
-        let checked = self.doc.attribute_by_name(id, "checked").is_some();
+        let checked = self.doc.null_attribute(id, "checked").is_some();
         if checked {
             for peer in self.doc.radio_group_members(id) {
                 if peer == id {
@@ -567,7 +586,7 @@ impl DocumentMutator<'_> {
         &mut self,
         id: NodeId,
         name: &str,
-        value: &str,
+        value: impl Into<crate::DomString>,
     ) -> Result<(), DomError> {
         if !is_valid_attribute_name(name) {
             return Err(DomError::InvalidCharacter);
@@ -780,6 +799,9 @@ impl DocumentMutator<'_> {
         {
             *contents = value;
         }
+        if let Some(parent) = self.doc.nodes[id].parent {
+            self.textarea_children_changed(parent);
+        }
     }
 
     /// Replace the children of `id` with the result of parsing `html` as a
@@ -964,7 +986,23 @@ impl DocumentMutator<'_> {
         match self.doc.nodes[id].data.clone() {
             NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
                 let attrs: Vec<Attribute> = el.attrs().to_vec();
-                self.create_element(el.name.clone(), attrs)
+                let copy = self.create_element(el.name.clone(), attrs);
+                if el.name.ns == ns!(html) && matches!(&*el.name.local, "input" | "textarea") {
+                    let original = self.doc.nodes[id].element_data().expect("source element");
+                    let state = original.form_state.clone();
+                    let value = state.value.clone().or_else(|| self.doc.form_value_dom(id));
+                    let target = self.doc.nodes[copy]
+                        .element_data_mut()
+                        .expect("cloned element");
+                    target.form_state.value = is_text_control(&el).then_some(value).flatten();
+                    target.form_state.value_dirty = state.value_dirty;
+                    target.form_state.last_change_by_user = state.last_change_by_user;
+                    if &*el.name.local == "input" {
+                        target.form_state.checked = state.checked;
+                        target.form_state.checked_dirty = state.checked_dirty;
+                    }
+                }
+                copy
             }
             NodeData::Text(t) => self.create_text_node(&t.content),
             NodeData::Comment { contents } => self.create_comment_node(&contents),

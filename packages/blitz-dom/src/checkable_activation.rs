@@ -54,7 +54,7 @@ impl BaseDocument {
             .collect()
     }
 
-    pub(crate) fn radio_name(&self, id: NodeId) -> Option<&str> {
+    pub(crate) fn radio_name(&self, id: NodeId) -> Option<&crate::DomString> {
         let e = self.get_node(id)?.element_data()?;
         if e.name.ns != ns!(html)
             || &*e.name.local != "input"
@@ -64,7 +64,7 @@ impl BaseDocument {
         {
             return None;
         }
-        e.attr(markup5ever::local_name!("name"))
+        e.attr_dom(markup5ever::local_name!("name"))
             .filter(|name| !name.is_empty())
     }
 

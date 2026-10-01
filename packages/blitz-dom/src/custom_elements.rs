@@ -51,8 +51,8 @@ pub enum CustomElementReaction {
         element: NodeId,
         name: String,
         namespace: Option<String>,
-        old_value: Option<String>,
-        new_value: Option<String>,
+        old_value: Option<crate::DomString>,
+        new_value: Option<crate::DomString>,
     },
 }
 
@@ -139,8 +139,12 @@ impl BaseDocument {
                 } => {
                     name.len()
                         + namespace.as_ref().map_or(0, String::len)
-                        + old_value.as_ref().map_or(0, String::len)
-                        + new_value.as_ref().map_or(0, String::len)
+                        + old_value
+                            .as_ref()
+                            .map_or(0, crate::DomString::retained_bytes)
+                        + new_value
+                            .as_ref()
+                            .map_or(0, crate::DomString::retained_bytes)
                 }
                 _ => 0,
             };
@@ -184,7 +188,7 @@ mod bounds_tests {
             name: "x".into(),
             namespace: None,
             old_value: None,
-            new_value: Some("x".repeat(8 * 1024 * 1024)),
+            new_value: Some("x".repeat(8 * 1024 * 1024).into()),
         });
         assert!(doc.take_custom_element_reactions().is_empty());
         assert!(doc.take_custom_element_reaction_overflow());

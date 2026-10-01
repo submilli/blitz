@@ -26,6 +26,7 @@ impl BaseDocument {
         super::caches::prune(self, &live);
         self.prune_reclaimed_indexes(&live);
         for &id in &dead {
+            self.parser_forms.remove(id);
             self.event_listeners.remove_target(EventTargetId::Node(id));
             self.nodes.remove(id);
         }
@@ -37,8 +38,6 @@ impl BaseDocument {
             ids.retain(|id| live.contains(id));
             !ids.is_empty()
         });
-        self.controls_to_form
-            .retain(|control, form| live.contains(control) && live.contains(form));
         self.changed_nodes.retain(|id| live.contains(id));
         self.shadow_hosts.retain(|id| live.contains(id));
         self.scrollbar_activity.retain(|id, _| live.contains(id));

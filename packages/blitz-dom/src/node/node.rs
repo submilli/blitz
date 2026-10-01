@@ -630,10 +630,7 @@ impl Node {
     }
 
     pub fn is_focussable(&self) -> bool {
-        self.data
-            .downcast_element()
-            .map(|el| el.is_focussable)
-            .unwrap_or(false)
+        self.is_programmatically_focusable() && self.tab_index().is_none_or(|i| i >= 0)
     }
 
     pub fn set_restyle_hint(&mut self, hint: RestyleHint) {
@@ -1294,13 +1291,15 @@ impl Node {
                     writer.push_str(&attr.name.local);
                     writer.push_str("=\"");
                     #[allow(clippy::unnecessary_unwrap)] // Convert to if-let chain once stabilised
-                    if current_color.is_some() && attr.value.contains("currentColor") {
+                    if current_color.is_some() && attr.value.as_str_lossy().contains("currentColor")
+                    {
                         let value = attr
                             .value
+                            .as_str_lossy()
                             .replace("currentColor", current_color.as_ref().unwrap());
                         encode_quoted_attribute_to_string(&value, writer);
                     } else {
-                        encode_quoted_attribute_to_string(&attr.value, writer);
+                        encode_quoted_attribute_to_string(attr.value.as_str_lossy(), writer);
                     }
                     writer.push('"');
                 }
@@ -1338,8 +1337,7 @@ impl Node {
     }
 
     pub fn attr(&self, name: LocalName) -> Option<&str> {
-        let attr = self.attrs()?.iter().find(|id| id.name.local == name)?;
-        Some(&attr.value)
+        self.element_data()?.attr(name)
     }
 
     pub fn primary_styles(&self) -> Option<impl Deref<Target = ServoArc<ComputedValues>>> {
@@ -1399,6 +1397,18 @@ impl Node {
     /// It walks with an explicit stack, so a deep tree cannot overflow the
     /// native stack.
     pub fn text_content(&self) -> String {
+        self.text_content_dom().as_str_lossy().to_owned()
+    }
+
+    /// DOM child text content excludes Text descendants inside child elements.
+    pub fn child_text_content(&self) -> crate::DomString {
+        self.children
+            .iter()
+            .filter_map(|&id| self.with(id).text_data().map(|t| &t.content))
+            .collect()
+    }
+
+    pub fn text_content_dom(&self) -> crate::DomString {
         let mut out = crate::DomString::new();
         let mut stack = vec![self];
         while let Some(node) = stack.pop() {
@@ -1410,7 +1420,7 @@ impl Node {
                 _ => {}
             }
         }
-        out.as_str_lossy().to_owned()
+        out
     }
 
     pub fn flush_style_attribute(&mut self, url_extra_data: &UrlExtraData) {
@@ -1986,7 +1996,7 @@ mod test {
     fn create_node_with_disabled_attr() {
         let mut document = BaseDocument::new(DocumentConfig::default());
         let node = document.create_node(NodeData::Element(Box::new(ElementData::new(
-            qual_name!("button"),
+            qual_name!("button", html),
             vec![Attribute {
                 name: qual_name!("disabled"),
                 value: "".into(),
@@ -2008,7 +2018,7 @@ mod test {
     fn ignore_disabled_attr_content() {
         let mut document = BaseDocument::new(DocumentConfig::default());
         let node = document.create_node(NodeData::Element(Box::new(ElementData::new(
-            qual_name!("button"),
+            qual_name!("button", html),
             vec![Attribute {
                 name: qual_name!("disabled"),
                 value: "false".into(),
@@ -2049,10 +2059,29 @@ mod test {
     }
 
     #[test]
+    fn namespaceless_button_does_not_have_html_disabled_state() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        let id = document.create_node(NodeData::Element(Box::new(ElementData::new(
+            qual_name!("button"),
+            vec![Attribute {
+                name: qual_name!("disabled"),
+                value: "".into(),
+            }],
+        ))));
+        let node = document.get_node(id).unwrap();
+        assert!(!node.is_disabled());
+        assert!(
+            !node
+                .element_state()
+                .intersects(ElementState::DISABLED | ElementState::ENABLED)
+        );
+    }
+
+    #[test]
     fn create_empty_enabled_node() {
         let mut document = BaseDocument::new(DocumentConfig::default());
         let node = document.create_node(NodeData::Element(Box::new(ElementData::new(
-            qual_name!("button"),
+            qual_name!("button", html),
             vec![],
         ))));
         let node = document.get_node(node).unwrap();

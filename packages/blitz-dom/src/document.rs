@@ -266,6 +266,7 @@ pub struct BaseDocument {
     pub(crate) last_client_pointer_position: Option<taffy::Point<f32>>,
     /// The node which is currently focussed (if any)
     pub(crate) focus_node_id: Option<NodeId>,
+    pub(crate) focus_epoch: u64,
     /// The node which is currently active (if any)
     pub(crate) active_node_id: Option<NodeId>,
     /// The node which recieved a mousedown event (if any)
@@ -310,8 +311,7 @@ pub struct BaseDocument {
     /// Stylesheets added by the useragent
     /// where the key is the hashed CSS
     pub(crate) ua_stylesheets: HashMap<String, DocumentStyleSheet>,
-    /// Map from form control node ID's to their associated forms node ID's
-    pub(crate) controls_to_form: HashMap<NodeId, NodeId>,
+    pub(crate) parser_forms: crate::parser_forms::ParserForms,
     /// Nodes that contain sub documents
     pub(crate) sub_document_nodes: HashSet<NodeId>,
     /// Load state (abort controller and in-flight request id) for each
@@ -337,6 +337,7 @@ pub struct BaseDocument {
     pub(crate) mutation_log: Option<Vec<crate::mutations::LoggedMutation>>,
     pub(crate) mutation_log_bytes: usize,
     pub(crate) mutation_log_overflowed: bool,
+    pub(crate) validation_error: std::cell::Cell<Option<crate::ValidationError>>,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
     pub(crate) custom_element_reactions: Option<Vec<crate::custom_elements::CustomElementReaction>>,
     pub(crate) custom_element_reaction_bytes: usize,
@@ -356,11 +357,12 @@ pub struct BaseDocument {
     /// Cache of loaded images, keyed by URL. Allows reusing images across multiple
     /// elements without re-fetching from the network.
     pub(crate) image_cache: HashMap<String, ImageData>,
+    pub(crate) failed_image_inputs: HashMap<NodeId, String>,
 
     /// Tracks in-flight image requests. When an image is being fetched, additional
     /// requests for the same URL are queued here instead of starting new fetches.
     /// Value is a list of (node_id, image_type) pairs waiting for the image.
-    pub(crate) pending_images: HashMap<String, Vec<(NodeId, ImageType)>>,
+    pub(crate) pending_images: HashMap<String, crate::image_request::PendingImage>,
 
     /// Nodes whose `background-image`/`mask-image` layers need flushing to
     /// dedicated storage on the node because their style changed (populated by
@@ -507,6 +509,7 @@ impl BaseDocument {
             hover_node_is_text: false,
             last_client_pointer_position: None,
             focus_node_id: None,
+            focus_epoch: 0,
             active_node_id: None,
             mousedown_node_id: None,
             has_active_animations: false,
@@ -531,15 +534,17 @@ impl BaseDocument {
             mutation_log: None,
             mutation_log_bytes: 0,
             mutation_log_overflowed: false,
+            validation_error: std::cell::Cell::new(None),
             custom_element_reactions: None,
             custom_element_reaction_bytes: 0,
             custom_element_reaction_overflow: false,
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
+            failed_image_inputs: HashMap::new(),
             pending_images: HashMap::new(),
             pending_style_image_nodes: Vec::new(),
             pending_critical_resources: HashSet::new(),
-            controls_to_form: HashMap::new(),
+            parser_forms: Default::default(),
             net_provider,
             navigation_provider,
             shell_provider,
@@ -689,11 +694,11 @@ impl BaseDocument {
         DocumentMutator::new(self)
     }
 
-    pub fn handle_dom_event<F: FnMut(DomEvent)>(
+    pub fn handle_dom_event<F: FnMut(crate::GeneratedEvent)>(
         &mut self,
         event: &mut DomEvent,
         dispatch_event: F,
-    ) {
+    ) -> Option<crate::FormAction> {
         handle_dom_event(self, event, dispatch_event)
     }
 
@@ -940,6 +945,7 @@ impl BaseDocument {
     /// (hover/active/focus/mousedown/selection/drag/scrollbar) that references
     /// it so that stale NodeIds are never dereferenced after the slot is freed.
     pub(crate) fn remove_node_from_tree(&mut self, node_id: NodeId) -> Option<Node> {
+        self.forget_image_input(node_id);
         self.clear_interaction_state_for_removed_node(node_id);
         self.changed_nodes.remove(&node_id);
         if let Some(node) = self.nodes.get(node_id) {
@@ -1002,6 +1008,7 @@ impl BaseDocument {
         if self.focus_node_id == Some(node_id) {
             let shell_provider = self.shell_provider.clone();
             self.nodes[node_id].blur(shell_provider);
+            self.focus_epoch = self.focus_epoch.wrapping_add(1);
             self.focus_node_id = None;
         }
         if self.mousedown_node_id == Some(node_id) {
@@ -1300,6 +1307,9 @@ impl BaseDocument {
     }
 
     pub fn handle_messages(&mut self) {
+        for (id, source) in std::mem::take(&mut self.failed_image_inputs) {
+            self.fail_image_input(id, &source);
+        }
         // Remove event Reciever from the Document so that we can process events
         // without holding a borrow to the Document
         let rx = self.rx.take().unwrap();
@@ -1331,7 +1341,14 @@ impl BaseDocument {
             Ok(resource) => resource,
             Err(err) => {
                 if let Some(url) = res.resolved_url.as_ref() {
-                    let waiting_nodes = self.pending_images.remove(url).unwrap_or_default();
+                    let waiting_nodes = self
+                        .take_image_waiters(url, res.request_id)
+                        .unwrap_or_default();
+                    for &(id, kind) in &waiting_nodes {
+                        if matches!(kind, ImageType::Image) {
+                            self.fail_image_input(id, url);
+                        }
+                    }
                     #[cfg(feature = "tracing")]
                     tracing::warn!(
                         url = url.as_str(),
@@ -1372,7 +1389,7 @@ impl BaseDocument {
                     return;
                 };
 
-                self.apply_loaded_image(url, image);
+                self.apply_loaded_image(url, res.request_id, image);
             }
             #[cfg(feature = "svg")]
             Resource::Svg(_kind, svg) => {
@@ -1383,7 +1400,7 @@ impl BaseDocument {
                     return;
                 };
 
-                self.apply_loaded_image(url, image);
+                self.apply_loaded_image(url, res.request_id, image);
             }
             Resource::DocumentSrc(html) => {
                 let Some(node_id) = res.node_id else {
@@ -1438,9 +1455,11 @@ impl BaseDocument {
 
     /// Cache a loaded image and apply it to all nodes waiting on it
     /// (`<img>` elements, `background-image` layers and `mask-image` layers).
-    fn apply_loaded_image(&mut self, url: &str, image: ImageData) {
+    fn apply_loaded_image(&mut self, url: &str, request_id: usize, image: ImageData) {
         // Get all nodes waiting for this image
-        let waiting_nodes = self.pending_images.remove(url).unwrap_or_default();
+        let Some(waiting_nodes) = self.take_image_waiters(url, request_id) else {
+            return;
+        };
 
         #[cfg(feature = "tracing")]
         tracing::info!(
@@ -1459,8 +1478,18 @@ impl BaseDocument {
 
             match image_type {
                 ImageType::Image => {
-                    node.element_data_mut().unwrap().special_data =
-                        SpecialElementData::Image(Box::new(image.clone()));
+                    if let Some(element) = node.element_data()
+                        && element.name.local.as_ref() == "input"
+                        && (!element.is_image_input()
+                            || element.form_state.image_input_source.as_deref() != Some(url))
+                    {
+                        continue;
+                    }
+                    let element = node.element_data_mut().expect("image waiter is an element");
+                    if element.is_image_input() {
+                        element.form_state.image_input_image = Some(Box::new(image.clone()));
+                    }
+                    element.special_data = SpecialElementData::Image(Box::new(image.clone()));
 
                     // Clear layout cache
                     node.clear_layout_cache();
@@ -1564,16 +1593,17 @@ impl BaseDocument {
                         };
 
                         let value = if attr.name.local == local_name!("id") {
-                            AttrValue::Atom(Atom::from(&*attr.value))
+                            AttrValue::Atom(Atom::from(attr.value.as_str_lossy()))
                         } else if attr.name.local == local_name!("class") {
                             let classes = attr
                                 .value
+                                .as_str_lossy()
                                 .split_ascii_whitespace()
                                 .map(Atom::from)
                                 .collect();
-                            AttrValue::TokenList(OnceLock::from(attr.value.clone()), classes)
+                            AttrValue::TokenList(OnceLock::from(attr.value.to_string()), classes)
                         } else {
-                            AttrValue::String(attr.value.clone())
+                            AttrValue::String(attr.value.to_string())
                         };
 
                         (ident, value)
@@ -1605,7 +1635,7 @@ impl BaseDocument {
             self.snapshots.insert(
                 opaque_node_id,
                 ServoElementSnapshot {
-                    state: Some(*self.nodes[node_id].element_state()),
+                    state: Some(self.nodes[node_id].effective_element_state()),
                     attrs,
                     changed_attrs,
                     class_changed: needs_attrs,
@@ -1733,7 +1763,7 @@ impl BaseDocument {
 
     pub fn focus_next_node(&mut self) -> Option<NodeId> {
         let focussed_node_id = self.get_focussed_node_id()?;
-        let id = self.next_node(&self.nodes[focussed_node_id], |node| node.is_focussable())?;
+        let id = self.sequential_focus_target(focussed_node_id, false)?;
         self.set_focus_to(id);
         Some(id)
     }
@@ -1741,13 +1771,14 @@ impl BaseDocument {
     /// Move focus to the previous focussable node in the document
     pub fn focus_prev_node(&mut self) -> Option<NodeId> {
         let focussed_node_id = self.get_focussed_node_id()?;
-        let id = self.prev_node(&self.nodes[focussed_node_id], |node| node.is_focussable())?;
+        let id = self.sequential_focus_target(focussed_node_id, true)?;
         self.set_focus_to(id);
         Some(id)
     }
 
     /// Clear the focussed node
     pub fn clear_focus(&mut self) {
+        self.focus_epoch = self.focus_epoch.wrapping_add(1);
         if let Some(id) = self.focus_node_id {
             let shell_provider = self.shell_provider.clone();
             self.snapshot_node_and(id, ElementState::FOCUS | ElementState::FOCUSRING, |node| {
@@ -1780,6 +1811,7 @@ impl BaseDocument {
             });
         }
 
+        self.focus_epoch = self.focus_epoch.wrapping_add(1);
         // Focus the new node
         self.snapshot_node_and(
             focus_node_id,
@@ -2935,7 +2967,7 @@ mod hover_state_tests {
         let root_id = doc.root_node().id;
         let style = |value: &str| Attribute {
             name: qual_name!("style"),
-            value: value.to_string(),
+            value: value.to_string().into(),
         };
 
         let mut mutator = doc.mutate();
@@ -3026,7 +3058,7 @@ mod hover_invalidation_tests {
         let root_id = doc.root_node().id;
         let style = |value: &str| Attribute {
             name: qual_name!("style"),
-            value: value.to_string(),
+            value: value.to_string().into(),
         };
 
         let mut mutator = doc.mutate();
@@ -3114,7 +3146,7 @@ mod hover_invalidation_tests {
         let root_id = doc.root_node().id;
         let attr = |name: QualName, value: &str| Attribute {
             name,
-            value: value.to_string(),
+            value: value.to_string().into(),
         };
 
         let mut mutator = doc.mutate();
@@ -3184,7 +3216,7 @@ mod hover_invalidation_tests {
         let root_id = doc.root_node().id;
         let attr = |name: QualName, value: &str| Attribute {
             name,
-            value: value.to_string(),
+            value: value.to_string().into(),
         };
 
         let mut mutator = doc.mutate();
@@ -3265,7 +3297,7 @@ mod hover_invalidation_tests {
         let root_id = doc.root_node().id;
         let style = |value: &str| Attribute {
             name: qual_name!("style"),
-            value: value.to_string(),
+            value: value.to_string().into(),
         };
 
         let mut mutator = doc.mutate();
@@ -3322,7 +3354,7 @@ mod hover_invalidation_tests {
         let root_id = doc.root_node().id;
         let style = |value: &str| Attribute {
             name: qual_name!("style"),
-            value: value.to_string(),
+            value: value.to_string().into(),
         };
 
         let mut mutator = doc.mutate();

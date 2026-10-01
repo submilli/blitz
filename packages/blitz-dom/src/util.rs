@@ -82,7 +82,7 @@ impl ImageLayerKind {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ImageType {
     Image,
     Background(usize),

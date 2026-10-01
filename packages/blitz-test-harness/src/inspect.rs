@@ -89,7 +89,7 @@ impl<D: Document> Harness<D> {
         attrs
             .iter()
             .find(|a| *a.name.local == *attr)
-            .map(|a| a.value.clone())
+            .map(|a| a.value.to_string())
     }
 
     /// Hit-test page coordinates `(x, y)`
@@ -160,7 +160,12 @@ fn write_node(out: &mut String, doc: &blitz_dom::BaseDocument, node: &Node, dept
             writeln!(out, "{:?}", truncate(content, 60)).unwrap();
         }
         NodeData::Comment { contents } => {
-            writeln!(out, "<!-- {:?} -->", truncate(contents.trim(), 60)).unwrap();
+            writeln!(
+                out,
+                "<!-- {:?} -->",
+                truncate(contents.as_str_lossy().trim(), 60)
+            )
+            .unwrap();
         }
         NodeData::DocumentFragment => writeln!(out, "#document-fragment").unwrap(),
         NodeData::Doctype { name, .. } => writeln!(out, "<!DOCTYPE {name}>").unwrap(),

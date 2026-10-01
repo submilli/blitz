@@ -372,7 +372,7 @@ fn create_template_node(docm: &mut DocumentMutator<'_>, node: &TemplateNode) -> 
 
             node_id
         }
-        TemplateNode::Text { text } => docm.create_text_node(text),
+        TemplateNode::Text { text } => docm.create_text_node(*text),
         TemplateNode::Dynamic { .. } => docm.create_comment_node(""),
     }
 }

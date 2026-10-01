@@ -112,7 +112,7 @@ fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut DomString
                 out.push(' ');
                 write_attribute_name(&attr.name, out);
                 out.push_str("=\"");
-                escape(&attr.value, true, out);
+                escape_dom(&attr.value, true, out);
                 out.push('"');
             }
             out.push('>');
@@ -190,31 +190,21 @@ fn write_attribute_name(name: &markup5ever::QualName, out: &mut DomString) {
     }
 }
 
-/// "Escaping a string": `&`, U+00A0, and either `"` (attribute mode) or
-/// `<` and `>` (text mode).
-fn escape(s: &str, attribute_mode: bool, out: &mut DomString) {
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '\u{a0}' => out.push_str("&nbsp;"),
-            '"' if attribute_mode => out.push_str("&quot;"),
-            '<' if !attribute_mode => out.push_str("&lt;"),
-            '>' if !attribute_mode => out.push_str("&gt;"),
-            c => out.push(c),
-        }
-    }
-}
-
 /// Escape markup characters while copying every other UTF-16 code unit verbatim.
 fn escape_text(text: &DomString, out: &mut DomString) {
+    escape_dom(text, false, out);
+}
+
+fn escape_dom(text: &DomString, attribute_mode: bool, out: &mut DomString) {
     let units = text.to_utf16();
     let mut start = 0;
     for (i, &unit) in units.iter().enumerate() {
         let escaped = match unit {
             38 => "&amp;",
             160 => "&nbsp;",
-            60 => "&lt;",
-            62 => "&gt;",
+            34 if attribute_mode => "&quot;",
+            60 if !attribute_mode => "&lt;",
+            62 if !attribute_mode => "&gt;",
             _ => continue,
         };
         out.push_units(&units[start..i]);

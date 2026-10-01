@@ -38,7 +38,6 @@ fn sweep_recomputes_pending_roots_and_prunes_listener_and_index_entries() {
     let dead = element(&mut doc, "div");
     let live = element(&mut doc, "input");
     doc.nodes_to_id.insert("old".into(), HashSet::from([dead]));
-    doc.controls_to_form.insert(live, dead);
     doc.scrollbar_activity.insert(dead, 0.0);
     doc.changed_nodes.insert(dead);
     let target = EventTargetId::Node(dead);
@@ -54,7 +53,6 @@ fn sweep_recomputes_pending_roots_and_prunes_listener_and_index_entries() {
     assert!(listeners[0].removed.get());
     assert!(doc.event_listeners.listeners(target, "x").is_empty());
     assert!(doc.nodes_to_id.is_empty());
-    assert!(doc.controls_to_form.is_empty());
     assert!(doc.scrollbar_activity.is_empty());
     assert!(!doc.changed_nodes.contains(&dead));
 }

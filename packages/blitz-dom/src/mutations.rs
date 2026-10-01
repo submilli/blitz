@@ -19,7 +19,7 @@ pub enum MutationRecord {
         target: NodeId,
         name: String,
         namespace: Option<String>,
-        old_value: Option<String>,
+        old_value: Option<crate::DomString>,
     },
     CharacterData {
         target: NodeId,
@@ -41,7 +41,11 @@ impl MutationRecord {
             } => name
                 .len()
                 .saturating_add(namespace.as_ref().map_or(0, String::len))
-                .saturating_add(old_value.as_ref().map_or(0, String::len)),
+                .saturating_add(
+                    old_value
+                        .as_ref()
+                        .map_or(0, crate::DomString::retained_bytes),
+                ),
             Self::CharacterData { old_value, .. } => old_value.retained_bytes(),
         }
     }

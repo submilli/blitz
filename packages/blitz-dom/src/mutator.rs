@@ -59,7 +59,6 @@ pub struct DocumentMutator<'doc> {
     // Tracked nodes for deferred processing when mutations have completed
     title_node: Option<NodeId>,
     style_nodes: HashSet<NodeId>,
-    form_nodes: HashSet<NodeId>,
 
     /// Whether an element/attribute that affect animation status has been seen
     recompute_is_animating: bool,
@@ -90,7 +89,6 @@ impl DocumentMutator<'_> {
             selection_scratch: None,
             title_node: None,
             style_nodes: HashSet::new(),
-            form_nodes: HashSet::new(),
             recompute_is_animating: false,
             mutations_occurred: false,
             #[cfg(feature = "autofocus")]
@@ -275,6 +273,9 @@ impl DocumentMutator<'_> {
 
             self.maybe_record_node(parent_id);
         }
+        if let Some(parent) = self.doc.nodes[node_id].parent {
+            self.textarea_children_changed(parent);
+        }
     }
 
     pub fn append_text_to_node(
@@ -301,6 +302,9 @@ impl DocumentMutator<'_> {
                 // re-processed; the parser appends long text in chunks.
                 let parent_id = self.doc.nodes[node_id].parent;
                 self.maybe_record_node(parent_id);
+                if let Some(parent) = parent_id {
+                    self.textarea_children_changed(parent);
+                }
                 Ok(())
             }
             None => Err(AppendTextErr::NotTextNode),
@@ -326,9 +330,26 @@ impl DocumentMutator<'_> {
         }
     }
 
-    pub fn set_attribute(&mut self, node_id: NodeId, name: QualName, value: &str) {
-        let existed = self.doc.attribute_by_name(node_id, &name.local).is_some();
-        self.set_attribute_inner(node_id, name.clone(), value);
+    pub fn set_attribute(
+        &mut self,
+        node_id: NodeId,
+        name: QualName,
+        value: impl Into<crate::DomString>,
+    ) {
+        let value = value.into();
+        let existed = self.doc.nodes[node_id]
+            .element_data()
+            .is_some_and(|e| e.attrs().iter().any(|a| a.name == name));
+        if name.ns == markup5ever::ns!() && name.local == local_name!("form") {
+            self.reset_parser_form_attribute(node_id);
+        }
+        let sanitize = self.input_sanitization_needed(node_id, &name, Some(value.as_str_lossy()));
+        let current_value = self.value_before_sanitizer_change(node_id, &name);
+        self.set_attribute_inner(node_id, name.clone(), &value);
+        if sanitize {
+            self.sanitize_changed_input_value(node_id, &name, current_value);
+        }
+        self.image_input_attribute_changed(node_id, &name);
         if name.local != local_name!("selected") || !existed {
             self.selection_attribute_changed(node_id, &name);
         }
@@ -337,7 +358,13 @@ impl DocumentMutator<'_> {
         }
     }
 
-    fn set_attribute_inner(&mut self, node_id: NodeId, name: QualName, value: &str) {
+    fn set_attribute_inner(
+        &mut self,
+        node_id: NodeId,
+        name: QualName,
+        dom_value: &crate::DomString,
+    ) {
+        let value = dom_value.as_str_lossy();
         if self.doc.custom_element_state(node_id) == CustomElementState::Custom
             && self.doc.is_recording_custom_element_reactions()
         {
@@ -345,7 +372,7 @@ impl DocumentMutator<'_> {
                 el.attrs()
                     .iter()
                     .find(|a| a.name == name)
-                    .map(|a| a.value.to_string())
+                    .map(|a| a.value.clone())
             });
             self.doc
                 .record_custom_element_reaction(CustomElementReaction::AttributeChanged {
@@ -353,7 +380,7 @@ impl DocumentMutator<'_> {
                     name: name.local.to_string(),
                     namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
                     old_value,
-                    new_value: Some(value.to_string()),
+                    new_value: Some(dom_value.clone()),
                 });
         }
         if self.doc.is_recording_mutations() {
@@ -361,7 +388,7 @@ impl DocumentMutator<'_> {
                 el.attrs()
                     .iter()
                     .find(|a| a.name == name)
-                    .map(|a| a.value.to_string())
+                    .map(|a| a.value.clone())
             });
             self.doc.record_mutation(MutationRecord::Attributes {
                 target: node_id,
@@ -399,7 +426,7 @@ impl DocumentMutator<'_> {
             self.doc.nodes[node_id].mark_ancestors_dirty();
         }
 
-        if name.local == local_name!("id") && node_is_in_document {
+        if name.ns == markup5ever::ns!() && name.local == local_name!("id") && node_is_in_document {
             if let Some(old_id) = self.doc.nodes[node_id]
                 .element_data()
                 .map(|element| element.id.clone())
@@ -421,13 +448,20 @@ impl DocumentMutator<'_> {
         // If element is a CustomWidget, then Ccall attribute_changed on it
         #[cfg(feature = "custom-widget")]
         if let SpecialElementData::CustomWidget(widget_data) = &mut element.special_data {
-            let old_value = element.attrs.get(&name).as_ref().map(|attr| &*attr.value);
+            let old_value = element
+                .attrs
+                .get(&name)
+                .as_ref()
+                .map(|attr| attr.value.as_str_lossy());
             widget_data
                 .widget
                 .attribute_changed(&name.local, old_value, Some(value));
         }
 
-        element.attrs.set(name.clone(), value);
+        element.attrs.set(name.clone(), dom_value);
+        if name.ns != markup5ever::ns!() {
+            return;
+        }
 
         // Focusability is cached on the element and comes from these
         // attributes, so it has to follow a change to one of them: a widget
@@ -449,21 +483,6 @@ impl DocumentMutator<'_> {
 
         if *attr == local_name!("id") {
             element.id = Some(Atom::from(value))
-        }
-
-        if *attr == local_name!("value") {
-            // The attribute is the default value: it only shows while the
-            // value is not dirty.
-            let dirty = element.form_state.value_dirty;
-            if let Some(input_data) = element.text_input_data_mut().filter(|_| !dirty) {
-                // Update text input value
-                input_data.set_text(
-                    &mut self.doc.font_ctx.lock().unwrap(),
-                    &mut self.doc.layout_ctx,
-                    value,
-                );
-            }
-            return;
         }
 
         if *attr == local_name!("style") {
@@ -499,8 +518,19 @@ impl DocumentMutator<'_> {
     }
 
     pub fn clear_attribute(&mut self, node_id: NodeId, name: QualName) {
-        let existed = self.doc.attribute_by_name(node_id, &name.local).is_some();
+        let existed = self.doc.nodes[node_id]
+            .element_data()
+            .is_some_and(|e| e.attrs().iter().any(|a| a.name == name));
+        if existed && name.ns == markup5ever::ns!() && name.local == local_name!("form") {
+            self.reset_parser_form_attribute(node_id);
+        }
+        let sanitize = self.input_sanitization_needed(node_id, &name, None);
+        let current_value = self.value_before_sanitizer_change(node_id, &name);
         self.clear_attribute_inner(node_id, name.clone());
+        if existed && sanitize {
+            self.sanitize_changed_input_value(node_id, &name, current_value);
+        }
+        self.image_input_attribute_changed(node_id, &name);
         if existed {
             self.selection_attribute_changed(node_id, &name);
             if name.ns == markup5ever::ns!() && name.local == local_name!("checked") {
@@ -527,7 +557,7 @@ impl DocumentMutator<'_> {
             node.mark_ancestors_dirty();
         }
 
-        if name.local == local_name!("id") && node_is_in_document {
+        if name.ns == markup5ever::ns!() && name.local == local_name!("id") && node_is_in_document {
             if let Some(old_id) = self.doc.nodes[node_id]
                 .element_data()
                 .and_then(|element| element.id.clone())
@@ -551,7 +581,7 @@ impl DocumentMutator<'_> {
             target: node_id,
             name: name.local.to_string(),
             namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
-            old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
+            old_value: removed_attr.as_ref().map(|a| a.value.clone()),
         });
         if self.doc.custom_element_state(node_id) == CustomElementState::Custom {
             self.doc
@@ -559,7 +589,7 @@ impl DocumentMutator<'_> {
                     element: node_id,
                     name: name.local.to_string(),
                     namespace: (name.ns != markup5ever::ns!()).then(|| name.ns.to_string()),
-                    old_value: removed_attr.as_ref().map(|a| a.value.to_string()),
+                    old_value: removed_attr.as_ref().map(|a| a.value.clone()),
                     new_value: None,
                 });
         }
@@ -572,10 +602,14 @@ impl DocumentMutator<'_> {
         // If element is a CustomWidget, then call attribute_changed on it
         #[cfg(feature = "custom-widget")]
         if let SpecialElementData::CustomWidget(widget_data) = &mut element.special_data {
-            let old_value = removed_attr.as_ref().map(|attr| &*attr.value);
+            let old_value = removed_attr.as_ref().map(|attr| attr.value.as_str_lossy());
             widget_data
                 .widget
                 .attribute_changed(&name.local, old_value, None);
+        }
+
+        if name.ns != markup5ever::ns!() {
+            return;
         }
 
         if name.local == local_name!("id") {
@@ -593,18 +627,6 @@ impl DocumentMutator<'_> {
 
         if name.local == local_name!("href") {
             element.flush_link_state();
-        }
-
-        // Update text input value (unless the value is dirty)
-        if name.local == local_name!("value") {
-            let dirty = element.form_state.value_dirty;
-            if let Some(input_data) = element.text_input_data_mut().filter(|_| !dirty) {
-                input_data.set_text(
-                    &mut self.doc.font_ctx.lock().unwrap(),
-                    &mut self.doc.layout_ctx,
-                    "",
-                );
-            }
         }
 
         let tag = &element.name.local;
@@ -697,6 +719,7 @@ impl DocumentMutator<'_> {
         // Process the subtree *before* severing the parent link so that
         // interaction state referencing removed nodes can retarget to the
         // nearest surviving ancestor.
+        self.reset_parser_forms_in_subtree(node_id);
         self.process_removed_subtree(node_id);
         let node = &mut self.doc.nodes[node_id];
         node.flat_parent.set(crate::node::FlatParent::Dom);
@@ -714,6 +737,7 @@ impl DocumentMutator<'_> {
         parent.mark_ancestors_dirty();
         self.maybe_record_node(parent_id);
         self.selection_children_changed(parent_id);
+        self.textarea_children_changed(parent_id);
     }
 
     /// Detach every child without dropping it. Indexed removals preserve the
@@ -746,6 +770,7 @@ impl DocumentMutator<'_> {
     ) -> Option<Node> {
         self.doc.notify_removing(node_id);
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
+        self.reset_parser_forms_in_subtree(node_id);
         self.process_removed_subtree(node_id);
 
         let node = self.doc.drop_node_ignoring_parent_with(node_id, on_drop);
@@ -772,6 +797,7 @@ impl DocumentMutator<'_> {
             parent.children.remove_id(node_id);
             self.maybe_record_node(parent_id);
             self.selection_children_changed(parent_id);
+            self.textarea_children_changed(parent_id);
         }
 
         node
@@ -803,6 +829,7 @@ impl DocumentMutator<'_> {
         }
         self.maybe_record_node(node_id);
         self.selection_children_changed(node_id);
+        self.textarea_children_changed(node_id);
     }
 
     // Tree mutation methods
@@ -860,6 +887,7 @@ impl DocumentMutator<'_> {
         let recording = self.doc.is_recording_mutations();
         let mut detached: HashMap<NodeId, HashSet<NodeId>> = HashMap::new();
         for child_id in child_ids.iter().copied() {
+            self.reset_parser_forms_in_subtree(child_id);
             self.doc.notify_removing(child_id);
             let removal = recording
                 .then(|| self.doc.position_in_parent(child_id))
@@ -985,8 +1013,10 @@ impl DocumentMutator<'_> {
         self.selection_inserted(child_ids);
         for old_parent in old_parents {
             self.selection_children_changed(old_parent);
+            self.textarea_children_changed(old_parent);
         }
         self.selection_children_changed(parent_id);
+        self.textarea_children_changed(parent_id);
     }
 
     // Tree mutation methods (that defer to other methods)
@@ -1149,12 +1179,6 @@ impl<'doc> DocumentMutator<'doc> {
             }
         }
 
-        for id in self.form_nodes.drain() {
-            if self.doc.nodes.contains_key(id) {
-                self.doc.reset_form_owner(id);
-            }
-        }
-
         #[cfg(feature = "autofocus")]
         if let Some(node_id) = self.node_to_autofocus.take() {
             if self.doc.get_node(node_id).is_some() {
@@ -1175,7 +1199,16 @@ impl<'doc> DocumentMutator<'doc> {
         let mut ops = mem::take(&mut self.eager_op_queue);
         for op in ops.drain(0..) {
             match op {
-                SpecialOp::LoadImage(node_id) => self.load_image(node_id),
+                SpecialOp::LoadImage(node_id) => {
+                    if self.doc.nodes[node_id]
+                        .element_data()
+                        .is_some_and(|e| e.is_image_input())
+                    {
+                        self.update_image_input(node_id, false);
+                    } else {
+                        self.load_image(node_id);
+                    }
+                }
                 SpecialOp::LoadIframe(node_id) => self.load_iframe(node_id),
                 SpecialOp::LoadStylesheet(node_id) => self.load_linked_stylesheet(node_id),
                 SpecialOp::UnloadStylesheet(node_id) => self.unload_stylesheet(node_id),
@@ -1232,6 +1265,9 @@ impl<'doc> DocumentMutator<'doc> {
                     "title" => self.title_node = Some(node_id),
                     "link" => self.eager_op_queue.push(SpecialOp::LoadStylesheet(node_id)),
                     "img" => self.eager_op_queue.push(SpecialOp::LoadImage(node_id)),
+                    "input" if element.is_image_input() => {
+                        self.eager_op_queue.push(SpecialOp::LoadImage(node_id));
+                    }
                     "iframe" => self.eager_op_queue.push(SpecialOp::LoadIframe(node_id)),
                     "canvas" => self
                         .eager_op_queue
@@ -1250,7 +1286,6 @@ impl<'doc> DocumentMutator<'doc> {
                     | "output" => {
                         self.eager_op_queue
                             .push(SpecialOp::ProcessButtonInput(node_id));
-                        self.form_nodes.insert(node_id);
                     }
                     _ => {}
                 }
@@ -1482,7 +1517,7 @@ impl<'doc> DocumentMutator<'doc> {
         self.doc.stylesheet_generation += 1;
     }
 
-    fn load_image(&mut self, target_id: NodeId) {
+    pub(crate) fn load_image(&mut self, target_id: NodeId) {
         let node = &self.doc.nodes[target_id];
         if let Some(raw_src) = node.attr(local_name!("src")) {
             if !raw_src.is_empty() {
@@ -1496,7 +1531,13 @@ impl<'doc> DocumentMutator<'doc> {
                     #[cfg(feature = "tracing")]
                     tracing::info!("Loading image {src_string} from cache");
                     let node = &mut self.doc.nodes[target_id];
-                    node.element_data_mut().unwrap().special_data =
+                    let element = node
+                        .element_data_mut()
+                        .expect("image request is an element");
+                    if element.is_image_input() {
+                        element.form_state.image_input_image = Some(Box::new(cached_image.clone()));
+                    }
+                    element.special_data =
                         SpecialElementData::Image(Box::new(cached_image.clone()));
                     node.clear_layout_cache();
                     node.insert_damage(ALL_DAMAGE);
@@ -1507,27 +1548,32 @@ impl<'doc> DocumentMutator<'doc> {
                 if let Some(waiting_list) = self.doc.pending_images.get_mut(src_string) {
                     #[cfg(feature = "tracing")]
                     tracing::info!("Image {src_string} already pending, queueing node {target_id}");
-                    waiting_list.push((target_id, ImageType::Image));
+                    waiting_list.waiters.insert((target_id, ImageType::Image));
                     return;
                 }
 
                 // Start fetch and track as pending
                 #[cfg(feature = "tracing")]
                 tracing::info!("Fetching image {src_string}");
-                self.doc
-                    .pending_images
-                    .insert(src_string.to_string(), vec![(target_id, ImageType::Image)]);
-
+                let handler = ResourceHandler::new(
+                    self.doc.tx.clone(),
+                    self.doc.id(),
+                    None,
+                    self.doc.shell_provider.clone(),
+                    ImageHandler::new(ImageType::Image, self.doc.svg_fonts.clone()),
+                );
+                self.doc.pending_images.insert(
+                    src_string.to_string(),
+                    crate::image_request::PendingImage::new(
+                        handler.request_id(),
+                        target_id,
+                        ImageType::Image,
+                    ),
+                );
                 self.doc.net_provider.fetch(
                     self.doc.id(),
                     self.doc.build_request(src),
-                    ResourceHandler::boxed(
-                        self.doc.tx.clone(),
-                        self.doc.id(),
-                        None, // Don't pass node_id, we'll handle it via pending_images
-                        self.doc.shell_provider.clone(),
-                        ImageHandler::new(ImageType::Image, self.doc.svg_fonts.clone()),
-                    ),
+                    Box::new(handler),
                 );
             }
         }
@@ -1620,11 +1666,11 @@ impl<'doc> DocumentMutator<'doc> {
                 vec![
                     Attribute {
                         name: qual_name!("type", html),
-                        value: "button".to_string(),
+                        value: "button".into(),
                     },
                     Attribute {
                         name: qual_name!("tabindex", html),
-                        value: "-1".to_string(),
+                        value: "-1".into(),
                     },
                 ],
             );
@@ -1722,7 +1768,7 @@ mod test {
     fn mutator_remove_disabled() {
         let mut document = BaseDocument::new(DocumentConfig::default());
         let id = document.create_node(NodeData::Element(Box::new(ElementData::new(
-            qual_name!("button"),
+            qual_name!("button", html),
             vec![Attribute {
                 name: qual_name!("disabled"),
                 value: "".into(),
@@ -1758,7 +1804,7 @@ mod test {
     fn mutator_set_disabled() {
         let mut document = BaseDocument::new(DocumentConfig::default());
         let id = document.create_node(NodeData::Element(Box::new(ElementData::new(
-            qual_name!("button"),
+            qual_name!("button", html),
             vec![],
         ))));
 

@@ -47,9 +47,11 @@ macro_rules! local_names {
 /// follows the `value`/`checked` attributes.
 #[derive(Debug, Clone, Default)]
 pub struct FormControlState {
-    /// The current value while no text editor exists yet (before layout).
-    pub value: Option<String>,
+    /// Authoritative current value; the text editor only owns its scalar projection.
+    pub value: Option<crate::DomString>,
     pub value_dirty: bool,
+    /// Length constraints apply only after the user last changed the value.
+    pub last_change_by_user: bool,
     /// The current checkedness while no checkbox state exists yet.
     pub checked: Option<bool>,
     pub checked_dirty: bool,
@@ -58,6 +60,16 @@ pub struct FormControlState {
     pub selected_dirty: bool,
     /// The script-only visual mixed state of a checkbox.
     pub indeterminate: bool,
+    /// Saved output default while its text content is in live-value mode.
+    pub output_default: Option<crate::DomString>,
+    /// Custom constraint failure text, independent of form reset.
+    pub custom_validity: crate::DomString,
+    /// Resolved source of the active image-input request, for stale completion checks.
+    pub image_input_source: Option<String>,
+    /// Last decoded image survives a type transition or replacement request.
+    pub image_input_image: Option<Box<ImageData>>,
+    /// Last image-input activation point, in CSS pixels from the padding edge.
+    pub image_coordinates: (u32, u32),
 }
 
 /// HTML script element flags.
@@ -445,8 +457,8 @@ impl ElementData {
     pub fn new(name: QualName, attrs: Vec<Attribute>) -> Self {
         let id_attr_atom = attrs
             .iter()
-            .find(|attr| &attr.name.local == "id")
-            .map(|attr| attr.value.as_ref())
+            .find(|attr| attr.name.ns == markup5ever::ns!() && &attr.name.local == "id")
+            .map(|attr| attr.value.as_str_lossy())
             .map(|value: &str| Atom::from(value));
 
         let custom_element_state = crate::custom_elements::CustomElementState::initial(&name);
@@ -521,22 +533,32 @@ impl ElementData {
     }
 
     pub fn attr(&self, name: impl PartialEq<LocalName>) -> Option<&str> {
-        let attr = self.attrs.iter().find(|attr| name == attr.name.local)?;
-        Some(&attr.value)
+        self.attr_dom(name).map(crate::DomString::as_str_lossy)
+    }
+
+    /// Original code units; scalar style and layout consumers use `attr`.
+    pub fn attr_dom(&self, name: impl PartialEq<LocalName>) -> Option<&crate::DomString> {
+        self.attrs
+            .iter()
+            .find(|attr| attr.name.ns == markup5ever::ns!() && name == attr.name.local)
+            .map(|attr| &attr.value)
     }
 
     pub fn attr_parsed<T: FromStr>(&self, name: impl PartialEq<LocalName>) -> Option<T> {
-        let attr = self.attrs.iter().find(|attr| name == attr.name.local)?;
-        attr.value.parse::<T>().ok()
+        self.attr(name)?.parse::<T>().ok()
     }
 
     /// Detects the presence of the attribute, treating *any* value as truthy.
     pub fn has_attr(&self, name: impl PartialEq<LocalName>) -> bool {
-        self.attrs.iter().any(|attr| name == attr.name.local)
+        self.attr_dom(name).is_some()
     }
 
     pub fn can_be_disabled(&self) -> bool {
-        local_names!("button", "input", "select", "textarea").contains(&self.name.local)
+        self.name.ns == markup5ever::ns!(html)
+            && local_names!(
+                "button", "input", "select", "textarea", "fieldset", "option", "optgroup"
+            )
+            .contains(&self.name.local)
     }
 
     /// Whether this element is a link (an `<a>` or `<area>` element with an `href` attribute)
@@ -871,15 +893,23 @@ impl ElementData {
     }
 
     pub fn is_submit_button(&self) -> bool {
-        if self.name.local != local_name!("button") {
+        if self.name.ns != crate::ns!(html) {
             return false;
         }
-        let type_attr = self.attr(local_name!("type"));
-        let is_submit = type_attr == Some("submit");
-        let is_auto_submit = type_attr.is_none()
-            && self.attr(LocalName::from("command")).is_none()
-            && self.attr(LocalName::from("commandfor")).is_none();
-        is_submit || is_auto_submit
+        let kind = self
+            .attr(local_name!("type"))
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match &*self.name.local {
+            "input" => matches!(kind.as_str(), "submit" | "image"),
+            "button" => {
+                kind == "submit"
+                    || (!matches!(kind.as_str(), "button" | "reset")
+                        && self.attr(LocalName::from("command")).is_none()
+                        && self.attr(LocalName::from("commandfor")).is_none())
+            }
+            _ => false,
+        }
     }
 }
 

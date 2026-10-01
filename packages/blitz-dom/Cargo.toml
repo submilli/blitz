@@ -42,6 +42,9 @@ parallel-construct = []
 log-phase-times = ["debug_timer/enable"]
 
 [dependencies]
+regress-bounded = { path = "../regress-bounded" }
+# HTML numeric value serialization follows ECMAScript's shortest decimal form.
+ryu-js = "1.0"
 # Blitz dependencies
 blitz-traits = { workspace = true }
 stylo_taffy = { workspace = true, features = ["default"] }

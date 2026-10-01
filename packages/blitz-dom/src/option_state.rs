@@ -74,12 +74,12 @@ impl BaseDocument {
             match self.option_tag(id) {
                 Some("option") => options.push((
                     id,
-                    disabled || self.attribute_by_name(id, "disabled").is_some(),
+                    disabled || self.null_attribute(id, "disabled").is_some(),
                 )),
                 Some("select" | "datalist" | "hr") => {}
                 tag => {
                     if tag == Some("optgroup") {
-                        disabled = self.attribute_by_name(id, "disabled").is_some();
+                        disabled = self.null_attribute(id, "disabled").is_some();
                     }
                     pending.extend(
                         self.nodes[id]
@@ -180,7 +180,7 @@ impl DocumentMutator<'_> {
     /// Form reset restores defaults and clears every option's dirtiness.
     pub fn reset_select(&mut self, select: NodeId) {
         for option in self.doc.select_options(select) {
-            let selected = self.doc.attribute_by_name(option, "selected").is_some();
+            let selected = self.doc.null_attribute(option, "selected").is_some();
             self.write_option_selectedness(option, selected, Some(false));
         }
         self.reconcile_select(select);
@@ -204,7 +204,7 @@ impl DocumentMutator<'_> {
         if self.selection_scratch == Some(select) {
             return;
         }
-        if self.doc.attribute_by_name(select, "multiple").is_some() {
+        if self.doc.null_attribute(select, "multiple").is_some() {
             return;
         }
         for option in self.doc.select_options(select) {
@@ -219,7 +219,7 @@ impl DocumentMutator<'_> {
             return;
         }
         if self.doc.option_tag(select) != Some("select")
-            || self.doc.attribute_by_name(select, "multiple").is_some()
+            || self.doc.null_attribute(select, "multiple").is_some()
         {
             return;
         }
@@ -232,8 +232,8 @@ impl DocumentMutator<'_> {
             self.deselect_other_options(select, selected);
         } else if self
             .doc
-            .attribute_by_name(select, "size")
-            .map_or(0, |a| display_size(&a.value))
+            .null_attribute(select, "size")
+            .map_or(0, |a| display_size(a.value.as_str_lossy()))
             <= 1
         {
             if let Some((option, _)) = options.into_iter().find(|&(_, disabled)| !disabled) {
@@ -248,7 +248,7 @@ impl DocumentMutator<'_> {
         }
         match (self.doc.option_tag(id), &*name.local) {
             (Some("select"), "multiple") => {
-                if self.doc.attribute_by_name(id, "multiple").is_none() {
+                if self.doc.null_attribute(id, "multiple").is_none() {
                     if let Some(first) = self.doc.selected_option(id) {
                         self.deselect_other_options(id, first);
                     }
@@ -261,7 +261,7 @@ impl DocumentMutator<'_> {
                     .element_data()
                     .is_some_and(|el| el.form_state.selected_dirty);
                 if !dirty {
-                    let selected = self.doc.attribute_by_name(id, "selected").is_some();
+                    let selected = self.doc.null_attribute(id, "selected").is_some();
                     self.write_option_selectedness(id, selected, None);
                     if selected {
                         if let Some(select) = self.doc.option_select(id) {

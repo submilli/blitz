@@ -27,7 +27,7 @@ fn dirty_selection_does_not_follow_defaults_and_reset_clears_dirty() {
         .set_attribute_by_name(b, "selected", "")
         .unwrap();
     assert_eq!(doc.selected_options(s), vec![a]);
-    doc.mutate().reset_form_controls(f);
+    doc.mutate().reset_form_controls(f).unwrap();
     assert_eq!(doc.selected_options(s), vec![b]);
     doc.mutate().remove_attribute_by_name(b, "selected");
     assert_eq!(doc.selected_options(s), vec![a]);
@@ -98,7 +98,7 @@ fn reset_radios_batches_groups_and_clears_every_dirty_flag() {
     );
     let mut doc = parse(&html);
     let form = q(&doc, "#f");
-    doc.mutate().reset_form_controls(form);
+    doc.mutate().reset_form_controls(form).unwrap();
     let radios = doc.query_selector_all("input").unwrap();
     assert_eq!(radios.iter().filter(|&&id| doc.checkedness(id)).count(), 1);
     assert!(doc.checkedness(*radios.last().unwrap()));

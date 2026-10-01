@@ -7,6 +7,33 @@ use blitz_traits::node_id::NodeId;
 use std::collections::VecDeque;
 
 pub trait EventHandler {
+    /// Run an activation after native event default handling released all DOM
+    /// borrows. Script embeddings override this to dispatch invalid/submit/reset.
+    fn handle_form_action(&mut self, action: super::FormAction, doc: &mut dyn Document) {
+        match action {
+            super::FormAction::Submit { form, submitter } => {
+                let doc = doc.inner();
+                if doc.is_connected(form)
+                    && (doc.null_attribute(form, "novalidate").is_some()
+                        || submitter
+                            .is_some_and(|id| doc.null_attribute(id, "formnovalidate").is_some())
+                        || match doc.invalid_form_controls(form) {
+                            Ok(invalid) => invalid.is_empty(),
+                            Err(error) => {
+                                doc.validation_error.set(Some(error));
+                                false
+                            }
+                        })
+                {
+                    doc.submit_form(form, submitter.unwrap_or(form));
+                }
+            }
+            super::FormAction::Reset { form } => {
+                let _ = doc.inner_mut().mutate().reset_form_controls(form);
+            }
+        }
+    }
+
     fn handle_event(
         &mut self,
         chain: &[NodeId],
@@ -30,9 +57,9 @@ impl EventHandler for NoopEventHandler {
 }
 
 pub struct EventDriver<'doc, Handler: EventHandler> {
-    doc: &'doc mut dyn Document,
+    pub(super) doc: &'doc mut dyn Document,
     handler: Handler,
-    queue: VecDeque<(DomEvent, NodeLease)>,
+    queue: VecDeque<(super::GeneratedEvent, Vec<NodeLease>)>,
 }
 
 impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
@@ -280,7 +307,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
 
     pub fn handle_dom_event(&mut self, event: DomEvent) {
         let lease = self.doc.inner().lease_node(event.target);
-        self.queue.push_back((event, lease));
+        self.queue.push_back((event.into(), vec![lease]));
         self.process_queue();
     }
 
@@ -323,18 +350,21 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     }
 
     fn process_queue(&mut self) {
-        while let Some((mut event, _target)) = self.queue.pop_front() {
+        while let Some((work, _targets)) = self.queue.pop_front() {
+            let mut event = match work {
+                super::GeneratedEvent::Event(event) => event,
+                super::GeneratedEvent::Focus(target) => {
+                    self.run_focus_transition(target);
+                    continue;
+                }
+            };
             let activation = if matches!(event.data, DomEventData::Click(_)) {
                 let mut doc = self.doc.inner_mut();
                 let target = doc
                     .node_chain(event.target)
                     .into_iter()
                     .find(|&id| doc.is_checkable_input(id))
-                    .filter(|&id| {
-                        !doc.get_node(id)
-                            .and_then(|n| n.element_data())
-                            .is_some_and(|e| e.has_attr(markup5ever::local_name!("disabled")))
-                    });
+                    .filter(|&id| !doc.get_node(id).is_some_and(crate::Node::is_disabled));
                 target.and_then(|id| doc.begin_checkable_activation(id))
             } else {
                 None
@@ -352,7 +382,8 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                     ] {
                         let mut completion = DomEvent::new(target, data);
                         completion.checkable_completion = true;
-                        self.queue.push_back((completion, doc.lease_node(target)));
+                        self.queue
+                            .push_back((completion.into(), vec![doc.lease_node(target)]));
                     }
                 }
             }
@@ -374,7 +405,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         }
     }
 
-    fn run_handler_event(
+    pub(super) fn run_handler_event(
         &mut self,
         event: &mut DomEvent,
         initial_event_state: EventState,
@@ -431,10 +462,23 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     fn run_default_action(&mut self, event: &mut DomEvent) {
         let mut doc = self.doc.inner_mut();
         let mut generated = Vec::new();
-        doc.handle_dom_event(event, |new_evt| generated.push(new_evt));
+        let action = doc.handle_dom_event(event, |new_evt| generated.push(new_evt));
+        let _retained: Vec<_> = action
+            .into_iter()
+            .flat_map(|a| a.nodes())
+            .map(|id| doc.lease_node(id))
+            .collect();
         for event in generated {
-            let lease = doc.lease_node(event.target);
-            self.queue.push_back((event, lease));
+            let leases = event
+                .target()
+                .into_iter()
+                .map(|id| doc.lease_node(id))
+                .collect();
+            self.queue.push_back((event, leases));
+        }
+        drop(doc);
+        if let Some(action) = action {
+            self.handler.handle_form_action(action, self.doc);
         }
     }
 }

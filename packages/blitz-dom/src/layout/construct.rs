@@ -986,20 +986,32 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: NodeId, is_multi
         .map(|s| stylo_to_parley::text_align(s.clone_text_align()))
         .unwrap_or(parley::layout::Alignment::Start);
 
-    let dirty_value = node
+    let stored_value = node
         .element_data()
-        .filter(|el| el.form_state.value_dirty)
         .and_then(|el| el.form_state.value.clone());
-    let initial_text = match dirty_value {
+    let initial_text = match stored_value {
         Some(value) => value,
-        None if is_multiline => node.text_content(),
-        None => node.attr(local_name!("value")).unwrap_or("").to_string(),
+        None if is_multiline => node.child_text_content(),
+        None => node
+            .element_data()
+            .and_then(|e| e.attr_dom(local_name!("value")))
+            .cloned()
+            .unwrap_or_default(),
     };
+    let numeric = node
+        .attr(local_name!("type"))
+        .is_some_and(|t| t.eq_ignore_ascii_case("number"));
     let element = &mut node.data.downcast_element_mut().unwrap();
+    let initial_text = if element.form_state.last_change_by_user {
+        initial_text
+    } else {
+        crate::validation::text::sanitize_text(element, &initial_text)
+    };
+    element.form_state.value = Some(initial_text.clone());
     if !matches!(element.special_data, SpecialElementData::TextInput(_)) {
         let mut text_input_data = TextInputData::new(is_multiline);
         let editor = &mut text_input_data.editor;
-        editor.set_text(&initial_text);
+        editor.set_text(initial_text.as_str_lossy());
         element.special_data = SpecialElementData::TextInput(text_input_data);
     }
 
@@ -1007,6 +1019,7 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: NodeId, is_multi
         unreachable!();
     };
 
+    text_input_data.numeric = numeric;
     let editor = &mut text_input_data.editor;
     editor.set_scale(doc.viewport.scale_f64() as f32);
     editor.set_width(None);

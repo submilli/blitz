@@ -20,6 +20,7 @@ impl BaseDocument {
             let Some(node) = self.remove_node_from_tree(id) else {
                 continue;
             };
+            self.parser_forms.remove(id);
             on_drop(id);
             self.shadow_hosts.remove(&id);
             pending.extend(node.anonymous_blocks.iter().map(|&id| (id, false)));

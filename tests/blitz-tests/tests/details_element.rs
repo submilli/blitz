@@ -146,7 +146,7 @@ fn after_text(doc: &HtmlDocument, selector: &str) -> Option<String> {
     let text_id = doc.get_node(after_id)?.children.first().copied()?;
     doc.get_node(text_id)?
         .text_data()
-        .map(|t| t.content.clone())
+        .map(|t| t.content.as_str_lossy().to_owned())
 }
 
 #[test]

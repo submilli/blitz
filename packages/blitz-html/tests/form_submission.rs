@@ -89,3 +89,127 @@ fn controls_submit_their_current_values() {
         ])
     );
 }
+
+#[test]
+fn submission_uses_current_owners_and_only_submittable_controls() {
+    let entries = submit(
+        "<input form=f name=before value=a><form id=f method=post><input name=inner value=b><input name=other value=x form=g><output name=result>42</output><fieldset name=group></fieldset></form><form id=g></form><input id=after form=f name=after value=c><output form=f name=external>43</output>",
+        |doc| {
+            let after = q(doc, "#after");
+            doc.mutate()
+                .set_attribute_by_name(after, "form", "g")
+                .unwrap();
+        },
+    );
+    assert_eq!(entries, pairs(&[("before", "a"), ("inner", "b")]));
+}
+
+#[test]
+fn activated_submitters_supply_entries_and_navigation_overrides() {
+    use blitz_dom::{EventDriver, NoopEventHandler};
+    use blitz_traits::events::DomEvent;
+    for control in [
+        "<button id=b name=action value=save>",
+        "<button type=INVALID id=b name=action value=save>",
+        "<button type=SuBmIt id=b name=action value=save>",
+        "<input type=submit id=b name=action value=save>",
+        "<input type=SuBmIt id=b name=action value=save>",
+    ] {
+        let capture = Arc::new(Capture::default());
+        let mut doc = BaseDocument::new(DocumentConfig {
+            base_url: Some("https://example.test/".into()),
+            html_parser_provider: Some(Arc::new(HtmlProvider)),
+            navigation_provider: Some(capture.clone()),
+            ..Default::default()
+        });
+        DocumentHtmlParser::parse_into_mutator(
+            &mut doc.mutate(),
+            &format!("<form id=f action=/wrong method=get><input name=x value=y>{control}</form>"),
+        );
+        let button = q(&doc, "#b");
+        for (name, value) in [
+            ("formaction", "/save"),
+            ("formmethod", "POST"),
+            ("formenctype", "text/plain"),
+        ] {
+            doc.mutate()
+                .set_attribute_by_name(button, name, value)
+                .unwrap();
+        }
+        let event = doc
+            .get_node(button)
+            .unwrap()
+            .synthetic_click_event(keyboard_types::Modifiers::empty());
+        EventDriver::new(&mut doc, NoopEventHandler).handle_dom_event(DomEvent::new(button, event));
+        let options = capture.0.lock().unwrap().pop().expect("activation submits");
+        assert_eq!(options.url.as_str(), "https://example.test/save");
+        assert_eq!(options.method.as_str(), "POST");
+        assert_eq!(options.content_type.as_deref(), Some("text/plain"));
+        let Body::Form(entries) = options.document_resource else {
+            panic!("POST has a form body")
+        };
+        let values: Vec<_> = entries
+            .0
+            .iter()
+            .map(|e| (e.name.clone(), e.value.as_ref().to_owned()))
+            .collect();
+        assert_eq!(values, pairs(&[("x", "y"), ("action", "save")]));
+    }
+}
+
+#[test]
+fn image_submission_preserves_pointer_coordinates_and_programmatic_origin() {
+    use blitz_dom::{EventDriver, NoopEventHandler};
+    use blitz_traits::events::{DomEvent, DomEventData};
+    for named in [false, true] {
+        for physical in [false, true] {
+            let capture = Arc::new(Capture::default());
+            let mut doc = BaseDocument::new(DocumentConfig {
+                base_url: Some("https://example.test/".into()),
+                html_parser_provider: Some(Arc::new(HtmlProvider)),
+                navigation_provider: Some(capture.clone()),
+                ..Default::default()
+            });
+            let name = if named { "name=point" } else { "" };
+            DocumentHtmlParser::parse_into_mutator(
+                &mut doc.mutate(),
+                &format!(
+                    "<form method=get><input id=b type=image {name} style='width:100px;height:100px;border:5px solid;padding:7px'></form>"
+                ),
+            );
+            doc.resolve(0.0);
+            let button = q(&doc, "#b");
+            let rect = doc.get_client_bounding_rect(button).unwrap();
+            let mut pointer = doc
+                .get_node(button)
+                .unwrap()
+                .synthetic_click_event_data(keyboard_types::Modifiers::empty());
+            pointer.coords.client_x = rect.x as f32 + 30.75;
+            pointer.coords.client_y = rect.y as f32 + 40.5;
+            let event = if physical {
+                DomEventData::PointerUp(pointer)
+            } else {
+                DomEventData::Click(pointer)
+            };
+            EventDriver::new(&mut doc, NoopEventHandler)
+                .handle_dom_event(DomEvent::new(button, event));
+            let options = capture
+                .0
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("image activation submits");
+            let prefix = if named { "point." } else { "" };
+            let (x, y) = if physical { (26, 36) } else { (0, 0) };
+            assert_eq!(
+                options.url.query(),
+                Some(format!("{prefix}x={x}&{prefix}y={y}").as_str())
+            );
+            let form = q(&doc, "form");
+            let entries = doc.form_entry_list(form, Some(button));
+            assert_eq!(entries.0.len(), 2);
+            assert_eq!(entries.0[0].value.as_ref(), x.to_string());
+            assert_eq!(entries.0[1].value.as_ref(), y.to_string());
+        }
+    }
+}

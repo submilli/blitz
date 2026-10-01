@@ -34,8 +34,15 @@ use crate::{
 };
 
 impl BaseDocument {
-    /// Restyle the tree and then relayout it
+    /// Ingest resource completions, then restyle and lay out the tree.
     pub fn resolve(&mut self, current_time_for_animations: f64) {
+        self.handle_messages();
+        self.flush_style_and_layout(current_time_for_animations);
+    }
+
+    /// Synchronous geometry reads flush rendering without delivering queued
+    /// resource completions in the middle of the caller's script.
+    pub fn flush_style_and_layout(&mut self, current_time_for_animations: f64) {
         if TDocument::as_node(&self.root_node())
             .first_element_child()
             .is_none()
@@ -44,9 +51,6 @@ impl BaseDocument {
             tracing::warn!("No DOM - not resolving");
             return;
         }
-
-        // Process messages that have been sent to our message channel (e.g. loaded resource)
-        self.handle_messages();
 
         // Shadow hosts style and lay out their shadow trees (the flat tree),
         // each with its own stylesheets.
@@ -60,8 +64,7 @@ impl BaseDocument {
         // (once the stylesheet loads) would treat those as genuine "before-change styles",
         // spuriously starting CSS transitions from unstyled values. See issue #689.
         //
-        // `handle_messages` above must still run so that loaded resources are ingested and
-        // this state can clear.
+        // The embedder processes resource completions at its normal task boundary.
         if self.has_pending_critical_resources() {
             return;
         }

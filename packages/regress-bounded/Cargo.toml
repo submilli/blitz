@@ -1,0 +1,21 @@
+[package]
+name = "regress-bounded"
+version = "0.12.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Fork-contained budgeted HTML pattern matching, based on regress"
+publish = false
+
+[features]
+default = ["std", "utf16", "prohibit-unsafe"]
+std = ["memchr/std"]
+alloc = ["dep:hashbrown", "memchr/alloc"]
+backend-pikevm = []
+index-positions = []
+prohibit-unsafe = []
+utf16 = []
+pattern = []
+
+[dependencies]
+memchr = { version = "2.4.0", default-features = false }
+hashbrown = { version = ">=0.16, <0.18", optional = true }

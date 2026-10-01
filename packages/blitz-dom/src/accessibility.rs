@@ -4,7 +4,6 @@ use accesskit::{
 };
 use markup5ever::ns;
 use style::properties::longhands::visibility;
-use style_dom::ElementState;
 
 impl BaseDocument {
     pub fn build_accessibility_tree(&self) -> TreeUpdate {
@@ -152,8 +151,7 @@ impl BaseDocument {
         }
 
         // States.
-        let disabled = element.element_state.contains(ElementState::DISABLED)
-            || attr("aria-disabled").as_deref() == Some("true");
+        let disabled = node.is_disabled() || attr("aria-disabled").as_deref() == Some("true");
         if disabled {
             builder.set_disabled();
         }

@@ -159,13 +159,23 @@ pub trait DispatchHost {
     fn document_mut(&self) -> std::cell::RefMut<'_, BaseDocument>;
     fn event_type(&self) -> String;
     fn bubbles(&self) -> bool;
-    /// True only for MouseEvent click dispatch whose native driver does not
-    /// already own checkable pre-activation.
-    fn activates_checkable(&self) -> bool {
+    /// True only for MouseEvent click dispatch that owns element activation.
+    /// Native driver dispatch returns false because the driver owns its defaults.
+    fn handles_click_activation(&self) -> bool {
         false
     }
     /// Embedder dispatches trusted input/change after successful activation.
     fn checkable_activated(&mut self, _target: NodeId) {}
+    /// Coordinates for activation of a script-dispatched MouseEvent, in viewport
+    /// CSS pixels. Native/programmatic driver dispatch already owns its defaults.
+    fn activation_coordinates(&self) -> Option<(f64, f64)> {
+        None
+    }
+    /// Run validation and cancelable submit/reset without retaining a DOM borrow.
+    fn form_activated(&mut self, _action: crate::FormAction) {}
+    /// Clear dispatch-only state before activation callbacks can redispatch the
+    /// same event. Embedders retain continuation roots until dispatch returns.
+    fn dispatch_finished(&mut self) {}
     /// Whether the event crosses shadow boundaries (`composed`): user input
     /// events do, script events only when created so.
     fn composed(&self) -> bool {
@@ -372,7 +382,26 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
             related.map(|r| doc.retarget(r, EventTargetId::Window)),
         )
     };
-    let activation = if host.activates_checkable() {
+    let form_target = if host.handles_click_activation() {
+        let doc = host.document();
+        path.iter()
+            .take(if host.bubbles() { path.len() } else { 1 })
+            .filter_map(|entry| match entry.current {
+                EventTargetId::Node(id) => Some(id),
+                _ => None,
+            })
+            .find(|&id| {
+                doc.get_node(id)
+                    .and_then(|n| n.element_data())
+                    .is_some_and(|e| {
+                        e.name.ns == crate::ns!(html)
+                            && matches!(&*e.name.local, "input" | "button")
+                    })
+            })
+    } else {
+        None
+    };
+    let activation = if host.handles_click_activation() {
         let mut doc = host.document_mut();
         let activation_target = path
             .iter()
@@ -433,14 +462,30 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     host.set_composed_path(Vec::new());
     host.set_phase(EventPhase::None, None);
     host.clear_propagation_flags();
+    host.dispatch_finished();
     let canceled = host.canceled();
-    if let Some(activation) = activation {
-        let activated = activation.finish(&mut host.document_mut(), canceled);
-        if let Some(target) = activated {
-            host.checkable_activated(target);
-        }
+    let activated = activation.and_then(|a| a.finish(&mut host.document_mut(), canceled));
+    let action = if !canceled && activated.is_none() {
+        let coordinates = host.activation_coordinates();
+        form_target.and_then(|id| host.document_mut().activate_form_control(id, coordinates))
+    } else {
+        None
+    };
+    let _action_roots: Vec<_> = {
+        let doc = host.document();
+        action
+            .into_iter()
+            .flat_map(|a| a.nodes())
+            .map(|id| doc.lease_node(id))
+            .collect()
+    };
+    if let Some(target) = activated {
+        host.checkable_activated(target);
     }
-    !canceled
+    if let Some(action) = action {
+        host.form_activated(action);
+    }
+    !host.canceled()
 }
 
 fn has_listeners(host: &dyn DispatchHost, target: EventTargetId, capture: bool) -> bool {
