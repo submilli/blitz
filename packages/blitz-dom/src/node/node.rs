@@ -125,6 +125,8 @@ pub struct Node {
     pub(crate) template_document: Option<NodeId>,
     /// Our parent's ID
     pub parent: Option<NodeId>,
+    /// Derived eligible select ancestor; mutation updates it without ancestor scans.
+    pub(crate) select_owner: Option<NodeId>,
     // What are our children?
     pub children: super::Children,
     /// Our parent in the layout hierachy: a separate list that includes anonymous collections of inline elements
@@ -455,6 +457,7 @@ impl Node {
             owner_document: id,
             template_document: None,
             parent: None,
+            select_owner: None,
             children: super::Children::default(),
             layout_parent: Cell::new(None),
             oof_containing_block: Cell::new(None),

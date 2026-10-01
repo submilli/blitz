@@ -53,6 +53,9 @@ pub struct DocumentMutator<'doc> {
 
     eager_op_queue: Vec<SpecialOp>,
 
+    /// An unobservable fragment context must not select its temporary children.
+    pub(crate) selection_scratch: Option<NodeId>,
+
     // Tracked nodes for deferred processing when mutations have completed
     title_node: Option<NodeId>,
     style_nodes: HashSet<NodeId>,
@@ -84,6 +87,7 @@ impl DocumentMutator<'_> {
         DocumentMutator {
             doc,
             eager_op_queue: Vec::new(),
+            selection_scratch: None,
             title_node: None,
             style_nodes: HashSet::new(),
             form_nodes: HashSet::new(),
@@ -323,6 +327,17 @@ impl DocumentMutator<'_> {
     }
 
     pub fn set_attribute(&mut self, node_id: NodeId, name: QualName, value: &str) {
+        let existed = self.doc.attribute_by_name(node_id, &name.local).is_some();
+        self.set_attribute_inner(node_id, name.clone(), value);
+        if name.local != local_name!("selected") || !existed {
+            self.selection_attribute_changed(node_id, &name);
+        }
+        if name.ns == markup5ever::ns!() && name.local == local_name!("checked") {
+            self.update_default_checkedness(node_id);
+        }
+    }
+
+    fn set_attribute_inner(&mut self, node_id: NodeId, name: QualName, value: &str) {
         if self.doc.custom_element_state(node_id) == CustomElementState::Custom
             && self.doc.is_recording_custom_element_reactions()
         {
@@ -468,10 +483,7 @@ impl DocumentMutator<'_> {
             return;
         }
 
-        if (tag, attr) == tag_and_attr!("input", "checked") {
-            // Adding the attribute sets the default checkedness.
-            set_input_checked_state(element, true);
-        } else if (tag, attr) == tag_and_attr!("img", "src") {
+        if (tag, attr) == tag_and_attr!("img", "src") {
             self.load_image(node_id);
         } else if (tag, attr) == tag_and_attr!("canvas", "src") {
             self.load_custom_paint_src(node_id);
@@ -487,6 +499,17 @@ impl DocumentMutator<'_> {
     }
 
     pub fn clear_attribute(&mut self, node_id: NodeId, name: QualName) {
+        let existed = self.doc.attribute_by_name(node_id, &name.local).is_some();
+        self.clear_attribute_inner(node_id, name.clone());
+        if existed {
+            self.selection_attribute_changed(node_id, &name);
+            if name.ns == markup5ever::ns!() && name.local == local_name!("checked") {
+                self.update_default_checkedness(node_id);
+            }
+        }
+    }
+
+    fn clear_attribute_inner(&mut self, node_id: NodeId, name: QualName) {
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if node_is_in_document {
             self.doc.snapshot_node(node_id);
@@ -584,12 +607,6 @@ impl DocumentMutator<'_> {
             }
         }
 
-        if element.name.local == local_name!("input") && name.local == local_name!("checked") {
-            // Removing the attribute clears the default checkedness.
-            set_input_checked_state(element, false);
-            return;
-        }
-
         let tag = &element.name.local;
         let attr = &name.local;
 
@@ -684,6 +701,7 @@ impl DocumentMutator<'_> {
         let node = &mut self.doc.nodes[node_id];
         node.flat_parent.set(crate::node::FlatParent::Dom);
         let parent_id = node.parent.take()?;
+        self.selection_inserted(&[node_id]);
         self.mutations_occurred |= node_is_in_document;
         Some(parent_id)
     }
@@ -695,6 +713,7 @@ impl DocumentMutator<'_> {
         // Mark ancestors dirty so the style traversal visits this subtree.
         parent.mark_ancestors_dirty();
         self.maybe_record_node(parent_id);
+        self.selection_children_changed(parent_id);
     }
 
     /// Detach every child without dropping it. Indexed removals preserve the
@@ -752,6 +771,7 @@ impl DocumentMutator<'_> {
 
             parent.children.remove_id(node_id);
             self.maybe_record_node(parent_id);
+            self.selection_children_changed(parent_id);
         }
 
         node
@@ -782,6 +802,7 @@ impl DocumentMutator<'_> {
             let _ = self.doc.drop_node_ignoring_parent(child_id);
         }
         self.maybe_record_node(node_id);
+        self.selection_children_changed(node_id);
     }
 
     // Tree mutation methods
@@ -824,6 +845,10 @@ impl DocumentMutator<'_> {
         child_ids: &[NodeId],
         insert_children_fn: &dyn Fn(&mut Node, &[NodeId]),
     ) {
+        let old_parents: HashSet<_> = child_ids
+            .iter()
+            .filter_map(|&id| self.doc.nodes[id].parent)
+            .collect();
         let new_parent_is_in_document = self.doc.nodes[parent_id].flags.is_in_document();
         self.mutations_occurred |= new_parent_is_in_document && !child_ids.is_empty();
         // Detach the children from their old parents *before* inserting them into
@@ -957,6 +982,11 @@ impl DocumentMutator<'_> {
         }
 
         self.maybe_record_node(parent_id);
+        self.selection_inserted(child_ids);
+        for old_parent in old_parents {
+            self.selection_children_changed(old_parent);
+        }
+        self.selection_children_changed(parent_id);
     }
 
     // Tree mutation methods (that defer to other methods)
@@ -1605,22 +1635,6 @@ impl<'doc> DocumentMutator<'doc> {
             self.append_children(label_id, &[text_id]);
             self.append_children(button_id, &[button_text_id]);
         }
-    }
-}
-
-/// Apply a change to the default checkedness (the `checked` attribute):
-/// the current checkedness follows it unless the control is dirty.
-fn set_input_checked_state(element: &mut ElementData, checked: bool) {
-    if element.form_state.checked_dirty {
-        return;
-    }
-    match element.special_data {
-        SpecialElementData::CheckboxInput(_) => element.set_checkbox_input_checked(checked),
-        // Not laid out yet: layout reads the attribute when it creates the
-        // checkbox state; keep `:checked` matching in sync meanwhile.
-        _ => element
-            .element_state
-            .set(style_dom::ElementState::CHECKED, checked),
     }
 }
 

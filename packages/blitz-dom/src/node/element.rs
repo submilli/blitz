@@ -53,6 +53,9 @@ pub struct FormControlState {
     /// The current checkedness while no checkbox state exists yet.
     pub checked: Option<bool>,
     pub checked_dirty: bool,
+    /// Current option selectedness, independent of its default attribute.
+    pub selected: Option<bool>,
+    pub selected_dirty: bool,
     /// The script-only visual mixed state of a checkbox.
     pub indeterminate: bool,
 }
@@ -490,6 +493,13 @@ impl ElementData {
                 Some("checkbox") | Some("radio")
             )
             && data.has_attr(local_name!("checked"))
+        {
+            data.element_state.insert(ElementState::CHECKED);
+        }
+
+        if data.name.ns == markup5ever::ns!(html)
+            && data.name.local == local_name!("option")
+            && data.has_attr(local_name!("selected"))
         {
             data.element_state.insert(ElementState::CHECKED);
         }

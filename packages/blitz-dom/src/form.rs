@@ -256,7 +256,7 @@ fn construct_entry_list(doc: &BaseDocument, form_id: NodeId, submitter_id: NodeI
         // is true and that is not disabled, create an entry with name and the
         // value of the option element, and append it to entry list.
         if element.name.local == local_name!("select") {
-            for option in doc.selected_options(node.id) {
+            for option in doc.selected_enabled_options(node.id) {
                 if doc.nodes[option]
                     .element_data()
                     .is_some_and(|o| o.attr(local_name!("disabled")).is_none())

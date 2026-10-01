@@ -392,7 +392,7 @@ impl BaseDocument {
 }
 
 /// Form controls whose value is edited as text.
-fn is_text_control(el: &crate::node::ElementData) -> bool {
+pub(crate) fn is_text_control(el: &crate::node::ElementData) -> bool {
     match &*el.name.local {
         "textarea" => true,
         "input" => !matches!(
@@ -407,7 +407,7 @@ fn is_text_control(el: &crate::node::ElementData) -> bool {
     }
 }
 
-fn is_checkable(el: &crate::node::ElementData) -> bool {
+pub(crate) fn is_checkable(el: &crate::node::ElementData) -> bool {
     &*el.name.local == "input"
         && matches!(
             el.attr(markup5ever::local_name!("type"))
@@ -446,12 +446,7 @@ impl BaseDocument {
             }
             "option" => Some(match el.attr(markup5ever::local_name!("value")) {
                 Some(v) => v.to_string(),
-                None => self
-                    .text_content_of(id)
-                    .unwrap_or_default()
-                    .split_ascii_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                None => self.option_text(id).to_string(),
             }),
             "select" => {
                 let option = self.selected_option(id)?;
@@ -466,72 +461,6 @@ impl BaseDocument {
         }
     }
 
-    /// The selected `<option>`s of a `<select>`: every option with the
-    /// `selected` attribute for a multiple select, otherwise the one
-    /// [`selected_option`](Self::selected_option).
-    pub fn selected_options(&self, select: NodeId) -> Vec<NodeId> {
-        let multiple = self.nodes[select]
-            .element_data()
-            .is_some_and(|e| e.attr(markup5ever::local_name!("multiple")).is_some());
-        if !multiple {
-            return self.selected_option(select).into_iter().collect();
-        }
-        // Options are children of the select or of its optgroups.
-        let is = |id: NodeId, tag: &str| {
-            self.nodes[id]
-                .element_data()
-                .is_some_and(|e| &*e.name.local == tag)
-        };
-        let mut options = Vec::new();
-        for &child in &self.nodes[select].children {
-            if is(child, "optgroup") {
-                options.extend(
-                    self.nodes[child]
-                        .children
-                        .iter()
-                        .copied()
-                        .filter(|&c| is(c, "option")),
-                );
-            } else if is(child, "option") {
-                options.push(child);
-            }
-        }
-        options.retain(|&o| {
-            self.nodes[o]
-                .element_data()
-                .is_some_and(|e| e.attr(markup5ever::local_name!("selected")).is_some())
-        });
-        options
-    }
-
-    /// The first selected `<option>` of a `<select>` (the first option when
-    /// none has the `selected` attribute).
-    pub fn selected_option(&self, select: NodeId) -> Option<NodeId> {
-        let mut options = Vec::new();
-        self.collect_options(select, &mut options);
-        options
-            .iter()
-            .copied()
-            .find(|&o| {
-                self.nodes[o]
-                    .element_data()
-                    .is_some_and(|e| e.has_attr(markup5ever::local_name!("selected")))
-            })
-            .or_else(|| options.first().copied())
-    }
-
-    fn collect_options(&self, id: NodeId, out: &mut Vec<NodeId>) {
-        for &child in &self.nodes[id].children {
-            if let Some(el) = self.nodes[child].element_data() {
-                match &*el.name.local {
-                    "option" => out.push(child),
-                    "optgroup" => self.collect_options(child, out),
-                    _ => {}
-                }
-            }
-        }
-    }
-
     /// The `checked` IDL attribute (current checkedness).
     pub fn checkedness(&self, id: NodeId) -> bool {
         let Some(el) = self.nodes[id].element_data() else {
@@ -540,10 +469,9 @@ impl BaseDocument {
         if let Some(checked) = el.checkbox_input_checked() {
             return checked;
         }
-        if el.form_state.checked_dirty {
-            return el.form_state.checked.unwrap_or(false);
-        }
-        el.has_attr(markup5ever::local_name!("checked"))
+        el.form_state
+            .checked
+            .unwrap_or_else(|| el.has_attr(markup5ever::local_name!("checked")))
     }
 }
 
@@ -587,7 +515,37 @@ impl DocumentMutator<'_> {
         self.write_checkedness(id, checked);
     }
 
-    fn write_checkedness(&mut self, id: NodeId, checked: bool) {
+    /// Content attributes update pristine checkedness, preserving group dirtiness.
+    pub(crate) fn update_default_checkedness(&mut self, id: NodeId) {
+        if !self.doc.is_checkable_input(id)
+            || self.doc.nodes[id]
+                .element_data()
+                .is_some_and(|el| el.form_state.checked_dirty)
+        {
+            return;
+        }
+        let checked = self.doc.attribute_by_name(id, "checked").is_some();
+        if checked {
+            for peer in self.doc.radio_group_members(id) {
+                if peer == id {
+                    continue;
+                }
+                let dirty = self.doc.nodes[peer]
+                    .element_data()
+                    .is_some_and(|el| el.form_state.checked_dirty);
+                self.write_checkedness(peer, false);
+                if let Some(el) = self.doc.nodes[peer].element_data_mut() {
+                    el.form_state.checked_dirty = dirty;
+                }
+            }
+        }
+        self.write_checkedness(id, checked);
+        if let Some(el) = self.doc.nodes[id].element_data_mut() {
+            el.form_state.checked_dirty = false;
+        }
+    }
+
+    pub(crate) fn write_checkedness(&mut self, id: NodeId, checked: bool) {
         self.doc
             .snapshot_node_and(id, style_dom::ElementState::CHECKED, |node| {
                 if let Some(el) = node.element_data_mut() {
@@ -947,12 +905,14 @@ impl DocumentMutator<'_> {
         html: &str,
     ) -> Result<(), crate::NodeBudgetExceeded> {
         let log = self.doc.mutation_log.take();
+        let selection_scratch = self.selection_scratch.replace(scratch);
         let result = self
             .doc
             .html_parser_provider
             .clone()
             .try_parse_inner_html(self, scratch, html);
         self.doc.mutation_log = log;
+        self.selection_scratch = selection_scratch;
         result
     }
 

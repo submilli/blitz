@@ -1040,10 +1040,10 @@ fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: NodeId) {
 
     let element = &mut node.data.downcast_element_mut().unwrap();
     if !matches!(element.special_data, SpecialElementData::CheckboxInput(_)) {
-        let checked = match element.form_state.checked_dirty {
-            true => element.form_state.checked.unwrap_or(false),
-            false => element.has_attr(local_name!("checked")),
-        };
+        let checked = element
+            .form_state
+            .checked
+            .unwrap_or_else(|| element.has_attr(local_name!("checked")));
         element.special_data = SpecialElementData::CheckboxInput(checked);
         element.set_checkbox_input_checked(checked);
     }

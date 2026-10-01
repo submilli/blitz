@@ -745,8 +745,10 @@ impl BaseDocument {
     pub fn toggle_checkbox(el: &mut ElementData) -> bool {
         let current = match el.checkbox_input_checked() {
             Some(checked) => checked,
-            None if el.form_state.checked_dirty => el.form_state.checked.unwrap_or(false),
-            None => el.has_attr(local_name!("checked")),
+            None => el
+                .form_state
+                .checked
+                .unwrap_or_else(|| el.has_attr(local_name!("checked"))),
         };
         let checked = !current;
         el.form_state.checked = Some(checked);
@@ -1045,6 +1047,14 @@ impl BaseDocument {
 
         match &mut data {
             NodeData::Element(elem) | NodeData::AnonymousBlock(elem) => {
+                if elem.name.ns == markup5ever::ns!(html)
+                    && elem.name.local == local_name!("option")
+                {
+                    elem.element_state.set(
+                        ElementState::CHECKED,
+                        elem.has_attr(local_name!("selected")),
+                    );
+                }
                 if let Some(arc) = elem.style_attribute.as_mut() {
                     let read_guard = self.guard().read();
                     let block = arc.read_with(&read_guard);
@@ -1067,7 +1077,9 @@ impl BaseDocument {
         for &child_id in &new_children {
             self.nodes[child_id].parent = Some(new_node_id);
         }
-        self.nodes[new_node_id].children = new_children.into();
+        self.nodes[new_node_id].children = new_children.clone().into();
+        self.mutate().selection_inserted(&new_children);
+        self.mutate().selection_children_changed(new_node_id);
 
         new_node_id
     }
