@@ -58,6 +58,7 @@ mod dom_string;
 mod events;
 mod font_metrics;
 mod form;
+mod form_owner;
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;

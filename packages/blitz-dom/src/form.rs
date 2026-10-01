@@ -35,29 +35,10 @@ impl BaseDocument {
     ///
     /// <https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#reset-the-form-owner>
     pub fn reset_form_owner(&mut self, node_id: NodeId) {
-        let node = &self.nodes[node_id];
-        let Some(element) = node.element_data() else {
-            return;
-        };
-
-        // First try explicit form attribute
-        let final_owner_id = element
-            .attr(local_name!("form"))
-            .and_then(|owner| self.get_element_by_id(owner))
-            .filter(|owner_id| {
-                self.get_node(*owner_id)
-                    .is_some_and(|node| node.data.is_element_with_tag_name(&local_name!("form")))
-            })
-            .or_else(|| {
-                AncestorTraverser::new(self, node_id).find(|ancestor_id| {
-                    self.nodes[*ancestor_id]
-                        .data
-                        .is_element_with_tag_name(&local_name!("form"))
-                })
-            });
-
-        if let Some(final_owner_id) = final_owner_id {
-            self.controls_to_form.insert(node_id, final_owner_id);
+        if let Some(owner) = self.form_owner(node_id) {
+            self.controls_to_form.insert(node_id, owner);
+        } else {
+            self.controls_to_form.remove(&node_id);
         }
     }
 
