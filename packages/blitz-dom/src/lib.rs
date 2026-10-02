@@ -68,6 +68,8 @@ mod parser_forms;
 pub use checkable_activation::CheckableActivation;
 mod disabled;
 mod focus;
+mod geometry;
+pub use geometry::BoxMetrics;
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;

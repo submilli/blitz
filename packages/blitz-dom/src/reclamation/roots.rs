@@ -95,9 +95,11 @@ fn interaction_roots(doc: &BaseDocument, roots: &mut Vec<NodeId>) {
     }
     match &doc.scroll_animation {
         ScrollAnimationState::Fling(fling) => roots.push(fling.target),
-        ScrollAnimationState::ScrollTo(scroll) => {
-            if let ScrollTarget::Node(id) = scroll.target {
-                roots.push(id);
+        ScrollAnimationState::ScrollTo(animations) => {
+            for animation in animations {
+                if let ScrollTarget::Node(id) = animation.target {
+                    roots.push(id);
+                }
             }
         }
         ScrollAnimationState::None => {}

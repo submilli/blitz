@@ -1828,7 +1828,7 @@ impl Node {
         let Some(styles) = self.primary_styles() else {
             return false;
         };
-        if styles.get_box().position != Position::Static {
+        if styles.get_box().position != Position::Static || self.transform().is_some() {
             return true;
         }
         self.data.is_element_with_tag_name(&local_name!("body"))

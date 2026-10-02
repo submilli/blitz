@@ -6,6 +6,11 @@ use blitz_traits::node_id::NodeId;
 use style::values::computed::Overflow;
 
 use crate::BaseDocument;
+mod animation;
+mod cssom;
+mod notifications;
+pub(crate) use notifications::ScrollNotifications;
+
 use crate::util::Point;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -105,23 +110,16 @@ pub(crate) struct ScrollToState {
 pub(crate) enum ScrollAnimationState {
     None,
     Fling(FlingState),
-    /// A smooth scroll of the viewport towards a target offset.
-    ScrollTo(ScrollToState),
-}
-
-/// Cubic ease-in-out easing function, mapping a normalised time `t` in `[0, 1]`
-/// to an eased progress value in `[0, 1]`. Used to give smooth scrolls a natural
-/// acceleration/deceleration curve.
-fn ease_in_out_cubic(t: f64) -> f64 {
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        let f = 2.0 * t - 2.0;
-        1.0 + (f * f * f) / 2.0
-    }
+    /// Independent smooth scrolls, at most one per live scroll target.
+    ScrollTo(Vec<ScrollToState>),
 }
 
 impl BaseDocument {
+    /// Whether an input or CSSOM scroll animation still needs rendering frames.
+    pub fn has_scroll_animation(&self) -> bool {
+        self.scroll_animation != ScrollAnimationState::None
+    }
+
     /// Apply a scroll to the document, returning whether anything moved.
     ///
     /// This is the single scrolling primitive: user-initiated scrolls
@@ -132,13 +130,15 @@ impl BaseDocument {
         request: ScrollRequest,
         dispatch_event: &mut dyn FnMut(DomEvent),
     ) -> bool {
-        if request.interrupt_animation
-            && matches!(self.scroll_animation, ScrollAnimationState::ScrollTo(_))
-        {
-            self.scroll_animation = ScrollAnimationState::None;
-        }
-
         let target = self.canonical_scroll_target(request.target);
+        if request.interrupt_animation {
+            if let ScrollAnimationState::ScrollTo(animations) = &mut self.scroll_animation {
+                animations.retain(|animation| animation.target != target);
+                if animations.is_empty() {
+                    self.scroll_animation = ScrollAnimationState::None;
+                }
+            }
+        }
 
         // Text inputs and sub-documents scroll their own content rather than an overflow
         // scrollport, so they only take part in the chained (user-initiated) path.
@@ -506,149 +506,6 @@ impl BaseDocument {
         }
     }
 
-    /// Start a smooth (animated) scroll towards the given absolute scroll offset. The
-    /// animation is advanced each frame in [`BaseDocument::resolve_scroll_animation`].
-    fn start_scroll_animation(&mut self, target: ScrollTarget, end: Point<f64>) {
-        let start = self.scroll_state(target, true).0;
-
-        let start_time = self.clock.now_ms().floor();
-
-        self.scroll_animation = ScrollAnimationState::ScrollTo(ScrollToState {
-            target,
-            start,
-            end,
-            start_time,
-            duration: Self::SMOOTH_SCROLL_DURATION_MS,
-        });
-
-        // Ensure the frame loop runs so the animation is driven to completion.
-        self.shell_provider.request_redraw();
-    }
-
-    fn should_scroll_smoothly(&self, target: ScrollTarget, behavior: ScrollBehavior) -> bool {
-        match behavior {
-            ScrollBehavior::Auto => {
-                let styled_node = match target {
-                    ScrollTarget::Node(node_id) => self.nodes.get(node_id),
-                    ScrollTarget::Viewport => self.try_root_element(),
-                };
-                styled_node.is_some_and(|node| {
-                    node.primary_styles().is_some_and(|style| {
-                        style.clone_scroll_behavior()
-                            == style::computed_values::scroll_behavior::T::Smooth
-                    })
-                })
-            }
-            ScrollBehavior::Instant => false,
-            ScrollBehavior::Smooth => true,
-        }
-    }
-
-    /// Scroll an element to the given absolute scroll offset in CSS pixels.
-    ///
-    /// Unlike a user-initiated scroll, a programmatic scroll targets exactly one scroller:
-    /// scroll the element cannot consume is discarded rather than transferred to an ancestor.
-    pub fn scroll_to(&mut self, node_id: NodeId, x: f64, y: f64, behavior: ScrollBehavior) {
-        self.scroll_programmatically(node_id, ScrollAmount::To(Point { x, y }), behavior);
-    }
-
-    /// Scroll an element by the given relative offset in CSS pixels.
-    pub fn scroll_by(&mut self, node_id: NodeId, x: f64, y: f64, behavior: ScrollBehavior) {
-        self.scroll_programmatically(node_id, ScrollAmount::By(Point { x, y }), behavior);
-    }
-
-    fn scroll_programmatically(
-        &mut self,
-        node_id: NodeId,
-        amount: ScrollAmount,
-        behavior: ScrollBehavior,
-    ) {
-        if self.nodes.get(node_id).is_none() {
-            return;
-        }
-
-        // TODO: dispatch `scroll` events for programmatic scrolls.
-        self.scroll(
-            ScrollRequest {
-                target: ScrollTarget::Node(node_id),
-                amount,
-                overflow: ScrollOverflow::Clamp,
-                source: ScrollSource::Programmatic,
-                behavior,
-                interrupt_animation: true,
-            },
-            &mut |_| {},
-        );
-    }
-
-    fn aligned_scroll_offset(
-        current: f64,
-        viewport_size: f64,
-        target_start: f64,
-        target_size: f64,
-        position: ScrollLogicalPosition,
-    ) -> f64 {
-        let target_end = target_start + target_size;
-        match position {
-            ScrollLogicalPosition::Start => target_start,
-            ScrollLogicalPosition::Center => target_start - (viewport_size - target_size) / 2.0,
-            ScrollLogicalPosition::End => target_end - viewport_size,
-            ScrollLogicalPosition::Nearest => {
-                let viewport_end = current + viewport_size;
-                if (target_start >= current && target_end <= viewport_end)
-                    || (target_start <= current && target_end >= viewport_end)
-                {
-                    current
-                } else {
-                    let start_offset = target_start;
-                    let end_offset = target_end - viewport_size;
-                    if (start_offset - current).abs() < (end_offset - current).abs() {
-                        start_offset
-                    } else {
-                        end_offset
-                    }
-                }
-            }
-        }
-    }
-
-    /// Scroll the viewport so that the given element has the requested alignment in each axis.
-    pub fn scroll_into_view(
-        &mut self,
-        node_id: NodeId,
-        behavior: ScrollBehavior,
-        vertical: ScrollLogicalPosition,
-        horizontal: ScrollLogicalPosition,
-    ) {
-        let Some(node) = self.nodes.get(node_id) else {
-            return;
-        };
-        let target =
-            node.absolute_position(node.scroll_offset().x as f32, node.scroll_offset().y as f32);
-        let target_size = node.final_layout().size;
-        let Some(root_id) = self.try_root_element().map(|root| root.id) else {
-            return;
-        };
-        let scale = self.viewport.scale() as f64;
-        let viewport_width = self.viewport.window_size.0 as f64 / scale;
-        let viewport_height = self.viewport.window_size.1 as f64 / scale;
-        let x = Self::aligned_scroll_offset(
-            self.viewport_scroll().x,
-            viewport_width,
-            target.x as f64,
-            target_size.width as f64,
-            horizontal,
-        );
-        let y = Self::aligned_scroll_offset(
-            self.viewport_scroll().y,
-            viewport_height,
-            target.y as f64,
-            target_size.height as f64,
-            vertical,
-        );
-        self.scroll_to(root_id, x, y, behavior);
-    }
-
     /// Resolve a URL fragment (the `#...` part of a URL) to a scroll target.
     ///
     /// Returns `None` if the fragment matches no element and is not a top-of-document
@@ -713,58 +570,5 @@ impl BaseDocument {
     /// target instead of jumping instantly. Returns `true` if a scroll target was found.
     pub fn scroll_to_fragment_smooth(&mut self, fragment: &str) -> bool {
         self.scroll_to_fragment_with_behavior(fragment, ScrollBehavior::Smooth)
-    }
-
-    pub fn resolve_scroll_animation(&mut self) {
-        match &mut self.scroll_animation {
-            ScrollAnimationState::Fling(fling_state) => {
-                let time_ms = self.clock.now_ms().floor();
-
-                let time_diff_ms = time_ms - fling_state.last_seen_time;
-
-                // 0.95 @ 60fps normalized to actual frame times
-                let deceleration = 1.0 - ((0.05 / 16.66666) * time_diff_ms);
-
-                fling_state.x_velocity *= deceleration;
-                fling_state.y_velocity *= deceleration;
-                fling_state.last_seen_time = time_ms;
-                let fling_state = fling_state.clone();
-
-                let dx = fling_state.x_velocity * time_diff_ms;
-                let dy = fling_state.y_velocity * time_diff_ms;
-
-                self.scroll_chain_by(Some(fling_state.target), dx, dy, &mut |_| {});
-                if fling_state.x_velocity.abs() < 0.1 && fling_state.y_velocity.abs() < 0.1 {
-                    self.scroll_animation = ScrollAnimationState::None;
-                }
-            }
-            ScrollAnimationState::ScrollTo(scroll_to) => {
-                let scroll_to = scroll_to.clone();
-                let time_ms = self.clock.now_ms().floor();
-
-                // Normalised progress through the animation, clamped to [0, 1].
-                let progress = if scroll_to.duration <= 0.0 {
-                    1.0
-                } else {
-                    ((time_ms - scroll_to.start_time) / scroll_to.duration).clamp(0.0, 1.0)
-                };
-                let eased = ease_in_out_cubic(progress);
-
-                // Interpolate the target offset and move to it.
-                let target = Point {
-                    x: scroll_to.start.x + (scroll_to.end.x - scroll_to.start.x) * eased,
-                    y: scroll_to.start.y + (scroll_to.end.y - scroll_to.start.y) * eased,
-                };
-                // TODO: dispatch `scroll` events for programmatic scrolls.
-                self.write_scroll_offset(scroll_to.target, target, &mut |_| {});
-
-                if progress >= 1.0 {
-                    self.scroll_animation = ScrollAnimationState::None;
-                }
-            }
-            ScrollAnimationState::None => {
-                // Do nothing
-            }
-        }
     }
 }
