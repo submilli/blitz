@@ -25,8 +25,9 @@ use crate::{BaseDocument, DocumentMutator, NodeId};
 /// A shadow root's stylesheets (from `<style>` and `<link>` elements in its
 /// tree) and the cascade data Stylo matches its elements against.
 pub struct ShadowStyles {
-    /// By owning node; node ids approximate tree order, as for the document.
+    /// Owner lookup; cascade order is derived from the current DOM tree.
     pub sheets: std::collections::BTreeMap<NodeId, style::stylesheets::DocumentStyleSheet>,
+    pub(crate) adopted: Vec<style::stylesheets::DocumentStyleSheet>,
     pub author_styles: style::author_styles::AuthorStyles<style::stylesheets::DocumentStyleSheet>,
     /// The sheets changed since `author_styles` was built.
     pub dirty: bool,
@@ -36,6 +37,7 @@ impl Default for ShadowStyles {
     fn default() -> Self {
         Self {
             sheets: Default::default(),
+            adopted: Vec::new(),
             author_styles: style::author_styles::AuthorStyles::new(),
             dirty: false,
         }
@@ -330,7 +332,9 @@ impl BaseDocument {
                 // sheet in place; starting from empty would reuse stale cache data.
                 author_styles.data = styles.author_styles.data.clone();
                 let custom_media = style::stylesheets::CustomMediaMap::default();
-                for sheet in styles.sheets.values() {
+                let owners = self.stylesheet_owners_in_tree_order(styles.sheets.keys().copied());
+                let sheets = owners.iter().filter_map(|owner| styles.sheets.get(owner));
+                for sheet in sheets.chain(styles.adopted.iter()) {
                     author_styles.stylesheets.append_stylesheet(
                         None,
                         &custom_media,
@@ -338,6 +342,9 @@ impl BaseDocument {
                         &guard,
                     );
                 }
+                // A disabled/removed last sheet adds no effective rules, but
+                // must still replace the previous nonempty cascade.
+                author_styles.stylesheets.force_dirty();
                 author_styles.flush(&mut self.stylist, &guard);
                 styles.author_styles = author_styles;
                 styles.dirty = false;

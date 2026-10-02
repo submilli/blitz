@@ -59,7 +59,7 @@ pub enum Resource {
     Image(ImageType, u32, u32, Arc<Vec<u8>>),
     #[cfg(feature = "svg")]
     Svg(ImageType, crate::node::SvgImageData),
-    Css(DocumentStyleSheet),
+    Css(DocumentStyleSheet, bool),
     /// Stylesheet loaded for an `@import` rule, to be attached to the rule on the document thread
     ImportedCss(ServoArc<Locked<ImportRule>>, ServoArc<Stylesheet>),
     Font(Bytes, FontFaceOverrides),
@@ -145,6 +145,15 @@ pub struct StylesheetHandler {
 
 impl NetHandler for ResourceHandler<StylesheetHandler> {
     fn bytes(self: Box<Self>, resolved_url: String, bytes: Bytes) {
+        self.bytes_with_metadata(resolved_url, bytes, Default::default());
+    }
+
+    fn bytes_with_metadata(
+        self: Box<Self>,
+        resolved_url: String,
+        bytes: Bytes,
+        metadata: blitz_traits::net::ResponseMetadata,
+    ) {
         let Ok(css) = std::str::from_utf8(&bytes) else {
             return self.respond(resolved_url, Err(String::from("Invalid UTF8")));
         };
@@ -154,7 +163,9 @@ impl NetHandler for ResourceHandler<StylesheetHandler> {
 
         let sheet = Stylesheet::from_str(
             crate::css_limits::bounded(css),
-            self.data.source_url.clone().into(),
+            Url::parse(&resolved_url)
+                .unwrap_or_else(|_| self.data.source_url.clone())
+                .into(),
             Origin::Author,
             ServoArc::new(self.data.guard.wrap(MediaList::empty())),
             self.data.guard.clone(),
@@ -173,7 +184,10 @@ impl NetHandler for ResourceHandler<StylesheetHandler> {
 
         self.respond(
             resolved_url,
-            Ok(Resource::Css(DocumentStyleSheet(ServoArc::new(sheet)))),
+            Ok(Resource::Css(
+                DocumentStyleSheet(ServoArc::new(sheet)),
+                metadata.stylesheet_origin_clean,
+            )),
         );
     }
 }
@@ -227,7 +241,8 @@ impl ServoStylesheetLoader for StylesheetLoader {
         let import = ServoArc::new(lock.wrap(import));
         self.net_provider.fetch(
             self.doc_id,
-            stamped_request(url.as_ref().clone(), self.abort_signal.as_ref()),
+            stamped_request(url.as_ref().clone(), self.abort_signal.as_ref())
+                .stylesheet(blitz_traits::net::StylesheetMode::NoCors),
             ResourceHandler::boxed(
                 self.tx.clone(),
                 self.doc_id,
@@ -271,7 +286,9 @@ impl NetHandler for ResourceHandler<NestedStylesheetHandler> {
 
         let sheet = ServoArc::new(Stylesheet::from_str(
             crate::css_limits::bounded(css),
-            UrlExtraData(self.data.url.clone()),
+            Url::parse(&resolved_url)
+                .map(Into::into)
+                .unwrap_or_else(|_| UrlExtraData(self.data.url.clone())),
             Origin::Author,
             self.data.media.clone(),
             self.data.lock.clone(),
@@ -726,5 +743,68 @@ mod lifetime_tests {
         second.respond(String::new(), Ok(Resource::None));
         drop(second);
         assert!(doc.pending_resource_nodes().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod stylesheet_authority_tests {
+    use super::*;
+    use crate::{BaseDocument, DocumentConfig, QualName, local_name, ns};
+
+    #[test]
+    fn loaded_sheet_preserves_host_authority_and_final_import_base() {
+        #[derive(Default)]
+        struct Capture(std::sync::Mutex<Vec<String>>);
+        impl NetProvider for Capture {
+            fn fetch(&self, _: usize, request: Request, _: Box<dyn NetHandler>) {
+                self.0.lock().unwrap().push(request.url.to_string());
+            }
+        }
+        for origin_clean in [false, true] {
+            let capture = Arc::new(Capture::default());
+            let mut doc = BaseDocument::new(DocumentConfig {
+                base_url: Some("https://page.test/".into()),
+                net_provider: Some(capture.clone()),
+                ..DocumentConfig::default()
+            });
+            let owner = doc
+                .mutate()
+                .create_element(QualName::new(None, ns!(html), local_name!("link")), vec![]);
+            let root = doc.root_node().id;
+            doc.mutate().append_children(root, &[owner]);
+            let handler = ResourceHandler::boxed(
+                doc.tx.clone(),
+                doc.id(),
+                Some(doc.resource_pin(owner)),
+                doc.shell_provider.clone(),
+                StylesheetHandler {
+                    source_url: Url::parse("https://page.test/initial.css").unwrap(),
+                    guard: doc.guard.clone(),
+                    net_provider: capture.clone(),
+                    abort_signal: None,
+                },
+            );
+            handler.bytes_with_metadata(
+                "https://cdn.test/styles/final.css".into(),
+                Bytes::from_static(b"@import 'child.css'; p { color: red }"),
+                blitz_traits::net::ResponseMetadata {
+                    stylesheet_origin_clean: origin_clean,
+                },
+            );
+            doc.handle_messages();
+            assert_eq!(
+                doc.get_node(owner)
+                    .unwrap()
+                    .element_data()
+                    .unwrap()
+                    .stylesheet_origin_clean,
+                origin_clean
+            );
+            assert_eq!(
+                capture.0.lock().unwrap().as_slice(),
+                &["https://cdn.test/styles/child.css"]
+            );
+            assert_eq!(doc.stylesheet_rule_count(owner, &[]), Some(2));
+        }
     }
 }

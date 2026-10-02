@@ -106,6 +106,8 @@ pub struct ElementData {
     ///   - The parley Layout for inline roots.
     ///   - The text editor for input/textarea elements
     pub special_data: SpecialElementData,
+    /// CSSOM readability of the currently loaded stylesheet, from the network provider.
+    pub stylesheet_origin_clean: bool,
     /// The shadow root attached to this element, if any.
     pub shadow_root: Option<NodeId>,
 
@@ -356,6 +358,7 @@ impl Clone for ElementData {
             is_focussable: self.is_focussable,
             style_attribute: self.style_attribute.clone(),
             special_data: self.special_data.clone(),
+            stylesheet_origin_clean: self.stylesheet_origin_clean,
             background_images: self.background_images.clone(),
             mask_images: self.mask_images.clone(),
             inline_layout_data: self.inline_layout_data.clone(),
@@ -473,6 +476,7 @@ impl ElementData {
             inline_layout_data: None,
             list_item_data: None,
             special_data: SpecialElementData::None,
+            stylesheet_origin_clean: false,
             shadow_root: None,
             template_contents: None,
             background_images: ThinVec::new(),

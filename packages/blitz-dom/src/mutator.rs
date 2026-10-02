@@ -481,6 +481,13 @@ impl DocumentMutator<'_> {
         let tag = &element.name.local;
         let attr = &name.local;
 
+        if *attr == local_name!("media")
+            && (*tag == local_name!("style") || *tag == local_name!("link"))
+        {
+            self.doc.update_owner_stylesheet_media(node_id);
+            return;
+        }
+
         if *attr == local_name!("id") {
             element.id = Some(Atom::from(value))
         }
@@ -631,6 +638,13 @@ impl DocumentMutator<'_> {
 
         let tag = &element.name.local;
         let attr = &name.local;
+
+        if *attr == local_name!("media")
+            && (*tag == local_name!("style") || *tag == local_name!("link"))
+        {
+            self.doc.update_owner_stylesheet_media(node_id);
+            return;
+        }
 
         if *attr == local_name!("disabled") && element.can_be_disabled() {
             node.enable();
@@ -1450,6 +1464,9 @@ impl<'doc> DocumentMutator<'doc> {
         let Some(url) = self.doc.resolve_url(href) else {
             return;
         };
+        let stylesheet_mode = blitz_traits::net::StylesheetMode::from_attribute(
+            node.attr(local_name!("crossorigin")),
+        );
         let handler = ResourceHandler::new(
             self.doc.tx.clone(),
             self.doc.id(),
@@ -1471,7 +1488,7 @@ impl<'doc> DocumentMutator<'doc> {
 
         self.doc.net_provider.fetch(
             self.doc.id(),
-            self.doc.build_request(url),
+            self.doc.build_request(url).stylesheet(stylesheet_mode),
             Box::new(handler),
         );
     }

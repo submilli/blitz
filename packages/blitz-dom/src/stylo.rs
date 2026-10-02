@@ -61,6 +61,7 @@ use style::values::computed::text::TextAlign as StyloTextAlign;
 
 impl crate::document::BaseDocument {
     pub fn resolve_stylist(&mut self, now: f64) {
+        self.flush_author_stylesheet_order();
         style::thread_state::enter(ThreadState::LAYOUT);
 
         let guard = &self.guard;

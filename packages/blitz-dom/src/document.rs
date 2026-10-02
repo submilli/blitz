@@ -33,7 +33,7 @@ use parley::{FontContext, PlainEditorDriver};
 use selectors::{Element, matching::QuirksMode};
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, Bound, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -308,6 +308,8 @@ pub struct BaseDocument {
     /// added, replaced or removed), so that CSSOM wrappers can detect that
     /// their cached rule data is stale.
     pub(crate) stylesheet_generation: u64,
+    pub(crate) adopted_stylesheets: Vec<DocumentStyleSheet>,
+    pub(crate) stylesheet_order_dirty: bool,
     /// Stylesheets added by the useragent
     /// where the key is the hashed CSS
     pub(crate) ua_stylesheets: HashMap<String, DocumentStyleSheet>,
@@ -493,6 +495,8 @@ impl BaseDocument {
             ua_stylesheets: HashMap::new(),
             nodes_to_stylesheet: BTreeMap::new(),
             stylesheet_generation: 0,
+            adopted_stylesheets: Vec::new(),
+            stylesheet_order_dirty: false,
             font_ctx,
             #[cfg(feature = "svg")]
             svg_fonts: config
@@ -1165,7 +1169,11 @@ impl BaseDocument {
                         };
                         self.net_provider.fetch(
                             self.id(),
-                            self.build_request(resolved_href.clone()),
+                            self.build_request(resolved_href.clone()).stylesheet(
+                                blitz_traits::net::StylesheetMode::from_attribute(
+                                    element.attr(local_name!("crossorigin")),
+                                ),
+                            ),
                             ResourceHandler::boxed(
                                 self.tx.clone(),
                                 self.id,
@@ -1186,10 +1194,14 @@ impl BaseDocument {
     }
 
     pub fn process_style_element(&mut self, target_id: NodeId) {
+        if let Some(element) = self.nodes[target_id].element_data_mut() {
+            element.stylesheet_origin_clean = true;
+        }
         let css = self.nodes[target_id].text_content();
         let css = html_escape::decode_html_entities(&css);
         let sheet = self.make_stylesheet(&css, Origin::Author);
         self.add_stylesheet_for_node(sheet, target_id);
+        self.update_owner_stylesheet_media(target_id);
     }
 
     pub fn remove_user_agent_stylesheet(&mut self, contents: &str) {
@@ -1247,6 +1259,7 @@ impl BaseDocument {
         let raw_styles = self.nodes[node_id].text_content();
         let sheet = self.make_stylesheet(raw_styles, Origin::Author);
         self.add_stylesheet_for_node(sheet, node_id);
+        self.update_owner_stylesheet_media(node_id);
     }
 
     pub fn add_stylesheet_for_node(&mut self, stylesheet: DocumentStyleSheet, node_id: NodeId) {
@@ -1287,12 +1300,10 @@ impl BaseDocument {
         let element = &mut self.nodes[node_id].element_data_mut().unwrap();
         element.special_data = SpecialElementData::Stylesheet(stylesheet.clone());
 
-        // TODO: Nodes could potentially get reused so ordering by node_id might be wrong.
-        let insertion_point = self
-            .nodes_to_stylesheet
-            .range((Bound::Excluded(node_id), Bound::Unbounded))
-            .next()
-            .map(|(_, sheet)| sheet);
+        // A DOM move can rescope several sheets before their stylist order
+        // catches up. Reconcile the complete order atomically before styling.
+        self.stylesheet_order_dirty = true;
+        let insertion_point = self.adopted_stylesheets.first();
 
         if let Some(insertion_point) = insertion_point {
             self.stylist.insert_stylesheet_before(
@@ -1369,9 +1380,15 @@ impl BaseDocument {
         };
 
         match resource {
-            Resource::Css(css) => {
-                let node_id = res.node_id.unwrap();
+            Resource::Css(css, origin_clean) => {
+                let Some(node_id) = res.node_id else {
+                    return;
+                };
+                if let Some(element) = self.nodes[node_id].element_data_mut() {
+                    element.stylesheet_origin_clean = origin_clean;
+                }
                 self.add_stylesheet_for_node(css, node_id);
+                self.update_owner_stylesheet_media(node_id);
             }
             Resource::ImportedCss(import_rule, sheet) => {
                 let mut guard = self.guard.write();

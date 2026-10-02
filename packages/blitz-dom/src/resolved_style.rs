@@ -160,6 +160,21 @@ pub fn resolved_style_property_names() -> &'static [&'static str] {
     })
 }
 
+/// All enabled declaration properties, including shorthands and aliases.
+/// This is the named-property surface, distinct from computed-style indices.
+pub fn css_style_property_names() -> &'static [&'static str] {
+    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        let mut names: Vec<_> = NonCustomPropertyId::iter()
+            .map(|id| id.name())
+            .filter(|name| PropertyId::parse_enabled_for_all_content(name).is_ok())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    })
+}
+
 impl BaseDocument {
     /// Check whether `value` is a valid value for the CSS property `property`.
     /// Used by CSSOM APIs (`element.style.setProperty` and friends), which must

@@ -37,6 +37,11 @@ impl BaseDocument {
     /// Ingest resource completions, then restyle and lay out the tree.
     pub fn resolve(&mut self, current_time_for_animations: f64) {
         self.handle_messages();
+        // Normal rendering waits for critical sheets to avoid painting an
+        // incomplete cascade and starting transitions from unstyled values.
+        if self.has_pending_critical_resources() {
+            return;
+        }
         self.flush_style_and_layout(current_time_for_animations);
     }
 
@@ -57,17 +62,8 @@ impl BaseDocument {
         self.compose_shadow_trees();
         self.flush_shadow_styles();
 
-        // While render-blocking resources (e.g. stylesheets linked from the `<head>`) are
-        // still loading, don't resolve styles or layout (matching how browsers block
-        // rendering). Resolving styles before the document's stylesheets have loaded would
-        // give elements computed styles based on an incomplete cascade, and a later restyle
-        // (once the stylesheet loads) would treat those as genuine "before-change styles",
-        // spuriously starting CSS transitions from unstyled values. See issue #689.
-        //
-        // The embedder processes resource completions at its normal task boundary.
-        if self.has_pending_critical_resources() {
-            return;
-        }
+        // Synchronous reads must reflect changes to loaded sheets even while
+        // another sheet is pending. They never deliver that pending response.
 
         self.resolve_scroll_animation();
 
@@ -456,3 +452,7 @@ impl BaseDocument {
         // taffy::print_tree(self, root_node_id)
     }
 }
+
+#[cfg(test)]
+#[path = "resolve_tests.rs"]
+mod tests;

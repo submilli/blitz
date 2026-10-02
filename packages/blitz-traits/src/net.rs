@@ -33,6 +33,41 @@ pub trait NetProvider: Send + Sync + 'static {
 /// the NetCallack with the result.
 pub trait NetHandler: Send + Sync + 'static {
     fn bytes(self: Box<Self>, resolved_url: String, bytes: Bytes);
+
+    /// Receive the network provider's authoritative CSSOM access decision.
+    /// Providers without this metadata conservatively leave sheets opaque.
+    fn bytes_with_metadata(
+        self: Box<Self>,
+        resolved_url: String,
+        bytes: Bytes,
+        metadata: ResponseMetadata,
+    ) {
+        let _ = metadata;
+        self.bytes(resolved_url, bytes);
+    }
+}
+
+/// Authority supplied by the network provider, never by document attributes.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResponseMetadata {
+    pub stylesheet_origin_clean: bool,
+}
+
+/// The link element's CORS request setting. This describes intent, not authority.
+#[derive(Debug, Clone, Copy)]
+pub enum StylesheetMode {
+    NoCors,
+    Anonymous,
+    UseCredentials,
+}
+impl StylesheetMode {
+    pub fn from_attribute(value: Option<&str>) -> Self {
+        match value {
+            None => Self::NoCors,
+            Some(value) if value.eq_ignore_ascii_case("use-credentials") => Self::UseCredentials,
+            Some(_) => Self::Anonymous,
+        }
+    }
 }
 
 /// A callback which gets called every time a network request completes
@@ -57,6 +92,7 @@ pub struct Request {
     pub headers: HeaderMap,
     pub body: Body,
     pub signal: Option<AbortSignal>,
+    pub stylesheet: Option<StylesheetMode>,
 }
 impl Request {
     /// A get request to the specified Url and an empty body
@@ -68,7 +104,13 @@ impl Request {
             headers: HeaderMap::new(),
             body: Body::Empty,
             signal: None,
+            stylesheet: None,
         }
+    }
+
+    pub fn stylesheet(mut self, mode: StylesheetMode) -> Self {
+        self.stylesheet = Some(mode);
+        self
     }
 
     pub fn signal(mut self, signal: AbortSignal) -> Self {

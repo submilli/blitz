@@ -65,6 +65,7 @@ impl NavigationOptions {
             headers: HeaderMap::new(),
             body: self.document_resource,
             signal: None,
+            stylesheet: None,
         }
     }
 }
