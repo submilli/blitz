@@ -94,6 +94,10 @@ pub struct ElementData {
     /// The element's attributes
     pub attrs: Attributes,
 
+    /// Changes to an HTML canvas dimension, including equal-value writes.
+    /// Embedders use this to reset their bitmap before exposing mutation reactions.
+    pub canvas_dimension_revision: u64,
+
     /// Whether the element is focussable
     pub is_focussable: bool,
 
@@ -359,6 +363,7 @@ impl Clone for ElementData {
             name: self.name.clone(),
             id: self.id.clone(),
             attrs: self.attrs.clone(),
+            canvas_dimension_revision: 0,
             is_focussable: self.is_focussable,
             style_attribute: self.style_attribute.clone(),
             special_data: self.special_data.clone(),
@@ -502,6 +507,7 @@ impl ElementData {
             name,
             id: id_attr_atom,
             attrs: Attributes::new(attrs),
+            canvas_dimension_revision: 0,
             is_focussable: false,
             style_attribute: Default::default(),
             inline_layout_data: None,

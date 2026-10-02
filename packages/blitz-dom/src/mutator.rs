@@ -348,6 +348,7 @@ impl DocumentMutator<'_> {
         let sanitize = self.input_sanitization_needed(node_id, &name, Some(value.as_str_lossy()));
         let current_value = self.value_before_sanitizer_change(node_id, &name);
         self.set_attribute_inner(node_id, name.clone(), &value);
+        self.canvas_dimension_changed(node_id, &name);
         if sanitize {
             self.sanitize_changed_input_value(node_id, &name, current_value);
         }
@@ -357,6 +358,20 @@ impl DocumentMutator<'_> {
         }
         if name.ns == markup5ever::ns!() && name.local == local_name!("checked") {
             self.update_default_checkedness(node_id);
+        }
+    }
+
+    /// HTML canvas reset steps apply only to unqualified width/height attributes.
+    fn canvas_dimension_changed(&mut self, node_id: NodeId, name: &QualName) {
+        if name.ns != markup5ever::ns!() || !matches!(name.local.as_ref(), "width" | "height") {
+            return;
+        }
+        let Some(element) = self.doc.nodes[node_id].element_data_mut() else {
+            return;
+        };
+        if element.name.ns == markup5ever::ns!(html) && element.name.local == local_name!("canvas")
+        {
+            element.canvas_dimension_revision = element.canvas_dimension_revision.wrapping_add(1);
         }
     }
 
@@ -541,6 +556,7 @@ impl DocumentMutator<'_> {
         }
         self.image_input_attribute_changed(node_id, &name);
         if existed {
+            self.canvas_dimension_changed(node_id, &name);
             self.selection_attribute_changed(node_id, &name);
             if name.ns == markup5ever::ns!() && name.local == local_name!("checked") {
                 self.update_default_checkedness(node_id);
@@ -1795,6 +1811,40 @@ mod test {
         document.set_media_type(MediaType::print());
         assert_eq!(*document.media_type(), MediaType::print());
         assert_eq!(document.stylist_device().media_type(), MediaType::print());
+    }
+
+    #[test]
+    fn canvas_dimensions_record_equal_writes_and_existing_removals() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        let id = document.create_node(NodeData::Element(Box::new(ElementData::new(
+            qual_name!("canvas", html),
+            vec![],
+        ))));
+        let revision = |doc: &BaseDocument| {
+            doc.get_node(id)
+                .unwrap()
+                .element_data()
+                .unwrap()
+                .canvas_dimension_revision
+        };
+        assert_eq!(revision(&document), 0);
+        document
+            .mutate()
+            .set_attribute(id, qual_name!("width"), "4");
+        document
+            .mutate()
+            .set_attribute(id, qual_name!("width"), "4");
+        assert_eq!(revision(&document), 2);
+        document.mutate().set_attribute(
+            id,
+            markup5ever::QualName::new(None, "urn:test".into(), "width".into()),
+            "8",
+        );
+        assert_eq!(revision(&document), 2);
+        document.mutate().clear_attribute(id, qual_name!("width"));
+        assert_eq!(revision(&document), 3);
+        document.mutate().clear_attribute(id, qual_name!("width"));
+        assert_eq!(revision(&document), 3);
     }
 
     #[test]
