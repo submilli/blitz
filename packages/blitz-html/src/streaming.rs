@@ -41,13 +41,25 @@ pub struct StreamingParser {
 
 impl StreamingParser {
     pub fn new(doc: Rc<RefCell<BaseDocument>>) -> Self {
-        let sink = HtmlSink::with_access(SharedDocument(doc));
+        Self::with_target(doc, None)
+    }
+
+    /// Incrementally parse a detached HTML document without activating scripts.
+    /// The caller owns replacement/EOF; existing nodes survive subsequent chunks.
+    pub fn for_document_node(doc: Rc<RefCell<BaseDocument>>, document: NodeId) -> Self {
+        Self::with_target(doc, Some(document))
+    }
+
+    fn with_target(doc: Rc<RefCell<BaseDocument>>, document: Option<NodeId>) -> Self {
+        let mut sink = HtmlSink::with_access(SharedDocument(doc));
+        sink.document_node = document;
+        sink.fragment = document.is_some();
         let tree_builder = TreeBuilder::new(
             sink,
             TreeBuilderOpts {
                 exact_errors: false,
-                // Scripts run, so `<noscript>` content is raw text.
-                scripting_enabled: true,
+                // Only the active document runs scripts and treats noscript as raw text.
+                scripting_enabled: document.is_none(),
                 iframe_srcdoc: false,
                 drop_doctype: false,
                 quirks_mode: QuirksMode::NoQuirks,

@@ -106,3 +106,42 @@ fn style_text_arriving_in_chunks_is_fully_applied() {
     let e = doc.query_selector("#e").unwrap().unwrap();
     assert_eq!(doc.resolved_style_value(e, "color"), "rgb(4, 5, 6)");
 }
+
+#[test]
+fn detached_document_chunks_preserve_nodes_mutations_and_partial_tokens() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let target = doc.borrow_mut().mutate().create_document_node();
+    let mut parser = StreamingParser::for_document_node(doc.clone(), target);
+    parser.write("<body><b id=kept>x</b><i");
+    while let ParseStep::Script(_) = parser.run_written() {}
+    let body = doc.borrow().get_node(target).unwrap().children[0];
+    let body = doc.borrow().get_node(body).unwrap().children[1];
+    let kept = doc.borrow().get_node(body).unwrap().children[0];
+    doc.borrow_mut().mutate().set_attribute(
+        kept,
+        blitz_dom::QualName::new(None, blitz_dom::ns!(), "data-mutated".into()),
+        "yes",
+    );
+    parser.write(">y</i><script>inert</script>");
+    while let ParseStep::Script(_) = parser.run_written() {}
+    assert_eq!(doc.borrow().get_node(body).unwrap().children[0], kept);
+    assert!(
+        doc.borrow()
+            .get_node(body)
+            .unwrap()
+            .inner_html()
+            .contains("data-mutated=\"yes\"")
+    );
+    assert!(
+        doc.borrow()
+            .get_node(body)
+            .unwrap()
+            .inner_html()
+            .ends_with("<i>y</i><script>inert</script>")
+    );
+    assert!(doc.borrow_mut().take_connected_scripts().is_empty());
+    parser.end_of_input();
+    while let ParseStep::Script(_) = parser.run() {}
+    assert!(parser.is_finished());
+    assert!(doc.borrow().root_node().children.is_empty());
+}
