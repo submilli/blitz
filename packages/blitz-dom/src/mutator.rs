@@ -915,8 +915,11 @@ impl DocumentMutator<'_> {
                     next_sibling,
                 });
             }
+            let child_was_in_doc = self.doc.nodes[child_id].flags.is_in_document();
+            if child_was_in_doc && new_parent_is_in_document {
+                self.doc.reset_subtree_scroll_state(child_id);
+            }
             let child = &mut self.doc.nodes[child_id];
-            let child_was_in_doc = child.flags.is_in_document();
             self.mutations_occurred |= child_was_in_doc;
             let Some(old_parent_id) = child.parent.take() else {
                 continue;
@@ -1341,6 +1344,7 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     fn process_removed_subtree(&mut self, node_id: NodeId) {
+        self.doc.reset_subtree_scroll_state(node_id);
         self.doc
             .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
                 if doc.is_recording_custom_element_reactions()

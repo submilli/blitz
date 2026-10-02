@@ -115,6 +115,36 @@ pub(crate) enum ScrollAnimationState {
 }
 
 impl BaseDocument {
+    /// Removal destroys scroll boxes even when the DOM subtree is reinserted
+    /// before layout. Retained DOM nodes must not restore their old scroll state.
+    pub(crate) fn reset_subtree_scroll_state(&mut self, root: NodeId) {
+        let track_animations = self.has_scroll_animation();
+        let mut removed = std::collections::HashSet::new();
+        self.iter_shadow_including_subtree_mut(root, |id, doc| {
+            if let Some(layout) = doc.nodes[id].try_layout_data_mut() {
+                layout.scroll_offset = Point::ZERO;
+            }
+            if track_animations {
+                removed.insert(id);
+            }
+        });
+        match &mut self.scroll_animation {
+            ScrollAnimationState::ScrollTo(animations) => {
+                animations.retain(|animation| match animation.target {
+                    ScrollTarget::Node(id) => !removed.contains(&id),
+                    ScrollTarget::Viewport => true,
+                });
+                if animations.is_empty() {
+                    self.scroll_animation = ScrollAnimationState::None;
+                }
+            }
+            ScrollAnimationState::Fling(fling) if removed.contains(&fling.target) => {
+                self.scroll_animation = ScrollAnimationState::None;
+            }
+            ScrollAnimationState::Fling(_) | ScrollAnimationState::None => {}
+        }
+    }
+
     /// Whether an input or CSSOM scroll animation still needs rendering frames.
     pub fn has_scroll_animation(&self) -> bool {
         self.scroll_animation != ScrollAnimationState::None
