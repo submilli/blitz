@@ -986,6 +986,7 @@ dependencies = [
  "accesskit",
  "blitz-dom",
  "blitz-traits",
+ "encoding_rs",
  "html5ever",
  "keyboard-types 0.7.0",
  "stylo",

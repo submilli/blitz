@@ -35,6 +35,10 @@ pub struct DocumentMetadata {
     pub quirks: bool,
     /// The XML parser reported a syntax error; independent of document contents.
     pub xml_parse_error: bool,
+    /// Decoding selected before parsing; absent for UTF-8 string factories.
+    pub encoding: Option<&'static str>,
+    /// An HTTP document can retain a specific XML MIME type.
+    pub content_type: Option<String>,
     /// Detached document URL; the active document uses the embedder's live URL.
     pub url: Option<url::Url>,
     /// Detached factories snapshot their creator's origin domain.

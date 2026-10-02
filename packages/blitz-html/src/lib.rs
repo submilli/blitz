@@ -1,6 +1,8 @@
 #![allow(clippy::collapsible_if)]
 
 mod bounded_parser;
+mod encoding;
+pub use encoding::{detect_xml_encoding, prescan_html_encoding};
 mod html_document;
 mod html_sink;
 mod streaming;

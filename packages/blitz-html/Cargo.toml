@@ -15,6 +15,7 @@ accessibility = ["blitz-dom/accessibility"]
 tracing = ["dep:tracing", "blitz-dom/tracing"]
 
 [dependencies]
+encoding_rs = "0.8"
 # Blitz dependencies
 blitz-dom = { workspace = true }
 blitz-traits = { workspace = true }
