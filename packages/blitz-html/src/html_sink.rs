@@ -213,6 +213,7 @@ impl<A: DocAccess> HtmlSink<A> {
         }
         self.with(|m| {
             let document = self.document_node.unwrap_or_else(|| m.doc.root_node().id);
+            m.document_metadata_mut(document).xml_parse_error = true;
             let children = m
                 .doc
                 .get_node(document)
@@ -331,6 +332,7 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
             metadata.document_type = blitz_dom::DocumentType::Xml;
         }
         metadata.quirks = false;
+        metadata.xml_parse_error = false;
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.document_node = Some(document);
         sink.fragment = true;

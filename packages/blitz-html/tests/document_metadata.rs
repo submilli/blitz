@@ -10,6 +10,7 @@ fn html_mode_survives_parser_and_child_removal() {
         let mut doc = parse(markup);
         let root = doc.root_node().id;
         assert_eq!(doc.document_metadata(root).quirks, quirks);
+        assert!(!doc.document_metadata(root).xml_parse_error);
         let children = doc.root_node().children.to_vec();
         for child in children {
             doc.mutate().remove_and_drop_node(child);
@@ -83,4 +84,23 @@ fn unclosed_xml_reports_an_error_document() {
             .as_ref(),
         "parsererror"
     );
+}
+
+#[test]
+fn xml_parse_status_is_not_inferred_from_element_names() {
+    let mut document = parse("");
+    let mut m = document.mutate();
+    for (source, failed) in [
+        ("<root>", true),
+        ("<parsererror/>", false),
+        ("<root><parsererror/></root>", false),
+        (
+            "<parsererror xmlns='http://www.mozilla.org/newlayout/xml/parsererror.xml'>XML parsing error</parsererror>",
+            false,
+        ),
+    ] {
+        let xml = m.try_create_document_node().unwrap();
+        DocumentHtmlParser::try_parse_into_document_node(&mut m, xml, source, true).unwrap();
+        assert_eq!(m.doc.document_metadata(xml).xml_parse_error, failed);
+    }
 }
