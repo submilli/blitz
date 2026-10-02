@@ -18,6 +18,101 @@ fn document() -> (BaseDocument, NodeId) {
     let body = element(&mut doc, html, "body", "margin:0;padding:0");
     (doc, body)
 }
+
+#[test]
+fn observer_resize_is_logical_untransformed_and_scaled() {
+    let (mut doc, body) = document();
+    let target = element(
+        &mut doc,
+        body,
+        "div",
+        "width:100px;height:50px;padding:5px;border:2px solid;writing-mode:vertical-rl;transform:scale(2)",
+    );
+    doc.resolve(0.0);
+    let geometry = doc.resize_observer_geometry(target);
+    assert_eq!(geometry.content, (50.0, 100.0));
+    assert_eq!(geometry.border, (64.0, 114.0));
+    assert_eq!(
+        (geometry.content_rect.width, geometry.content_rect.height),
+        (100.0, 50.0)
+    );
+    let mut viewport = doc.viewport().clone();
+    viewport.hidpi_scale = 2.0;
+    doc.set_viewport(viewport);
+    doc.resolve(0.0);
+    assert_eq!(doc.resize_observer_geometry(target).device, (100.0, 200.0));
+    doc.set_style_property(target, "display", "none");
+    doc.resolve(0.0);
+    assert_eq!(doc.resize_observer_geometry(target).content, (0.0, 0.0));
+}
+
+#[test]
+fn observer_intersection_clips_ancestors_and_requires_explicit_root_ancestry() {
+    let (mut doc, body) = document();
+    doc.set_viewport(blitz_traits::shell::Viewport::new(
+        800,
+        600,
+        1.0,
+        blitz_traits::shell::ColorScheme::Light,
+    ));
+    let root = element(
+        &mut doc,
+        body,
+        "div",
+        "width:100px;height:50px;overflow:hidden",
+    );
+    let target = element(
+        &mut doc,
+        root,
+        "div",
+        "width:20px;height:20px;margin-top:40px",
+    );
+    let outside = element(&mut doc, body, "div", "width:20px;height:20px");
+    doc.resolve(0.0);
+    let result = doc.intersection_observer_geometry(target, None, [(0.0, false); 4]);
+    assert!(result.intersects);
+    assert_eq!(result.ratio, 0.5);
+    let result = doc.intersection_observer_geometry(outside, Some(root), [(0.0, false); 4]);
+    assert!(!result.intersects);
+    assert_eq!(result.bounds.width, 0.0);
+    doc.set_style_property(target, "margin-top", "60px");
+    doc.resolve(0.0);
+    assert!(
+        !doc.intersection_observer_geometry(target, None, [(0.0, false); 4])
+            .intersects
+    );
+}
+
+#[test]
+fn observer_fractional_sizes_and_transformed_root_margins() {
+    let (mut doc, body) = document();
+    let root = element(
+        &mut doc,
+        body,
+        "div",
+        "position:absolute;left:200px;top:200px;width:100.25px;height:100.75px;overflow:hidden;transform:scale(2);transform-origin:0 0",
+    );
+    let target = element(
+        &mut doc,
+        root,
+        "div",
+        "width:10.25px;height:20.75px;padding:1.25px;border:0.5px solid",
+    );
+    doc.resolve(0.0);
+    let geometry = doc.resize_observer_geometry(target);
+    assert_eq!(geometry.content, (10.25, 20.75));
+    assert_eq!(geometry.border, (14.75, 25.25));
+    let geometry = doc.intersection_observer_geometry(target, Some(root), [(10.0, false); 4]);
+    assert_eq!(
+        (
+            geometry.root.x,
+            geometry.root.y,
+            geometry.root.width,
+            geometry.root.height
+        ),
+        (180.0, 180.0, 240.5, 241.5)
+    );
+}
 #[test]
 fn hidden_descendants_and_detached_nodes_have_no_rectangles() {
     let (mut doc, body) = document();

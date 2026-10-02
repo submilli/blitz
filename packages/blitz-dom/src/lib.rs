@@ -69,7 +69,7 @@ pub use checkable_activation::CheckableActivation;
 mod disabled;
 mod focus;
 mod geometry;
-pub use geometry::BoxMetrics;
+pub use geometry::{BoxMetrics, IntersectionGeometry, ResizeGeometry};
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;
@@ -137,7 +137,7 @@ pub use blitz_traits::node_id::NodeId;
 pub use clock::SystemClock;
 pub use clock::{Clock, FrozenClock};
 pub use config::{DocumentConfig, StyleThreading};
-pub use document::{BaseDocument, DocGuard, DocGuardMut, Document, PlainDocument};
+pub use document::{BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, PlainDocument};
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,
     namespace_prefix, namespace_url, ns,

@@ -4,6 +4,9 @@ use crate::{BaseDocument, NodeId};
 use kurbo::{Affine, Point};
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
 
+mod observers;
+pub use observers::{IntersectionGeometry, ResizeGeometry};
+
 impl BaseDocument {
     /// Whether the element generates boxes in the active document after layout.
     /// A descendant of display:none has no boxes even if it retains old layout data.
