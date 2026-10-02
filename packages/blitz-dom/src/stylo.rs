@@ -512,7 +512,9 @@ impl selectors::Element for BlitzNode<'_> {
             NonTSPseudoClass::Hover => self.element_state().contains(ElementState::HOVER),
             NonTSPseudoClass::Indeterminate => false,
             NonTSPseudoClass::Lang(_) => false,
-            NonTSPseudoClass::CustomState(_) => false,
+            NonTSPseudoClass::CustomState(ref name) => self
+                .element_data()
+                .is_some_and(|e| e.custom_states.contains(&name.0)),
             NonTSPseudoClass::Link => self.element_state().contains(ElementState::UNVISITED),
             NonTSPseudoClass::PlaceholderShown => false,
             NonTSPseudoClass::ReadWrite => false,
@@ -639,11 +641,9 @@ impl selectors::Element for BlitzNode<'_> {
             .is_some_and(|parent| parent.as_document().is_some())
     }
 
-    fn has_custom_state(
-        &self,
-        _name: &<Self::Impl as selectors::SelectorImpl>::Identifier,
-    ) -> bool {
-        false
+    fn has_custom_state(&self, name: &<Self::Impl as selectors::SelectorImpl>::Identifier) -> bool {
+        self.element_data()
+            .is_some_and(|e| e.custom_states.contains(name))
     }
 
     fn add_element_unique_hashes(&self, filter: &mut selectors::bloom::BloomFilter) -> bool {
@@ -1259,11 +1259,15 @@ impl<'a> TElement for BlitzNode<'a> {
         Default::default()
     }
 
-    fn each_custom_state<F>(&self, _callback: F)
+    fn each_custom_state<F>(&self, mut callback: F)
     where
         F: FnMut(&AtomIdent),
     {
-        todo!()
+        if let Some(element) = self.element_data() {
+            for state in &element.custom_states {
+                callback(state);
+            }
+        }
     }
 
     fn has_selector_flags(&self, flags: ElementSelectorFlags) -> bool {

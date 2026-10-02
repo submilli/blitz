@@ -11,17 +11,18 @@ impl BaseDocument {
     pub fn form_owner(&self, id: NodeId) -> Option<NodeId> {
         let element = self.get_node(id)?.element_data()?;
         if element.name.ns != ns!(html)
-            || !matches!(
-                &*element.name.local,
-                "button"
-                    | "fieldset"
-                    | "input"
-                    | "object"
-                    | "output"
-                    | "select"
-                    | "textarea"
-                    | "img"
-            )
+            || !(element.is_custom_form_control()
+                || matches!(
+                    &*element.name.local,
+                    "button"
+                        | "fieldset"
+                        | "input"
+                        | "object"
+                        | "output"
+                        | "select"
+                        | "textarea"
+                        | "img"
+                ))
         {
             return None;
         }
@@ -57,19 +58,29 @@ impl BaseDocument {
                         .and_then(|n| n.element_data())
                         .is_some_and(|e| {
                             e.name.ns == ns!(html)
-                                && matches!(
-                                    &*e.name.local,
-                                    "button"
-                                        | "fieldset"
-                                        | "input"
-                                        | "object"
-                                        | "output"
-                                        | "select"
-                                        | "textarea"
-                                )
+                                && (e.is_custom_form_control()
+                                    || matches!(
+                                        &*e.name.local,
+                                        "button"
+                                            | "fieldset"
+                                            | "input"
+                                            | "object"
+                                            | "output"
+                                            | "select"
+                                            | "textarea"
+                                    ))
                         })
             })
             .collect()
+    }
+
+    /// HTMLFormElement.elements historically excludes image submit buttons.
+    pub fn form_elements(&self, form: NodeId) -> Vec<NodeId> {
+        self.form_controls(form).into_iter().filter(|&id| {
+            !self.get_node(id).and_then(|node| node.element_data()).is_some_and(|element| {
+                element.name.local.as_ref() == "input" && element.attr(crate::local_name!("type")).is_some_and(|kind| kind.eq_ignore_ascii_case("image"))
+            })
+        }).collect()
     }
 
     /// Batch form ownership for one current DOM tree in linear work. Radio
@@ -133,6 +144,20 @@ impl BaseDocument {
 #[cfg(test)]
 mod tests {
     use crate::{BaseDocument, DocumentConfig, QualName, ns};
+
+    #[test]
+    fn form_elements_excludes_image_buttons_without_losing_submission_controls() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let mut m = doc.mutate();
+        let form = m.try_create_element(QualName::new(None, ns!(html), "form".into()), vec![]).unwrap();
+        let image = m.try_create_element(QualName::new(None, ns!(html), "input".into()), vec![]).unwrap();
+        m.set_attribute(image, QualName::new(None, ns!(), "type".into()), "IMAGE");
+        m.append_children(form, &[image]);
+        assert_eq!(m.doc.form_controls(form), vec![image]);
+        assert!(m.doc.form_elements(form).is_empty());
+        m.set_attribute(image, QualName::new(None, ns!(), "type".into()), "text");
+        assert_eq!(m.doc.form_elements(form), vec![image]);
+    }
 
     #[test]
     fn form_ownership_tracks_attachment_explicit_ids_and_invalid_references() {

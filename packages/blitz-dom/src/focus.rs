@@ -145,11 +145,16 @@ impl BaseDocument {
             }
             let Some(node) = self.get_node(id) else { break };
             path.push(id);
-            current = node.parent;
+            current = node
+                .parent
+                .or_else(|| node.shadow_root_data.as_ref().map(|data| data.host));
         }
         for id in path.into_iter().rev() {
             let node = &self.nodes[id];
-            let parent = node.parent.and_then(|id| self.get_node(id));
+            let parent = node
+                .parent
+                .or_else(|| node.shadow_root_data.as_ref().map(|data| data.host))
+                .and_then(|id| self.get_node(id));
             let mut context = parent
                 .and_then(|n| cache.get(&n.id).copied())
                 .unwrap_or_default();
@@ -167,5 +172,67 @@ impl BaseDocument {
             cache.insert(id, context);
         }
         cache.get(&id).copied().unwrap_or_default()
+    }
+}
+
+impl BaseDocument {
+    /// Resolve a programmatic focus request through delegatesFocus shadow hosts.
+    /// Explicit stack and visited set bound traversal by live arena nodes.
+    pub fn delegated_focus_target(&self, host: NodeId) -> Option<NodeId> {
+        let delegates = self.shadow_root_of(host).filter(|&root| {
+            self.nodes[root]
+                .shadow_root_data
+                .as_ref()
+                .is_some_and(|data| data.delegates_focus)
+        });
+        let Some(root) = delegates else {
+            return self.first_programmatically_focusable(&[host]);
+        };
+        if self.active_element_in(root).is_some()
+            && let Some(focused) = self.get_focussed_node_id()
+            && self.first_programmatically_focusable(&[focused]).is_some()
+        {
+            return Some(focused);
+        }
+        let mut pending: Vec<_> = self.nodes[root].children.iter().rev().copied().collect();
+        let mut visited = std::collections::HashSet::new();
+        let mut contexts = HashMap::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(nested) = self.shadow_root_of(id) {
+                pending.extend(self.nodes[nested].children.iter().rev().copied());
+            }
+            if self.focusable_with_context(id, &mut contexts) {
+                return Some(id);
+            }
+            if self.nodes[id]
+                .element_data()
+                .is_some_and(|el| el.name.ns == ns!(html) && &*el.name.local == "slot")
+            {
+                let assigned = self.assigned_nodes(id);
+                if !assigned.is_empty() {
+                    pending.extend(assigned.into_iter().rev());
+                    continue;
+                }
+            }
+            pending.extend(self.nodes[id].children.iter().rev().copied());
+        }
+        None
+    }
+
+    /// Retarget actual focus through nested shadow hosts into a document or root.
+    pub fn active_element_in(&self, scope: NodeId) -> Option<NodeId> {
+        let mut focused = self
+            .get_focussed_node_id()
+            .filter(|&id| self.nodes[id].is_focussed())?;
+        loop {
+            let root = self.tree_root(focused);
+            if root == scope {
+                return Some(focused);
+            }
+            focused = self.shadow_host_of(root)?;
+        }
     }
 }

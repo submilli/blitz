@@ -74,6 +74,8 @@ pub struct DocumentMutator<'doc> {
 impl Drop for DocumentMutator<'_> {
     fn drop(&mut self) {
         self.flush(); // Defined at bottom of file
+        self.doc.refresh_dirty_slots();
+        self.doc.refresh_custom_form_associations();
         self.doc.dom_generation += 1;
         if self.mutations_occurred {
             self.doc.shell_provider.request_redraw();
@@ -383,7 +385,7 @@ impl DocumentMutator<'_> {
                     new_value: Some(dom_value.clone()),
                 });
         }
-        if self.doc.is_recording_mutations() {
+        if self.doc.observes_dom_changes() {
             let old_value = self.doc.nodes[node_id].element_data().and_then(|el| {
                 el.attrs()
                     .iter()
@@ -704,7 +706,7 @@ impl DocumentMutator<'_> {
 
     /// Remove the node from it's parent but don't drop it
     pub fn remove_node(&mut self, node_id: NodeId) {
-        if self.doc.is_recording_mutations() {
+        if self.doc.observes_dom_changes() {
             if let Some((parent, previous_sibling, next_sibling)) =
                 self.doc.position_in_parent(node_id)
             {
@@ -738,6 +740,7 @@ impl DocumentMutator<'_> {
         let node = &mut self.doc.nodes[node_id];
         node.flat_parent.set(crate::node::FlatParent::Dom);
         let parent_id = node.parent.take()?;
+        self.doc.refresh_custom_form_associations();
         self.selection_inserted(&[node_id]);
         self.mutations_occurred |= node_is_in_document;
         Some(parent_id)
@@ -898,7 +901,7 @@ impl DocumentMutator<'_> {
         // would remove both the old and the newly-inserted entries from the
         // parent's child list, and anchor indices would be computed against a
         // child list that still contains the moved nodes.
-        let recording = self.doc.is_recording_mutations();
+        let recording = self.doc.observes_dom_changes();
         let mut detached: HashMap<NodeId, HashSet<NodeId>> = HashMap::new();
         for child_id in child_ids.iter().copied() {
             self.reset_parser_forms_in_subtree(child_id);
@@ -925,6 +928,16 @@ impl DocumentMutator<'_> {
                 continue;
             };
 
+            if child_was_in_doc
+                && new_parent_is_in_document
+                && self.doc.is_recording_custom_element_reactions()
+            {
+                self.doc.iter_subtree_mut(child_id, |id, doc| {
+                    if doc.custom_element_state(id) == CustomElementState::Custom {
+                        doc.record_custom_element_reaction(CustomElementReaction::Disconnected(id));
+                    }
+                });
+            }
             let old_parent = &mut self.doc.nodes[old_parent_id];
             old_parent.insert_damage(ALL_DAMAGE);
 
@@ -956,6 +969,7 @@ impl DocumentMutator<'_> {
                 .retain(|id| !children.contains(id));
         }
 
+        self.doc.refresh_custom_form_associations();
         let new_parent = &mut self.doc.nodes[parent_id];
         new_parent.insert_damage(ALL_DAMAGE);
 
@@ -994,16 +1008,14 @@ impl DocumentMutator<'_> {
                 && self.doc.is_recording_custom_element_reactions()
             {
                 // A move within the document disconnects and reconnects.
-                for reaction in [
-                    CustomElementReaction::Disconnected,
-                    CustomElementReaction::Connected,
-                ] {
-                    self.doc.iter_subtree_mut(child_id, |id, doc| {
-                        if doc.custom_element_state(id) != CustomElementState::Uncustomized {
-                            doc.record_custom_element_reaction(reaction(id));
-                        }
-                    });
-                }
+                self.doc.iter_subtree_mut(child_id, |id, doc| {
+                    if matches!(
+                        doc.custom_element_state(id),
+                        CustomElementState::Custom | CustomElementState::Undefined
+                    ) {
+                        doc.record_custom_element_reaction(CustomElementReaction::Connected(id));
+                    }
+                });
             }
         }
 
@@ -1011,7 +1023,7 @@ impl DocumentMutator<'_> {
             self.doc.notify_inserted(child_id);
         }
 
-        if self.doc.is_recording_mutations() && !child_ids.is_empty() {
+        if self.doc.observes_dom_changes() && !child_ids.is_empty() {
             let siblings = &self.doc.nodes[parent_id].children;
             if let Some(first) = siblings.position(child_ids[0]) {
                 let previous_sibling = first.checked_sub(1).map(|i| siblings[i]);

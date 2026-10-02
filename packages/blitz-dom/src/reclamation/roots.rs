@@ -9,6 +9,7 @@ use crate::{BaseDocument, NodeId};
 pub(super) fn native_work(doc: &BaseDocument) -> Vec<NodeId> {
     let mut roots = vec![doc.root_node_id];
     roots.extend(&doc.connected_scripts);
+    roots.extend(&doc.slot_changes);
     roots.extend(doc.pending_resource_nodes());
     roots.extend(
         doc.pending_images
@@ -29,14 +30,11 @@ pub(super) fn native_work(doc: &BaseDocument) -> Vec<NodeId> {
         }
     }
     if let Some(reactions) = &doc.custom_element_reactions {
-        for reaction in reactions {
-            roots.push(match reaction {
-                CustomElementReaction::Connected(id) | CustomElementReaction::Disconnected(id) => {
-                    *id
-                }
-                CustomElementReaction::AttributeChanged { element, .. } => *element,
-            });
-        }
+        roots.extend(
+            reactions
+                .iter()
+                .flat_map(CustomElementReaction::referenced_nodes),
+        );
     }
     for task in &doc.deferred_construction_nodes {
         roots.push(task.node_id);

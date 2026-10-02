@@ -23,6 +23,7 @@ impl BaseDocument {
             self.parser_forms.remove(id);
             on_drop(id);
             self.shadow_hosts.remove(&id);
+            self.slot_changes.retain(|&slot| slot != id);
             pending.extend(node.anonymous_blocks.iter().map(|&id| (id, false)));
             if owns_children {
                 pending.extend(

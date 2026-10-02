@@ -72,19 +72,29 @@ impl DocumentMutator<'_> {
         if self.doc.node_type(id) == crate::dom_api::node_type::DOCUMENT {
             return Ok(id);
         }
-        let mut pending = vec![id];
+        let mut pending = vec![(id, deep)];
         let mut count = 0;
-        while let Some(id) = pending.pop() {
+        while let Some((id, deep)) = pending.pop() {
             count += 1;
             self.doc.check_node_allocation(count)?;
+            if let Some(root) = self.doc.shadow_root_of(id)
+                && self.doc.nodes[root]
+                    .shadow_root_data
+                    .as_ref()
+                    .is_some_and(|data| data.clonable)
+            {
+                count += 1;
+                self.doc.check_node_allocation(count)?;
+                pending.extend(self.doc.nodes[root].children.iter().map(|&id| (id, true)));
+            }
             if deep {
                 let node = &self.doc.nodes[id];
-                pending.extend(node.children.iter().copied());
+                pending.extend(node.children.iter().map(|&id| (id, true)));
                 if let Some(contents) = node
                     .element_data()
                     .and_then(|element| element.template_contents)
                 {
-                    pending.push(contents);
+                    pending.push((contents, true));
                 }
             }
         }

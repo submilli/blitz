@@ -18,6 +18,8 @@ pub enum CustomElementState {
     Undefined,
     /// Its constructor threw during an upgrade.
     Failed,
+    /// Running an upgrade constructor after super() has returned.
+    Precustomized,
     /// Upgraded or constructed from its definition.
     Custom,
 }
@@ -46,6 +48,21 @@ pub enum CustomElementReaction {
     Connected(NodeId),
     /// The element stopped being connected.
     Disconnected(NodeId),
+    FormAssociated {
+        element: NodeId,
+        form: Option<NodeId>,
+    },
+    FormDisabled {
+        element: NodeId,
+        disabled: bool,
+    },
+    FormReset(NodeId),
+    /// The node document changed.
+    Adopted {
+        element: NodeId,
+        old_document: NodeId,
+        new_document: NodeId,
+    },
     /// An attribute of a custom (not merely undefined) element changed.
     AttributeChanged {
         element: NodeId,
@@ -54,6 +71,32 @@ pub enum CustomElementReaction {
         old_value: Option<crate::DomString>,
         new_value: Option<crate::DomString>,
     },
+}
+
+impl CustomElementReaction {
+    pub fn target(&self) -> NodeId {
+        match self {
+            Self::Connected(id) | Self::Disconnected(id) | Self::FormReset(id) => *id,
+            Self::FormAssociated { element, .. }
+            | Self::FormDisabled { element, .. }
+            | Self::Adopted { element, .. }
+            | Self::AttributeChanged { element, .. } => *element,
+        }
+    }
+
+    /// All nodes retained by a queued or transferred reaction, including callback arguments.
+    pub fn referenced_nodes(&self) -> impl Iterator<Item = NodeId> {
+        let (first, second) = match self {
+            Self::Adopted {
+                old_document,
+                new_document,
+                ..
+            } => (Some(*old_document), Some(*new_document)),
+            Self::FormAssociated { form, .. } => (*form, None),
+            _ => (None, None),
+        };
+        [Some(self.target()), first, second].into_iter().flatten()
+    }
 }
 
 /// Whether `name` is a valid custom element name: starts with an ASCII lower
@@ -122,8 +165,58 @@ impl BaseDocument {
             return;
         }
         element.custom_element_state = state;
+        // Live form collections depend on upgrade state as well as topology.
+        self.dom_generation = self.dom_generation.wrapping_add(1);
         if self.nodes[node_id].flags.is_in_document() {
             self.restyle_subtree_of(node_id);
+        }
+    }
+
+    /// Queue the pre-construction lifecycle snapshot for an upgrade.
+    pub fn upgrade_reactions(&mut self, id: NodeId) -> Vec<CustomElementReaction> {
+        let mut reactions = Vec::new();
+        let mut bytes = 0usize;
+        if let Some(element) = self.nodes[id].element_data() {
+            for attr in element.attrs().iter() {
+                let retained =
+                    attr.name.local.len() + attr.name.ns.len() + attr.value.retained_bytes();
+                if reactions.len() >= 4096
+                    || retained > (8 * 1024 * 1024usize).saturating_sub(bytes)
+                {
+                    self.custom_element_reaction_overflow = true;
+                    break;
+                }
+                bytes += retained;
+                reactions.push(CustomElementReaction::AttributeChanged {
+                    element: id,
+                    name: attr.name.local.to_string(),
+                    namespace: (attr.name.ns != markup5ever::ns!())
+                        .then(|| attr.name.ns.to_string()),
+                    old_value: None,
+                    new_value: Some(attr.value.clone()),
+                });
+            }
+        }
+        if self.is_connected(id) {
+            if reactions.len() < 4096 {
+                reactions.push(CustomElementReaction::Connected(id));
+            } else {
+                self.custom_element_reaction_overflow = true;
+            }
+        }
+        reactions
+    }
+
+    pub fn enqueue_custom_element_reactions(&mut self, reactions: Vec<CustomElementReaction>) {
+        for reaction in reactions {
+            self.record_custom_element_reaction(reaction);
+        }
+    }
+
+    /// A failed upgrade discards reactions remaining for that element.
+    pub fn discard_custom_element_reactions(&mut self, id: NodeId) {
+        if let Some(reactions) = &mut self.custom_element_reactions {
+            reactions.retain(|reaction| reaction.target() != id);
         }
     }
 
@@ -172,6 +265,217 @@ impl BaseDocument {
 #[cfg(test)]
 mod bounds_tests {
     use super::*;
+    #[test]
+    fn upgrade_snapshot_precedes_constructor_mutations() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        doc.set_custom_element_reactions(true);
+        let id = doc
+            .mutate()
+            .try_create_element(
+                crate::QualName::new(None, markup5ever::ns!(html), "x-test".into()),
+                vec![],
+            )
+            .unwrap();
+        doc.mutate().set_attribute(
+            id,
+            crate::QualName::new(None, markup5ever::ns!(), "a".into()),
+            "old",
+        );
+        let snapshot = doc.upgrade_reactions(id);
+        doc.set_custom_element_state(id, CustomElementState::Precustomized);
+        doc.mutate().set_attribute(
+            id,
+            crate::QualName::new(None, markup5ever::ns!(), "a".into()),
+            "new",
+        );
+        assert!(doc.take_custom_element_reactions().is_empty());
+        doc.set_custom_element_state(id, CustomElementState::Custom);
+        doc.enqueue_custom_element_reactions(snapshot);
+        assert!(
+            matches!(&doc.take_custom_element_reactions()[..], [CustomElementReaction::AttributeChanged { new_value: Some(value), .. }] if value.as_str_lossy() == "old")
+        );
+    }
+
+    #[test]
+    fn adoption_reactions_follow_tree_order_and_retain_documents() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        let (root, child, other) = {
+            let mut m = doc.mutate();
+            let root = m
+                .try_create_element(
+                    crate::QualName::new(None, markup5ever::ns!(html), "x-root".into()),
+                    vec![],
+                )
+                .unwrap();
+            let child = m
+                .try_create_element(
+                    crate::QualName::new(None, markup5ever::ns!(html), "x-child".into()),
+                    vec![],
+                )
+                .unwrap();
+            m.append_children(root, &[child]);
+            (root, child, m.try_create_document_node().unwrap())
+        };
+        let old = doc.node_document(root);
+        doc.set_custom_element_state(root, CustomElementState::Custom);
+        doc.set_custom_element_state(child, CustomElementState::Custom);
+        doc.set_custom_element_reactions(true);
+        doc.mutate().set_node_document(root, other);
+        assert_eq!(
+            doc.take_custom_element_reactions(),
+            vec![
+                CustomElementReaction::Adopted {
+                    element: root,
+                    old_document: old,
+                    new_document: other
+                },
+                CustomElementReaction::Adopted {
+                    element: child,
+                    old_document: old,
+                    new_document: other
+                },
+            ]
+        );
+        doc.mutate().set_node_document(root, old);
+        doc.reclaim_detached_nodes(&[]);
+        assert!(doc.get_node(other).is_some());
+        assert!(doc.get_node(root).is_some());
+    }
+
+    #[test]
+    fn upgrade_snapshots_obey_reaction_limits() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        let attrs = (0..5000)
+            .map(|i| crate::Attribute {
+                name: crate::QualName::new(None, markup5ever::ns!(), format!("a{i}").into()),
+                value: "v".into(),
+            })
+            .collect();
+        let id = doc
+            .mutate()
+            .try_create_element(
+                crate::QualName::new(None, markup5ever::ns!(html), "x-many".into()),
+                attrs,
+            )
+            .unwrap();
+        assert_eq!(doc.upgrade_reactions(id).len(), 4096);
+        assert!(doc.take_custom_element_reaction_overflow());
+        let attrs = vec![crate::Attribute {
+            name: crate::QualName::new(None, markup5ever::ns!(), "a".into()),
+            value: "x".repeat(8 * 1024 * 1024).into(),
+        }];
+        let large = doc
+            .mutate()
+            .try_create_element(
+                crate::QualName::new(None, markup5ever::ns!(html), "x-large".into()),
+                attrs,
+            )
+            .unwrap();
+        assert!(doc.upgrade_reactions(large).is_empty());
+        assert!(doc.take_custom_element_reaction_overflow());
+    }
+
+    #[test]
+    fn cloned_builtin_identity_without_literal_is_stays_upgradeable() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        let id = doc
+            .mutate()
+            .try_create_element(
+                crate::QualName::new(None, markup5ever::ns!(html), "button".into()),
+                vec![],
+            )
+            .unwrap();
+        doc.get_node_mut(id)
+            .unwrap()
+            .element_data_mut()
+            .unwrap()
+            .custom_element_is = Some("x-button".into());
+        doc.set_custom_element_state(id, CustomElementState::Custom);
+        let copy = doc.mutate().try_clone_node(id, false).unwrap();
+        assert_eq!(
+            doc.custom_element_state(copy),
+            CustomElementState::Undefined
+        );
+        assert_eq!(
+            doc.get_node(copy)
+                .unwrap()
+                .element_data()
+                .unwrap()
+                .custom_element_is
+                .as_deref(),
+            Some("x-button")
+        );
+    }
+
+    #[test]
+    fn later_literal_is_does_not_change_cloned_builtin_identity() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        let id = doc
+            .mutate()
+            .try_create_element(
+                crate::QualName::new(None, markup5ever::ns!(html), "button".into()),
+                vec![],
+            )
+            .unwrap();
+        doc.mutate().set_attribute(
+            id,
+            crate::QualName::new(None, markup5ever::ns!(), "is".into()),
+            "x-button",
+        );
+        let copy = doc.mutate().try_clone_node(id, false).unwrap();
+        assert_eq!(
+            doc.custom_element_state(copy),
+            CustomElementState::Uncustomized
+        );
+        assert_eq!(
+            doc.get_node(copy)
+                .unwrap()
+                .element_data()
+                .unwrap()
+                .custom_element_is,
+            None
+        );
+    }
+
+    #[test]
+    fn failed_form_upgrade_retains_internals_without_native_participation() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        let (form, id) = {
+            let mut m = doc.mutate();
+            let form = m
+                .try_create_element(
+                    crate::QualName::new(None, markup5ever::ns!(html), "form".into()),
+                    vec![],
+                )
+                .unwrap();
+            let id = m
+                .try_create_element(
+                    crate::QualName::new(None, markup5ever::ns!(html), "x-failed".into()),
+                    vec![],
+                )
+                .unwrap();
+            m.append_children(form, &[id]);
+            (form, id)
+        };
+        doc.set_custom_element_state(id, CustomElementState::Precustomized);
+        doc.register_form_associated(id);
+        assert_eq!(doc.custom_element_form_owner(id), None);
+        doc.set_custom_element_state(id, CustomElementState::Failed);
+        assert!(doc.is_form_associated_custom(id));
+        assert!(doc.form_controls(form).is_empty());
+        assert_eq!(doc.form_owner(id), None);
+        assert!(!doc.will_validate(id));
+        assert!(!doc.is_labelable_control(id));
+        assert!(doc.custom_element_labels(id).is_empty());
+        assert!(
+            !doc.get_node(id)
+                .unwrap()
+                .element_data()
+                .unwrap()
+                .can_be_disabled()
+        );
+    }
+
     #[test]
     fn reaction_count_and_retained_bytes_are_bounded() {
         let mut doc = BaseDocument::new(crate::DocumentConfig::default());

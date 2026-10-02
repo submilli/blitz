@@ -14,6 +14,10 @@
 //!
 //! [`ElementData::shadow_root`]: crate::node::ElementData::shadow_root
 
+mod slots;
+#[cfg(test)]
+mod tests;
+
 use markup5ever::local_name;
 
 use style::invalidation::element::restyle_hints::RestyleHint;
@@ -175,10 +179,9 @@ impl BaseDocument {
         let mut stack: Vec<NodeId> = self.nodes[root].children.iter().rev().copied().collect();
         while let Some(id) = stack.pop() {
             let node = &self.nodes[id];
-            if node
-                .element_data()
-                .is_some_and(|e| e.name.local == local_name!("slot"))
-            {
+            if node.element_data().is_some_and(|e| {
+                e.name.ns == markup5ever::ns!(html) && e.name.local == local_name!("slot")
+            }) {
                 slots.push(id);
             }
             stack.extend(node.children.iter().rev().copied());
@@ -197,8 +200,17 @@ impl BaseDocument {
 
     /// `assignedSlot`: the slot `node` (a host's child) is assigned to.
     pub fn assigned_slot(&self, node: NodeId) -> Option<NodeId> {
-        let host = self.nodes.get(node)?.parent?;
+        let slottable = self.nodes.get(node)?;
+        if !matches!(slottable.data, NodeData::Element(_) | NodeData::Text(_)) {
+            return None;
+        }
+        let host = slottable.parent?;
         let root = self.shadow_root_of(host)?;
+        if self.nodes[root].shadow_root_data.as_ref()?.manual_slots {
+            let slot = slottable.manual_slot?;
+            self.nodes.get(slot)?;
+            return (self.containing_shadow_root(slot) == Some(root)).then_some(slot);
+        }
         let name = self.slot_name(node);
         self.slots_in(root)
             .into_iter()
@@ -219,6 +231,22 @@ impl BaseDocument {
             return Vec::new();
         };
         let host = self.shadow_host_of(root).expect("shadow root");
+        if self.nodes[root]
+            .shadow_root_data
+            .as_ref()
+            .is_some_and(|data| data.manual_slots)
+        {
+            return self.nodes[slot]
+                .manual_slottables
+                .iter()
+                .copied()
+                .filter(|&id| {
+                    self.nodes.get(id).is_some_and(|node| {
+                        node.parent == Some(host) && node.manual_slot == Some(slot)
+                    })
+                })
+                .collect();
+        }
         let name = self.slot_own_name(slot);
         // Only the first slot of a name receives nodes.
         if self
@@ -249,21 +277,15 @@ impl BaseDocument {
                 self.set_flat_parent(child, FlatParent::Node(host));
             }
             let slots = self.slots_in(root);
-            let mut assigned: Vec<(NodeId, Vec<NodeId>)> =
-                slots.iter().map(|&s| (s, Vec::new())).collect();
+            let assigned: Vec<_> = slots
+                .iter()
+                .map(|&slot| (slot, self.assigned_nodes(slot)))
+                .collect();
             for child in self.slottables(host).collect::<Vec<_>>() {
-                let name = self.slot_name(child);
-                let slot = assigned
-                    .iter_mut()
-                    .find(|(s, _)| self.slot_own_name(*s) == name);
-                match slot {
-                    Some((slot, nodes)) => {
-                        nodes.push(child);
-                        let slot = *slot;
-                        self.set_flat_parent(child, FlatParent::Node(slot));
-                    }
-                    None => self.set_flat_parent(child, FlatParent::None),
-                }
+                let parent = self
+                    .assigned_slot(child)
+                    .map_or(FlatParent::None, FlatParent::Node);
+                self.set_flat_parent(child, parent);
             }
             // Comments and the like under a host are never rendered.
             let host_children = self.nodes[host].children.clone();
@@ -392,6 +414,9 @@ impl BaseDocument {
         limit: usize,
     ) -> Result<Vec<NodeId>, SlotFlattenLimit> {
         let mut output = Vec::new();
+        if self.containing_shadow_root(slot).is_none() {
+            return Ok(output);
+        }
         let mut pending = vec![(slot, true)];
         let mut visited = 0usize;
         while let Some((id, expand)) = pending.pop() {
@@ -421,7 +446,7 @@ impl BaseDocument {
                 };
                 let nested = child_node.element_data().is_some_and(|el| {
                     el.name.ns == markup5ever::ns!(html) && &*el.name.local == "slot"
-                });
+                }) && self.containing_shadow_root(child).is_some();
                 if child_node.is_element()
                     || matches!(child_node.data, crate::node::NodeData::Text(_))
                 {

@@ -48,6 +48,23 @@ impl BaseDocument {
         let Some(e) = self.nodes[id].element_data() else {
             return;
         };
+        if let Some(internals) = &e.custom_internals {
+            match &internals.value {
+                crate::custom_internals::CustomFormValue::Null => {}
+                crate::custom_internals::CustomFormValue::Single(value) => {
+                    let name = e.attr(local_name!("name")).unwrap_or("");
+                    if !name.is_empty() {
+                        push(entries, name, value.clone());
+                    }
+                }
+                crate::custom_internals::CustomFormValue::Entries(values) => {
+                    for entry in values {
+                        push(entries, &entry.name, entry.value.clone());
+                    }
+                }
+            }
+            return;
+        }
         let tag = &*e.name.local;
         if !matches!(tag, "input" | "select" | "textarea" | "button") {
             return;

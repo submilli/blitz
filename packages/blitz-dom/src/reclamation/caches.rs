@@ -18,6 +18,11 @@ pub(super) fn prune(doc: &mut BaseDocument, live: &HashSet<NodeId>) {
 }
 
 fn prune_node(node: &mut Node, live: &HashSet<NodeId>) -> bool {
+    node.manual_slottables.retain(|id| live.contains(id));
+    node.slot_assignment.retain(|id| live.contains(id));
+    if node.manual_slot.is_some_and(|id| !live.contains(&id)) {
+        node.manual_slot = None;
+    }
     let mut changed = false;
     if node
         .layout_parent

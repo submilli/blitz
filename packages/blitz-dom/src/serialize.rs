@@ -55,12 +55,16 @@ fn is_raw_text_parent(name: &markup5ever::LocalName) -> bool {
 pub fn inner_html(node: &Node) -> DomString {
     let mut steps = Vec::new();
     push_children(node, &mut steps);
-    write_steps(steps, DomString::new())
+    write_steps(steps, DomString::new(), &ShadowOptions::default())
 }
 
 /// `outerHTML`: serialize `node` itself followed by its descendants.
 pub fn outer_html(node: &Node) -> DomString {
-    write_steps(vec![Step::Node(node)], DomString::new())
+    write_steps(
+        vec![Step::Node(node)],
+        DomString::new(),
+        &ShadowOptions::default(),
+    )
 }
 
 /// Serialization work still to do, popped from the end: a node to write,
@@ -69,12 +73,90 @@ pub fn outer_html(node: &Node) -> DomString {
 enum Step<'a> {
     Node(&'a Node),
     EndTag(String),
+    Shadow(&'a Node),
 }
 
-fn write_steps(mut steps: Vec<Step<'_>>, mut out: DomString) -> DomString {
+#[derive(Default)]
+struct ShadowOptions<'a> {
+    serializable: bool,
+    roots: &'a [crate::NodeId],
+}
+
+impl crate::BaseDocument {
+    /// HTML getHTML fragment serialization, including explicitly requested roots.
+    pub fn get_html(
+        &self,
+        id: crate::NodeId,
+        serializable: bool,
+        roots: &[crate::NodeId],
+    ) -> DomString {
+        let Some(node) = self.get_node(id) else {
+            return DomString::new();
+        };
+        let options = ShadowOptions {
+            serializable,
+            roots,
+        };
+        let mut steps = Vec::new();
+        push_children(node, &mut steps);
+        push_shadow(node, &mut steps, &options);
+        write_steps(steps, DomString::new(), &options)
+    }
+}
+
+fn push_shadow<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, options: &ShadowOptions<'_>) {
+    let Some(root) = node.element_data().and_then(|el| el.shadow_root) else {
+        return;
+    };
+    let root = &node.tree()[root];
+    if root
+        .shadow_root_data
+        .as_ref()
+        .is_some_and(|data| options.serializable && data.serializable)
+        || options.roots.contains(&root.id)
+    {
+        steps.push(Step::Shadow(root));
+    }
+}
+
+fn write_steps(
+    mut steps: Vec<Step<'_>>,
+    mut out: DomString,
+    options: &ShadowOptions<'_>,
+) -> DomString {
     while let Some(step) = steps.pop() {
         match step {
-            Step::Node(node) => write_node(node, &mut steps, &mut out),
+            Step::Node(node) => write_node(node, &mut steps, &mut out, options),
+            Step::Shadow(root) => {
+                let data = root
+                    .shadow_root_data
+                    .as_ref()
+                    .expect("shadow serialization step");
+                out.push_str(if data.open {
+                    "<template shadowrootmode=\"open\""
+                } else {
+                    "<template shadowrootmode=\"closed\""
+                });
+                for (enabled, name) in [
+                    (data.delegates_focus, "shadowrootdelegatesfocus"),
+                    (data.serializable, "shadowrootserializable"),
+                ] {
+                    if enabled {
+                        out.push(' ');
+                        out.push_str(name);
+                        out.push_str("=\"\"");
+                    }
+                }
+                if data.manual_slots {
+                    out.push_str(" shadowrootslotassignment=\"manual\"");
+                }
+                if data.clonable {
+                    out.push_str(" shadowrootclonable=\"\"");
+                }
+                out.push('>');
+                steps.push(Step::EndTag("template".to_string()));
+                push_children(root, &mut steps);
+            }
             Step::EndTag(tag) => {
                 out.push_str("</");
                 out.push_str(&tag);
@@ -97,7 +179,12 @@ fn push_children<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>) {
 }
 
 /// Write `node`'s own markup, and queue its children and end tag.
-fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut DomString) {
+fn write_node<'a>(
+    node: &'a Node,
+    steps: &mut Vec<Step<'a>>,
+    out: &mut DomString,
+    options: &ShadowOptions<'_>,
+) {
     match &node.data {
         NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
             // AnonymousBlocks are layout artefacts, not part of the DOM.
@@ -108,6 +195,13 @@ fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut DomString
             let tag = qualified_tag_name(&el.name);
             out.push('<');
             out.push_str(&tag);
+            if let Some(is) = &el.custom_element_is
+                && !el.has_attr(markup5ever::LocalName::from("is"))
+            {
+                out.push_str(" is=\"");
+                escape_dom(&is.as_str().into(), true, out);
+                out.push('"');
+            }
             for attr in el.attrs() {
                 out.push(' ');
                 write_attribute_name(&attr.name, out);
@@ -121,6 +215,7 @@ fn write_node<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, out: &mut DomString
             }
             steps.push(Step::EndTag(tag));
             push_children(node, steps);
+            push_shadow(node, steps, options);
         }
         NodeData::Text(text) => {
             let raw = node

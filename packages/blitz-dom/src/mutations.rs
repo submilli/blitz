@@ -81,6 +81,11 @@ impl BaseDocument {
         self.mutation_log.is_some()
     }
 
+    /// Slot assignment observes topology even without MutationObserver clients.
+    pub(crate) fn observes_dom_changes(&self) -> bool {
+        self.mutation_log.is_some() || !self.shadow_hosts.is_empty()
+    }
+
     /// Sticky loss signal: the embedder must fail observation rather than report
     /// an incomplete stream as successful. Disabling or draining cannot clear it.
     pub fn mutation_recording_overflowed(&self) -> bool {
@@ -106,6 +111,7 @@ impl BaseDocument {
     }
 
     pub(crate) fn record_mutation(&mut self, record: MutationRecord) {
+        self.update_slots_after_mutation(&record);
         if self.mutation_log.is_none() || self.mutation_log_overflowed {
             return;
         }

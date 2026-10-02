@@ -162,6 +162,10 @@ pub struct Node {
     /// For a shadow root (a fragment attached to a host element): its host
     /// and options. `None` for every other node.
     pub shadow_root_data: Option<Box<ShadowRootData>>,
+    /// Weak manual slot references; generation IDs cannot alias reclaimed nodes.
+    pub(crate) manual_slot: Option<NodeId>,
+    pub(crate) manual_slottables: Vec<NodeId>,
+    pub(crate) slot_assignment: Vec<NodeId>,
     /// For a shadow root: the stylesheets in its tree and their cascade data.
     pub shadow_styles: Option<Box<crate::shadow::ShadowStyles>>,
     /// Children in the flat tree, when they differ from `children`: for a
@@ -470,6 +474,9 @@ impl Node {
 
             flags: NodeFlags::empty(),
             shadow_root_data: None,
+            manual_slot: None,
+            manual_slottables: Vec::new(),
+            slot_assignment: Vec::new(),
             shadow_styles: None,
             composed_children: None,
             flat_parent: Cell::new(FlatParent::Dom),

@@ -32,6 +32,7 @@ pub const DEFAULT_CSS: &str = include_str!("../assets/default.css");
 pub const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.otf");
 
 pub mod custom_elements;
+pub mod custom_internals;
 /// The DOM implementation.
 ///
 /// This is the primary entry point for this crate.

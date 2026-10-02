@@ -67,6 +67,9 @@ impl BaseDocument {
     }
 
     fn validation_type_candidate(e: &crate::ElementData) -> bool {
+        if e.custom_internals.is_some() {
+            return e.is_custom_form_control() && !e.has_attr(local_name!("readonly"));
+        }
         let kind = e
             .attr_dom(local_name!("type"))
             .map(crate::DomString::as_str_lossy)
@@ -106,6 +109,9 @@ impl BaseDocument {
         if e.name.ns != ns!(html) {
             return Ok(ValidityState::default());
         }
+        if let Some(internals) = &e.custom_internals {
+            return Ok(internals.validity);
+        }
         pattern::admit_input(e, budget)?;
         let mut state = ValidityState {
             value_missing: self.required_value_missing(id, radio, known_candidate),
@@ -144,6 +150,9 @@ impl BaseDocument {
         let Some(e) = self.get_node(id).and_then(|node| node.element_data()) else {
             return Ok(None);
         };
+        if let Some(internals) = &e.custom_internals {
+            return Ok((!internals.validity.valid()).then(|| internals.message.clone()));
+        }
         if !e.form_state.custom_validity.is_empty() {
             return Ok(Some(e.form_state.custom_validity.clone()));
         }

@@ -29,11 +29,26 @@ impl DocumentMutator<'_> {
         while let Some((id, document)) = pending.pop() {
             let template_document = self.doc.template_document(document);
             let node = &mut self.doc.nodes[id];
+            let old_document = node.owner_document;
             node.owner_document = document;
-            pending.extend(node.children.iter().map(|&id| (id, document)));
+            pending.extend(node.children.iter().rev().map(|&id| (id, document)));
             if let Some(element) = node.element_data() {
                 pending.extend(element.shadow_root.map(|id| (id, document)));
                 pending.extend(element.template_contents.map(|id| (id, template_document)));
+            }
+            if old_document != document
+                && matches!(
+                    self.doc.custom_element_state(id),
+                    crate::custom_elements::CustomElementState::Custom
+                )
+            {
+                self.doc.record_custom_element_reaction(
+                    crate::custom_elements::CustomElementReaction::Adopted {
+                        element: id,
+                        old_document,
+                        new_document: document,
+                    },
+                );
             }
         }
     }

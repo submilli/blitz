@@ -330,6 +330,9 @@ pub struct BaseDocument {
     pub(crate) connected_scripts: Vec<NodeId>,
     /// Elements with a shadow root attached.
     pub(crate) shadow_hosts: HashSet<NodeId>,
+    pub(crate) slot_changes: Vec<NodeId>,
+    pub(crate) dirty_slot_roots: Vec<NodeId>,
+    pub(crate) removed_slots: Vec<NodeId>,
     /// The embedder loads `<iframe>` documents itself (and runs their
     /// scripts); Blitz does not fetch them.
     pub embedder_loads_iframes: bool,
@@ -341,6 +344,7 @@ pub struct BaseDocument {
     pub(crate) mutation_log_overflowed: bool,
     pub(crate) validation_error: std::cell::Cell<Option<crate::ValidationError>>,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
+    pub(crate) form_associated_custom: std::collections::HashSet<NodeId>,
     pub(crate) custom_element_reactions: Option<Vec<crate::custom_elements::CustomElementReaction>>,
     pub(crate) custom_element_reaction_bytes: usize,
     pub(crate) custom_element_reaction_overflow: bool,
@@ -534,6 +538,9 @@ impl BaseDocument {
             event_listeners: Default::default(),
             connected_scripts: Vec::new(),
             shadow_hosts: HashSet::new(),
+            slot_changes: Vec::new(),
+            dirty_slot_roots: Vec::new(),
+            removed_slots: Vec::new(),
             embedder_loads_iframes: false,
             tree_observer: None,
             mutation_log: None,
@@ -541,6 +548,7 @@ impl BaseDocument {
             mutation_log_overflowed: false,
             validation_error: std::cell::Cell::new(None),
             custom_element_reactions: None,
+            form_associated_custom: Default::default(),
             custom_element_reaction_bytes: 0,
             custom_element_reaction_overflow: false,
             deferred_construction_nodes: Vec::new(),

@@ -128,11 +128,15 @@ pub struct ElementData {
     /// Form control value and checkedness, separate from the `value` and
     /// `checked` attributes (which hold the defaults).
     pub form_state: FormControlState,
+    /// State of a form-associated custom element.
+    pub custom_internals: Option<Box<crate::custom_internals::CustomInternals>>,
+    pub custom_states: Vec<style::values::AtomIdent>,
 
     /// `<script>` processing flags.
     pub script_state: ScriptState,
 
     /// See [`crate::custom_elements`]; behind `:defined`.
+    pub custom_element_is: Option<String>,
     pub custom_element_state: crate::custom_elements::CustomElementState,
     // /// Whether the node is a [HTML integration point] (https://html.spec.whatwg.org/multipage/#html-integration-point)
     // pub mathml_annotation_xml_integration_point: bool,
@@ -380,9 +384,16 @@ impl Clone for ElementData {
             after: None,
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
             form_state: FormControlState::default(),
+            custom_internals: None,
+            custom_states: Vec::new(),
             script_state: ScriptState::default(),
             // A clone starts undefined; the embedder upgrades it.
-            custom_element_state: crate::custom_elements::CustomElementState::initial(&self.name),
+            custom_element_is: self.custom_element_is.clone(),
+            custom_element_state: if self.custom_element_is.is_some() {
+                crate::custom_elements::CustomElementState::Undefined
+            } else {
+                crate::custom_elements::CustomElementState::initial(&self.name)
+            },
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
             transform: None,
@@ -459,6 +470,12 @@ impl SpecialElementData {
 }
 
 impl ElementData {
+    /// Failed upgrades retain ElementInternals storage without participating in forms.
+    pub(crate) fn is_custom_form_control(&self) -> bool {
+        self.custom_internals.is_some()
+            && self.custom_element_state == crate::custom_elements::CustomElementState::Custom
+    }
+
     pub fn new(name: QualName, attrs: Vec<Attribute>) -> Self {
         let id_attr_atom = attrs
             .iter()
@@ -466,7 +483,21 @@ impl ElementData {
             .map(|attr| attr.value.as_str_lossy())
             .map(|value: &str| Atom::from(value));
 
-        let custom_element_state = crate::custom_elements::CustomElementState::initial(&name);
+        let custom_element_is = (name.ns == markup5ever::ns!(html))
+            .then(|| {
+                attrs
+                    .iter()
+                    .find(|attr| {
+                        attr.name.ns == markup5ever::ns!() && attr.name.local.as_ref() == "is"
+                    })
+                    .map(|attr| attr.value.as_str_lossy().to_string())
+            })
+            .flatten();
+        let custom_element_state = if custom_element_is.is_some() {
+            crate::custom_elements::CustomElementState::Undefined
+        } else {
+            crate::custom_elements::CustomElementState::initial(&name)
+        };
         let mut data = ElementData {
             name,
             id: id_attr_atom,
@@ -494,7 +525,10 @@ impl ElementData {
             after: None,
             detailed_layout_info: taffy::DetailedLayoutInfo::None,
             form_state: FormControlState::default(),
+            custom_internals: None,
+            custom_states: Vec::new(),
             script_state: ScriptState::default(),
+            custom_element_is,
             custom_element_state,
             display_constructed_as: StyloDisplay::Block,
             layout_data: None,
@@ -561,10 +595,11 @@ impl ElementData {
 
     pub fn can_be_disabled(&self) -> bool {
         self.name.ns == markup5ever::ns!(html)
-            && local_names!(
-                "button", "input", "select", "textarea", "fieldset", "option", "optgroup"
-            )
-            .contains(&self.name.local)
+            && (self.is_custom_form_control()
+                || local_names!(
+                    "button", "input", "select", "textarea", "fieldset", "option", "optgroup"
+                )
+                .contains(&self.name.local))
     }
 
     /// Whether this element is a link (an `<a>` or `<area>` element with an `href` attribute)

@@ -20,6 +20,12 @@ impl DocumentMutator<'_> {
             }
         }
         for id in controls {
+            if self.doc.is_form_associated_custom(id) {
+                self.doc.record_custom_element_reaction(
+                    crate::custom_elements::CustomElementReaction::FormReset(id),
+                );
+                continue;
+            }
             let tag = self.doc.nodes[id]
                 .element_data()
                 .filter(|el| el.name.ns == ns!(html))

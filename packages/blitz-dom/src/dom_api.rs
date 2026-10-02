@@ -964,11 +964,27 @@ impl DocumentMutator<'_> {
         }
         let copy = self.clone_one(id);
         self.set_node_document(copy, self.doc.node_document(id));
-        if !deep {
-            return copy;
-        }
-        let mut pending = vec![(id, copy)];
-        while let Some((source, copy)) = pending.pop() {
+        let mut pending = vec![(id, copy, deep)];
+        while let Some((source, copy, deep)) = pending.pop() {
+            if let Some(root) = self.doc.shadow_root_of(source)
+                && let Some(data) = self.doc.nodes[root].shadow_root_data.as_deref().cloned()
+                && data.clonable
+            {
+                let clone_root = self.create_document_fragment();
+                let mut metadata = data;
+                metadata.host = copy;
+                self.doc.nodes[clone_root].shadow_root_data = Some(Box::new(metadata));
+                self.doc.nodes[copy]
+                    .element_data_mut()
+                    .expect("cloned shadow host")
+                    .shadow_root = Some(clone_root);
+                self.doc.shadow_hosts.insert(copy);
+                self.set_node_document(clone_root, self.doc.node_document(copy));
+                self.clone_children(root, clone_root, &mut pending);
+            }
+            if !deep {
+                continue;
+            }
             let contents = self.doc.nodes[source]
                 .element_data()
                 .and_then(|el| el.template_contents);
@@ -987,13 +1003,13 @@ impl DocumentMutator<'_> {
         &mut self,
         source: NodeId,
         copy: NodeId,
-        pending: &mut Vec<(NodeId, NodeId)>,
+        pending: &mut Vec<(NodeId, NodeId, bool)>,
     ) {
         let children: Vec<NodeId> = self.doc.nodes[source].children.to_vec();
         for child in children {
             let child_copy = self.clone_one(child);
             self.append_children(copy, &[child_copy]);
-            pending.push((child, child_copy));
+            pending.push((child, child_copy, true));
         }
     }
 
@@ -1003,6 +1019,16 @@ impl DocumentMutator<'_> {
             NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
                 let attrs: Vec<Attribute> = el.attrs().to_vec();
                 let copy = self.create_element(el.name.clone(), attrs);
+                self.doc.nodes[copy]
+                    .element_data_mut()
+                    .expect("cloned element")
+                    .custom_element_is = el.custom_element_is.clone();
+                let custom_state = if el.custom_element_is.is_some() {
+                    crate::custom_elements::CustomElementState::Undefined
+                } else {
+                    crate::custom_elements::CustomElementState::initial(&el.name)
+                };
+                self.doc.set_custom_element_state(copy, custom_state);
                 if el.name.ns == ns!(html) && matches!(&*el.name.local, "input" | "textarea") {
                     let original = self.doc.nodes[id].element_data().expect("source element");
                     let state = original.form_state.clone();
