@@ -43,6 +43,7 @@ pub use document_metadata::{DocumentMetadata, DocumentType};
 pub mod dom_api;
 pub mod dom_events;
 pub mod mutations;
+pub mod ranges;
 pub mod tree_notifications;
 
 /// The nodes themsleves, and their data.
@@ -70,6 +71,7 @@ mod form_files;
 pub use form_files::FormFileError;
 mod form_owner;
 mod form_reset;
+pub mod form_selection;
 mod parser_forms;
 pub use checkable_activation::CheckableActivation;
 mod disabled;

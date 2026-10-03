@@ -23,6 +23,7 @@ pub enum DomError {
     Syntax,
     NoModificationAllowed,
     QuotaExceeded,
+    IndexSize,
 }
 
 impl DomError {
@@ -36,6 +37,7 @@ impl DomError {
             Self::Syntax => "SyntaxError",
             Self::NoModificationAllowed => "NoModificationAllowedError",
             Self::QuotaExceeded => "QuotaExceededError",
+            Self::IndexSize => "IndexSizeError",
         }
     }
 }
@@ -205,7 +207,7 @@ impl BaseDocument {
     }
 
     /// DOM host-including ancestry prevents insertion cycles across shadow roots.
-    fn is_host_including_inclusive_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
+    pub fn is_host_including_inclusive_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
         let mut current = Some(node);
         while let Some(id) = current {
             if id == ancestor {
@@ -500,6 +502,8 @@ impl DocumentMutator<'_> {
 
     /// Assign the current DOMString without a scalar round trip.
     pub fn set_form_value_dom(&mut self, id: NodeId, value: &crate::DomString) {
+        let previous = self.doc.form_value_dom(id);
+        let previous_selection = self.doc.control_selection(id);
         if self.doc.is_file_input(id) {
             if value.is_empty() {
                 if let Some(e) = self.doc.nodes[id].element_data_mut() {
@@ -523,6 +527,10 @@ impl DocumentMutator<'_> {
             return;
         };
         let value = crate::validation::text::sanitize_text(el, value);
+        if previous.as_ref() != Some(&value) {
+            el.form_state.selection =
+                crate::form_selection::ControlSelection::caret(value.to_utf16().len());
+        }
         el.form_state.value = Some(value.clone());
         el.form_state.value_dirty = true;
         el.form_state.last_change_by_user = false;
@@ -532,6 +540,10 @@ impl DocumentMutator<'_> {
                 layout_ctx,
                 value.as_str_lossy(),
             );
+        }
+        doc.project_control_selection(id);
+        if doc.control_selection(id) != previous_selection {
+            doc.notify_control_selection(id, doc.focus_node_id == Some(id));
         }
     }
 
@@ -794,9 +806,23 @@ impl DocumentMutator<'_> {
     /// Replace the data of a Text, Comment or ProcessingInstruction node.
     pub fn set_character_data(&mut self, id: NodeId, value: impl Into<crate::DomString>) {
         let value = value.into();
+        if let Some(old) = self.doc.character_data_dom(id) {
+            self.doc
+                .notify_range_mutation(crate::ranges::RangeMutation::ReplaceData {
+                    node: id,
+                    offset: 0,
+                    removed: old.to_utf16().len(),
+                    added: value.to_utf16().len(),
+                });
+        }
+        self.set_character_data_raw(id, value);
+    }
+
+    /// Store character data after applying the operation's live-range steps.
+    pub(crate) fn set_character_data_raw(&mut self, id: NodeId, value: crate::DomString) {
         if matches!(self.doc.nodes[id].data, NodeData::Text(_)) {
             // Text changes affect layout, which set_node_text takes care of.
-            self.set_node_text(id, value);
+            self.set_node_text_raw(id, value);
             return;
         }
         let old = match &self.doc.nodes[id].data {

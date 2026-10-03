@@ -1849,6 +1849,7 @@ impl BaseDocument {
         );
 
         self.focus_node_id = Some(focus_node_id);
+        self.notify_control_selection(focus_node_id, true);
 
         true
     }

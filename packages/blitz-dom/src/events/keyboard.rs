@@ -129,6 +129,10 @@ impl BaseDocument {
                 );
             }
         }
+        self.capture_control_selection(node_id);
+        let element_data = self.nodes[node_id]
+            .element_data()
+            .expect("text input is an element");
         match event {
             GeneratedTextInputEvent::Input if changed => {
                 let value = element_data

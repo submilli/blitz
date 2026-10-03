@@ -240,6 +240,20 @@ impl DocumentMutator<'_> {
 
     pub fn set_node_text(&mut self, node_id: NodeId, value: impl Into<crate::DomString>) {
         let value = value.into();
+        if let Some(old) = self.doc.character_data_dom(node_id) {
+            self.doc
+                .notify_range_mutation(crate::ranges::RangeMutation::ReplaceData {
+                    node: node_id,
+                    offset: 0,
+                    removed: old.to_utf16().len(),
+                    added: value.to_utf16().len(),
+                });
+        }
+        self.set_node_text_raw(node_id, value);
+    }
+
+    /// Update rendering and observer records after the caller adjusted ranges.
+    pub(crate) fn set_node_text_raw(&mut self, node_id: NodeId, value: crate::DomString) {
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if let NodeData::Text(text) = &self.doc.nodes[node_id].data {
             let old_value = text.content.clone();
@@ -1002,6 +1016,17 @@ impl DocumentMutator<'_> {
         }
 
         insert_children_fn(new_parent, child_ids);
+
+        if let Some(&first) = child_ids.first()
+            && let Some(index) = self.doc.nodes[parent_id].children.position(first)
+        {
+            self.doc
+                .notify_range_mutation(crate::ranges::RangeMutation::Insert {
+                    parent: parent_id,
+                    index,
+                    count: child_ids.len(),
+                });
+        }
 
         for child_id in child_ids.iter().copied() {
             self.set_node_document(child_id, self.doc.node_document(parent_id));

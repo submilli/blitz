@@ -51,6 +51,8 @@ pub struct FormControlState {
     pub files: std::sync::Arc<[blitz_traits::net::FormFile]>,
     /// Authoritative current value; the text editor only owns its scalar projection.
     pub value: Option<crate::DomString>,
+    /// DOM code-unit selection survives editor creation and layout rebuilding.
+    pub selection: crate::form_selection::ControlSelection,
     pub value_dirty: bool,
     /// Length constraints apply only after the user last changed the value.
     pub last_change_by_user: bool,

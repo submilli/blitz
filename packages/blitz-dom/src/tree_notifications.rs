@@ -11,6 +11,10 @@ pub trait TreeObserver {
     fn removing(&self, document: &BaseDocument, node: NodeId);
     /// Called after an inserted subtree has its new parent and connection flags.
     fn inserted(&self, document: &BaseDocument, node: NodeId);
+    /// Adjust live range state without running script or reborrowing the document.
+    fn range_mutation(&self, _document: &BaseDocument, _mutation: crate::ranges::RangeMutation) {}
+    /// Text-control selection changed or was activated by focus; no script runs here.
+    fn control_selection(&self, _document: &BaseDocument, _node: NodeId, _focused: bool) {}
 }
 
 impl BaseDocument {

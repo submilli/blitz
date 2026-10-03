@@ -5,6 +5,8 @@ use style::computed_values::{visibility::T as Visibility, white_space_collapse::
 use style::values::computed::TextTransform;
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
 
+#[path = "inner_text_selection.rs"]
+mod selection;
 #[path = "inner_text_transform.rs"]
 mod transform;
 
@@ -35,7 +37,9 @@ impl BaseDocument {
                     output.flush_breaks();
                     output.units.push(9);
                 }
-                Visit::Node(id) => self.collect_inner_text_node(id, &mut pending, &mut output),
+                Visit::Node(id) => {
+                    self.collect_inner_text_node(id, &mut pending, &mut output, None)
+                }
             }
         }
         DomString::from_utf16(output.units)
@@ -65,13 +69,19 @@ impl BaseDocument {
         id: NodeId,
         pending: &mut Vec<Visit>,
         output: &mut RenderedText,
+        selection: Option<[crate::ranges::Boundary; 2]>,
     ) {
         let node = &self.nodes[id];
         if let crate::node::NodeData::Text(text) = &node.data {
             if let Some(style) = node.parent.and_then(|id| self.nodes[id].primary_styles()) {
                 if style.clone_visibility() == Visibility::Visible {
+                    let content = if let Some(points) = selection {
+                        self.selected_text_slice(id, &text.content, points)
+                    } else {
+                        text.content.clone()
+                    };
                     output.text(
-                        &text.content,
+                        &content,
                         style.clone_white_space_collapse(),
                         style.clone_text_transform(),
                         style.clone__x_lang().0.as_ref(),
@@ -124,8 +134,12 @@ impl BaseDocument {
             output.newline();
         }
         if breaks > 0 {
-            output.require_break(breaks);
-            pending.push(Visit::Break(breaks));
+            if selection.is_none_or(|p| !self.is_inclusive_ancestor(id, p[0].node)) {
+                output.require_break(breaks);
+            }
+            if selection.is_none_or(|p| !self.is_inclusive_ancestor(id, p[1].node)) {
+                pending.push(Visit::Break(breaks));
+            }
         }
         if visible && has_box && display.inside() == DisplayInside::TableRow {
             pending.push(Visit::Break(1));
@@ -166,6 +180,7 @@ enum Visit {
     Tab,
 }
 
+#[derive(Clone)]
 struct RenderedText {
     units: Vec<u16>,
     required_breaks: usize,
