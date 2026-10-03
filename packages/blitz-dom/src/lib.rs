@@ -59,6 +59,7 @@ pub use canvas_font::CanvasFont;
 mod clock;
 mod config;
 mod css_limits;
+mod css_supports;
 /// CSSOM stylesheet access (`document.styleSheets`, `CSSStyleSheet`, `CSSRule`)
 mod cssom;
 mod debug;
