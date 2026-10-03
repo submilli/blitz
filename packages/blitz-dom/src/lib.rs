@@ -49,7 +49,12 @@ pub mod tree_notifications;
 pub mod node;
 pub mod shadow;
 
+mod canvas_filter;
+mod canvas_font;
+mod canvas_style;
 mod checkable_activation;
+pub use canvas_filter::{CanvasFilter, CanvasFilters};
+pub use canvas_font::CanvasFont;
 mod clock;
 mod config;
 mod css_limits;

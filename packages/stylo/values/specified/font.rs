@@ -42,7 +42,7 @@ macro_rules! system_font_methods {
             }
             #[cfg(feature = "servo")]
             {
-                unreachable!()
+                SystemFont::$field()
             }
         }
     };
@@ -100,23 +100,40 @@ pub enum SystemFont {
     End, // Just for indexing purposes.
 }
 
-// We don't parse system fonts in servo, but in the interest of not
-// littering a lot of code with `if engine == "gecko"` conditionals,
-// we have a dummy system font module that does nothing
-
+/// Portable system-font roles. The headless Servo embedding uses deterministic
+/// desktop defaults without consulting an operating-system font service.
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
+    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
 )]
 #[allow(missing_docs)]
 #[cfg(feature = "servo")]
-/// void enum for system font, can never exist
-pub enum SystemFont {}
+pub enum SystemFont {
+    Caption,
+    Icon,
+    Menu,
+    MessageBox,
+    SmallCaption,
+    StatusBar,
+}
 
-#[allow(missing_docs)]
 #[cfg(feature = "servo")]
 impl SystemFont {
-    pub fn parse(_: &mut Parser) -> Result<Self, ()> {
-        Err(())
+    // The portable desktop profile uses the same normal face for all six roles.
+    // Preserve the role in specified values so CSSOM can serialize the shorthand.
+    fn font_weight() -> computed::FontWeight {
+        computed::FontWeight::normal()
+    }
+
+    fn font_style() -> computed::FontStyle {
+        computed::FontStyle::NORMAL
+    }
+
+    fn font_stretch() -> computed::FontStretch {
+        computed::FontStretch::NORMAL
+    }
+
+    fn font_family() -> computed::FontFamily {
+        computed::FontFamily::for_system_font("Arial")
     }
 }
 
@@ -995,7 +1012,7 @@ impl FontSize {
                 FontSize::System(_) => {
                     #[cfg(feature = "servo")]
                     {
-                        unreachable!()
+                        CSSPixelLength::new(16.0).zoom(context.builder.effective_zoom)
                     }
                     #[cfg(feature = "gecko")]
                     {

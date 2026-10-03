@@ -415,7 +415,6 @@ impl FontFamily {
     }
 
     /// Returns a font family for a single system font.
-    #[cfg(feature = "gecko")]
     pub fn for_system_font(name: &str) -> Self {
         Self {
             families: FontFamilyList {

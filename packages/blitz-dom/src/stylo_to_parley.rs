@@ -79,6 +79,42 @@ pub(crate) fn query_font_family(input: &stylo::SingleFontFamily) -> parley::Quer
     }
 }
 
+/// Preserve decoded CSS family names when passing them into the shaping engine.
+pub(crate) fn font_families(font_styles: &stylo::Font) -> Vec<parley::FontFamilyName<'static>> {
+    font_styles
+        .font_family
+        .families
+        .list
+        .iter()
+        .map(|family| match family {
+            stylo::SingleFontFamily::FamilyName(name) => {
+                'ret: {
+                    let name = name.name.as_ref();
+
+                    // Legacy web compatibility
+                    #[cfg(target_vendor = "apple")]
+                    if name == "-apple-system" {
+                        break 'ret parley::FontFamilyName::Generic(
+                            parley::GenericFamily::SystemUi,
+                        );
+                    }
+                    #[cfg(target_os = "macos")]
+                    if name == "BlinkMacSystemFont" {
+                        break 'ret parley::FontFamilyName::Generic(
+                            parley::GenericFamily::SystemUi,
+                        );
+                    }
+
+                    break 'ret parley::FontFamilyName::Named(Cow::Owned(name.to_string()));
+                }
+            }
+            stylo::SingleFontFamily::Generic(generic) => {
+                parley::FontFamilyName::Generic(self::generic_font_family(*generic))
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn font_weight(input: stylo::FontWeight) -> parley::FontWeight {
     parley::FontWeight::new(input.value())
 }
@@ -360,39 +396,7 @@ pub(crate) fn style(
     let font_variations = self::font_variations(&font_styles.font_variation_settings);
     let font_features = self::font_features(font_styles);
 
-    // Convert font family
-    let families: Vec<_> = font_styles
-        .font_family
-        .families
-        .list
-        .iter()
-        .map(|family| match family {
-            stylo::SingleFontFamily::FamilyName(name) => {
-                'ret: {
-                    let name = name.name.as_ref();
-
-                    // Legacy web compatibility
-                    #[cfg(target_vendor = "apple")]
-                    if name == "-apple-system" {
-                        break 'ret parley::FontFamilyName::Generic(
-                            parley::GenericFamily::SystemUi,
-                        );
-                    }
-                    #[cfg(target_os = "macos")]
-                    if name == "BlinkMacSystemFont" {
-                        break 'ret parley::FontFamilyName::Generic(
-                            parley::GenericFamily::SystemUi,
-                        );
-                    }
-
-                    break 'ret parley::FontFamilyName::Named(Cow::Owned(name.to_string()));
-                }
-            }
-            stylo::SingleFontFamily::Generic(generic) => {
-                parley::FontFamilyName::Generic(self::generic_font_family(*generic))
-            }
-        })
-        .collect();
+    let families = font_families(font_styles);
 
     // Wrapping and breaking
     let word_break = match itext_styles.word_break {
