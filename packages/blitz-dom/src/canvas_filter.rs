@@ -48,6 +48,24 @@ impl Default for CanvasFilters {
 }
 
 impl BaseDocument {
+    /// Resolve style-dependent filter colors immediately before drawing.
+    /// Call after flushing styles; retained lengths and getter text stay unchanged.
+    pub fn resolve_canvas_filter_colors(&self, node: NodeId, filters: &mut CanvasFilters) {
+        for operation in &mut filters.operations {
+            if let CanvasFilter::DropShadow {
+                color,
+                unresolved_color: Some(expression),
+                ..
+            } = operation
+            {
+                *color = self
+                    .canvas_computed_style(node, "color", expression)
+                    .map(|style| style.clone_color().as_color_color())
+                    .unwrap_or_else(|| AbsoluteColor::BLACK.as_color_color());
+            }
+        }
+    }
+
     /// Compute relative lengths at assignment time after styles have been flushed.
     /// Invalid/unresolved declarations and excessive lists leave state unchanged.
     pub fn canvas_filters(
@@ -133,6 +151,41 @@ mod tests {
             [CanvasFilter::Blur(40.0)]
         ));
         assert!(matches!(snapshot.operations[0], CanvasFilter::Blur(40.0)));
+    }
+
+    #[test]
+    fn filter_current_color_resolves_at_draw_time_without_recomputing_lengths() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        let root = document.root_node().id;
+        let mut mutation = document.mutate();
+        let html = mutation.create_element(qual_name!("html", html), vec![]);
+        mutation.append_children(root, &[html]);
+        let canvas = mutation.create_element(qual_name!("canvas", html), vec![]);
+        mutation.append_children(html, &[canvas]);
+        mutation.set_attribute(canvas, qual_name!("style"), "color:red");
+        drop(mutation);
+        document.flush_style_and_layout(0.0);
+        let font = document.canvas_font(canvas, "20px serif").unwrap();
+        let mut filters = document
+            .canvas_filters(canvas, "drop-shadow(1em 0 currentColor)", &font)
+            .unwrap();
+        document
+            .mutate()
+            .set_attribute(canvas, qual_name!("style"), "color:blue;font-size:40px");
+        document.flush_style_and_layout(0.0);
+        document.resolve_canvas_filter_colors(canvas, &mut filters);
+        let CanvasFilter::DropShadow {
+            dx,
+            color,
+            unresolved_color,
+            ..
+        } = &filters.operations[0]
+        else {
+            panic!("drop shadow")
+        };
+        assert_eq!(*dx, 20.0);
+        assert_eq!(color.components, [0.0, 0.0, 1.0, 1.0]);
+        assert!(unresolved_color.is_some());
     }
 
     #[test]
