@@ -962,6 +962,8 @@ impl ElementData {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RasterImageData {
+    /// Readback authority travels with decoded pixels, including cache copies.
+    pub origin_clean: bool,
     /// The width of the image
     pub width: u32,
     /// The height of the image
@@ -972,6 +974,7 @@ pub struct RasterImageData {
 impl RasterImageData {
     pub fn new(width: u32, height: u32, data: Arc<Vec<u8>>) -> Self {
         Self {
+            origin_clean: false,
             width,
             height,
             data: Blob::new(data),

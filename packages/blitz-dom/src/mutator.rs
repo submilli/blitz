@@ -1621,7 +1621,7 @@ impl<'doc> DocumentMutator<'doc> {
                 );
                 self.doc.net_provider.fetch(
                     self.doc.id(),
-                    self.doc.build_request(src),
+                    self.doc.build_request(src).image(),
                     Box::new(handler),
                 );
             }

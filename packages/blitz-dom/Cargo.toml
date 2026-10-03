@@ -110,3 +110,7 @@ web-time = { workspace = true, optional = true }
 # to prevent debug builds from panicking.
 [target.'cfg(any(target_vendor = "apple"))'.dependencies]
 objc2 = { version = "0.6", features = ["disable-encoding-assertions"] }
+
+[dev-dependencies]
+# Exercise image authority through actual decode/cache delivery in engine tests.
+image = { workspace = true, features = ["png"] }

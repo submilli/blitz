@@ -56,7 +56,7 @@ pub struct FontFaceOverrides {
 
 #[derive(Clone, Debug)]
 pub enum Resource {
-    Image(ImageType, u32, u32, Arc<Vec<u8>>),
+    Image(ImageType, u32, u32, Arc<Vec<u8>>, bool),
     #[cfg(feature = "svg")]
     Svg(ImageType, crate::node::SvgImageData),
     Css(DocumentStyleSheet, bool),
@@ -593,13 +593,22 @@ impl ImageHandler {
 
 impl NetHandler for ResourceHandler<ImageHandler> {
     fn bytes(self: Box<Self>, resolved_url: String, bytes: Bytes) {
-        let result = self.data.parse(bytes);
+        self.bytes_with_metadata(resolved_url, bytes, Default::default());
+    }
+
+    fn bytes_with_metadata(
+        self: Box<Self>,
+        resolved_url: String,
+        bytes: Bytes,
+        metadata: blitz_traits::net::ResponseMetadata,
+    ) {
+        let result = self.data.parse(bytes, metadata.image_origin_clean);
         self.respond(resolved_url, result)
     }
 }
 
 impl ImageHandler {
-    fn parse(&self, bytes: Bytes) -> Result<Resource, String> {
+    fn parse(&self, bytes: Bytes, origin_clean: bool) -> Result<Resource, String> {
         let image_err = match image::ImageReader::new(Cursor::new(&bytes))
             .with_guessed_format()
             .expect("IO errors impossible with Cursor")
@@ -614,6 +623,7 @@ impl ImageHandler {
                     width,
                     height,
                     Arc::new(raw_rgba8_data),
+                    origin_clean,
                 ));
             }
             Err(e) => e.to_string(),
@@ -789,6 +799,7 @@ mod stylesheet_authority_tests {
                 Bytes::from_static(b"@import 'child.css'; p { color: red }"),
                 blitz_traits::net::ResponseMetadata {
                     stylesheet_origin_clean: origin_clean,
+                    ..Default::default()
                 },
             );
             doc.handle_messages();
@@ -805,6 +816,68 @@ mod stylesheet_authority_tests {
                 &["https://cdn.test/styles/child.css"]
             );
             assert_eq!(doc.stylesheet_rule_count(owner, &[]), Some(2));
+        }
+    }
+}
+
+#[cfg(test)]
+mod image_authority_tests {
+    use super::*;
+    use crate::{BaseDocument, DocumentConfig, qual_name};
+
+    struct ImageProvider {
+        bytes: Bytes,
+        origin_clean: bool,
+        requests: AtomicUsize,
+    }
+    impl NetProvider for ImageProvider {
+        fn fetch(&self, _: usize, request: Request, handler: Box<dyn NetHandler>) {
+            assert!(request.image);
+            self.requests.fetch_add(1, Ao::Relaxed);
+            handler.bytes_with_metadata(
+                request.url.to_string(),
+                self.bytes.clone(),
+                blitz_traits::net::ResponseMetadata {
+                    image_origin_clean: self.origin_clean,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn decoded_images_and_cache_clones_preserve_provider_authority() {
+        let mut bytes = Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]))
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        for origin_clean in [false, true] {
+            let provider = Arc::new(ImageProvider {
+                bytes: Bytes::from(bytes.get_ref().clone()),
+                origin_clean,
+                requests: AtomicUsize::new(0),
+            });
+            let mut doc = BaseDocument::new(DocumentConfig {
+                base_url: Some("https://page.test/".into()),
+                net_provider: Some(provider.clone()),
+                ..Default::default()
+            });
+            for _ in 0..2 {
+                let root = doc.root_node().id;
+                let mut mutation = doc.mutate();
+                let node = mutation.create_element(qual_name!("img", html), vec![]);
+                mutation.append_children(root, &[node]);
+                mutation.set_attribute(node, qual_name!("src"), "image.png");
+                drop(mutation);
+                doc.handle_messages();
+                let image = doc.nodes[node]
+                    .element_data()
+                    .unwrap()
+                    .raster_image_data()
+                    .unwrap();
+                assert_eq!(image.origin_clean, origin_clean);
+            }
+            assert_eq!(provider.requests.load(Ao::Relaxed), 1);
         }
     }
 }

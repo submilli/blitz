@@ -66,6 +66,7 @@ impl NavigationOptions {
             body: self.document_resource,
             signal: None,
             stylesheet: None,
+            image: false,
         }
     }
 }

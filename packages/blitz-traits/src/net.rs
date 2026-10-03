@@ -51,6 +51,7 @@ pub trait NetHandler: Send + Sync + 'static {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResponseMetadata {
     pub stylesheet_origin_clean: bool,
+    pub image_origin_clean: bool,
 }
 
 /// The link element's CORS request setting. This describes intent, not authority.
@@ -93,6 +94,8 @@ pub struct Request {
     pub body: Body,
     pub signal: Option<AbortSignal>,
     pub stylesheet: Option<StylesheetMode>,
+    /// No-CORS image request; origin authority comes only from response metadata.
+    pub image: bool,
 }
 impl Request {
     /// A get request to the specified Url and an empty body
@@ -105,7 +108,13 @@ impl Request {
             body: Body::Empty,
             signal: None,
             stylesheet: None,
+            image: false,
         }
+    }
+
+    pub fn image(mut self) -> Self {
+        self.image = true;
+        self
     }
 
     pub fn stylesheet(mut self, mode: StylesheetMode) -> Self {
