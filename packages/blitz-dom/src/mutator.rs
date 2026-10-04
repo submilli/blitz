@@ -152,6 +152,30 @@ impl DocumentMutator<'_> {
         self.doc.create_node(NodeData::Document(Box::default()))
     }
 
+    /// Give a secondary document a browsing context. Inert documents keep
+    /// their tree connectivity without the active-document flags and effects.
+    pub fn activate_document_node(&mut self, document: NodeId) {
+        if self.doc.node_type(document) != crate::dom_api::node_type::DOCUMENT
+            || self.doc.nodes[document].flags.is_in_document()
+        {
+            return;
+        }
+        self.process_added_subtree(document);
+        self.doc.notify_inserted(document);
+    }
+
+    /// End the browsing context of a secondary document without destroying
+    /// its DOM: retained wrappers can still read the disconnected tree.
+    pub fn deactivate_document_node(&mut self, document: NodeId) {
+        if self.doc.node_type(document) != crate::dom_api::node_type::DOCUMENT
+            || !self.doc.nodes[document].flags.is_in_document()
+        {
+            return;
+        }
+        self.doc.notify_removing(document);
+        self.process_removed_subtree(document);
+    }
+
     pub fn create_document_fragment(&mut self) -> NodeId {
         self.doc.create_node(NodeData::DocumentFragment)
     }

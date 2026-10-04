@@ -81,6 +81,27 @@ mod tests {
     }
 
     #[test]
+    fn secondary_document_activation_preserves_inert_documents() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let mut m = doc.mutate();
+        let active = m.create_document_node();
+        let inert = m.create_document_node();
+        let child = m.create_element(QualName::new(None, ns!(html), "iframe".into()), vec![]);
+        m.pre_insert(child, active, None).unwrap();
+        assert!(!m.doc.nodes[child].flags.is_in_document());
+
+        m.activate_document_node(active);
+        assert!(m.doc.nodes[active].flags.is_in_document());
+        assert!(m.doc.nodes[child].flags.is_in_document());
+        assert!(!m.doc.nodes[inert].flags.is_in_document());
+
+        m.deactivate_document_node(active);
+        assert!(!m.doc.nodes[child].flags.is_in_document());
+        assert!(m.doc.is_connected(child));
+        assert!(!m.doc.nodes[inert].flags.is_in_document());
+    }
+
+    #[test]
     fn adoption_updates_shadow_and_nested_template_documents() {
         let mut doc = BaseDocument::new(DocumentConfig::default());
         let mut m = doc.mutate();
