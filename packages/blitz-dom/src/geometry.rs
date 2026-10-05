@@ -70,6 +70,26 @@ impl BaseDocument {
             Point::new(rect.x, rect.y + rect.height),
             Point::new(rect.x + rect.width, rect.y + rect.height),
         ];
+        self.project_client_points(id, &mut corners, stop);
+        let x = corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let y = corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let right = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let bottom = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::NEG_INFINITY, f64::max);
+        BoundingRect {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
+    }
+
+    fn project_client_points(&self, id: NodeId, points: &mut [Point], stop: Option<NodeId>) {
         let mut current = Some(id);
         let scale = self.viewport().scale_f64();
         while let Some(node) = current.and_then(|id| self.get_node(id)) {
@@ -87,28 +107,37 @@ impl BaseDocument {
                 let transform = Affine::translate((x, y))
                     * Affine::new([a, b, c, d, e / scale, f / scale])
                     * Affine::translate((-x, -y));
-                for corner in &mut corners {
+                for corner in points.iter_mut() {
                     *corner = transform * *corner;
                 }
             }
             current = node.containing_block();
         }
-        let x = corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
-        let y = corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
-        let right = corners
-            .iter()
-            .map(|p| p.x)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let bottom = corners
-            .iter()
-            .map(|p| p.y)
-            .fold(f64::NEG_INFINITY, f64::max);
-        BoundingRect {
-            x,
-            y,
-            width: right - x,
-            height: bottom - y,
+    }
+
+    /// Project a subdocument's CSS viewport coordinates through its embedding
+    /// element's content box, including borders, padding, scroll and transforms.
+    /// Layout must be current. Disconnected or unrendered hosts have no mapping.
+    pub fn content_box_to_viewport(&self, id: NodeId) -> Option<Affine> {
+        if !self.is_connected(id) || !self.has_rendered_boxes(id) {
+            return None;
         }
+        let node = self.get_node(id)?;
+        let layout = node.unrounded_layout();
+        let position = node.unrounded_absolute_position(
+            node.scroll_offset().x as f32,
+            node.scroll_offset().y as f32,
+        );
+        let scroll = self.geometry_viewport_scroll(id);
+        let origin = Point::new(
+            f64::from(position.x + layout.border.left + layout.padding.left) - scroll.x,
+            f64::from(position.y + layout.border.top + layout.padding.top) - scroll.y,
+        );
+        let mut points = [origin, origin + (1.0, 0.0), origin + (0.0, 1.0)];
+        self.project_client_points(id, &mut points, None);
+        let x = points[1] - points[0];
+        let y = points[2] - points[0];
+        Some(Affine::new([x.x, x.y, y.x, y.y, points[0].x, points[0].y]))
     }
 }
 

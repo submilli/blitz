@@ -438,6 +438,12 @@ pub(crate) fn handle_pointerdown(
     // This may differ from `target` for anonymous blocks (which are layout children
     // but not DOM children), so we use the hit result for text selection.
     let actual_target = hit.node_id;
+    // Physical primary-button input focuses any eligible control, not only
+    // text editors. The resumable transition rechecks eligibility after
+    // pointer listeners and releases native borrows before focus callbacks.
+    if button == MouseEventButton::Main {
+        queue_focus(doc, Some(actual_target), dispatch_event);
+    }
 
     // Check what kind of element we're dealing with and extract needed info
     enum ClickTarget {
@@ -539,8 +545,6 @@ pub(crate) fn handle_pointerdown(
 
                 drop(font_ctx);
             }
-
-            queue_focus(doc, Some(hit.node_id), dispatch_event);
         }
     }
 }

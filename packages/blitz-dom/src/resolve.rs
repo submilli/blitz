@@ -146,7 +146,8 @@ impl BaseDocument {
         let mut subdoc_is_animating = false;
         for &node_id in &self.sub_document_nodes {
             let node = &mut self.nodes[node_id];
-            let size = node.final_layout().size;
+            let layout = node.final_layout();
+            let size = (layout.content_box_width(), layout.content_box_height());
             if let Some(mut sub_doc) = node.subdoc_mut().map(|doc| doc.inner_mut()) {
                 // Set viewport
                 // viewport_mut handles change detection. So we just unconditionally set the values;
@@ -157,8 +158,8 @@ impl BaseDocument {
 
                 let viewport_scale = self.viewport.scale();
                 sub_viewport.window_size = (
-                    (size.width * viewport_scale) as u32,
-                    (size.height * viewport_scale) as u32,
+                    (size.0 * viewport_scale) as u32,
+                    (size.1 * viewport_scale) as u32,
                 );
                 drop(sub_viewport);
 

@@ -141,3 +141,6 @@ fn process_custom_widget_node(
 
     Some(widget_scene)
 }
+
+#[cfg(test)]
+mod subdocument_tests;

@@ -1159,23 +1159,36 @@ impl ElementCx<'_, '_> {
             let scale = self.scale;
             let width = self.frame.content_box.width() as u32;
             let height = self.frame.content_box.height() as u32;
-
-            // TODO: Support arbitrary transforms of subdocuments
-            let translation = self.transform.translation();
-            let initial_x = translation.x + self.frame.content_box.origin().x;
-            let initial_y = translation.y + self.frame.content_box.origin().y;
-            // let transform = self.transform.then_translate(Vec2 { x, y });
-
+            if width == 0 || height == 0 {
+                return;
+            }
+            // Record in the child viewport's coordinate space, then compose
+            // through the iframe's complete transform. Clipping to the content
+            // box keeps oversized child backgrounds out of borders/padding.
+            let mut child_scene = Scene::new();
+            let viewport = Rect::new(0.0, 0.0, width as f64, height as f64);
+            child_scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                peniko::Color::WHITE,
+                None,
+                &viewport,
+            );
             let painter = BlitzDomPainter::new(
                 &sub_doc,
                 scale,
                 width,
                 height,
-                initial_x,
-                initial_y,
+                0.0,
+                0.0,
                 self.custom_widget_scenes,
             );
-            painter.paint_scene(scene);
+            painter.paint_scene(&mut child_scene);
+            let transform =
+                self.transform * Affine::translate(self.frame.content_box.origin().to_vec2());
+            scene.push_clip_layer(transform, &viewport);
+            scene.append_scene(child_scene, transform);
+            scene.pop_layer();
         }
     }
 

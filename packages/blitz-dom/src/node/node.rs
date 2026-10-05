@@ -1588,6 +1588,37 @@ impl Node {
         }
 
         let size = self.final_layout().size;
+        // Overflow clips descendants to the padding box even when their
+        // scrollable overflow/hoisted bounds extend beyond it. The root's
+        // overflow is propagated to the viewport, as in the painter.
+        let is_root = self
+            .parent
+            .is_some_and(|parent| matches!(self.with(parent).data, NodeData::Document(_)));
+        if !is_root && let Some(style) = self.primary_styles() {
+            use style::values::computed::Overflow;
+            let border = self.final_layout().border;
+            let local_x = x - self.scroll_offset().x as f32;
+            let local_y = y - self.scroll_offset().y as f32;
+            if (style.clone_overflow_x() != Overflow::Visible
+                && (local_x < border.left || local_x > size.width - border.right))
+                || (style.clone_overflow_y() != Overflow::Visible
+                    && (local_y < border.top || local_y > size.height - border.bottom))
+            {
+                // The border remains a target; only descendant content is
+                // clipped by the padding edge.
+                return (!pointer_events_none
+                    && local_x >= 0.0
+                    && local_x <= size.width
+                    && local_y >= 0.0
+                    && local_y <= size.height)
+                    .then_some(HitResult {
+                        node_id: self.id,
+                        x,
+                        y,
+                        is_text: false,
+                    });
+            }
+        }
         let matches_self = !(x < 0.0
             || x > size.width + self.scroll_offset().x as f32
             || y < 0.0

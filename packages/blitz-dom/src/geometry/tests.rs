@@ -304,3 +304,79 @@ fn root_scroll_into_view_reaches_viewport_in_both_document_modes() {
         assert_eq!(doc.viewport_scroll().y, 0.0);
     }
 }
+
+#[test]
+fn subdocument_projection_preserves_content_insets_and_nested_transforms() {
+    use kurbo::Point;
+    let (mut doc, body) = document();
+    doc.embedder_loads_iframes = true;
+    let wrapper = element(
+        &mut doc,
+        body,
+        "div",
+        "position:absolute;left:20px;top:30px;transform:scale(2);transform-origin:0 0",
+    );
+    let host = element(
+        &mut doc,
+        wrapper,
+        "iframe",
+        "position:absolute;left:10px;top:15px;width:100px;height:50px;border:5px solid;padding:3px;transform:rotate(90deg);transform-origin:0 0",
+    );
+    doc.resolve(0.0);
+    let projection = doc.content_box_to_viewport(host).unwrap();
+    let origin = projection * Point::ZERO;
+    let x = projection * Point::new(1.0, 0.0);
+    let y = projection * Point::new(0.0, 1.0);
+    assert!(
+        (origin.x - 24.0).abs() < 0.01 && (origin.y - 76.0).abs() < 0.01,
+        "{origin:?}"
+    );
+    assert!((x.x - origin.x).abs() < 0.01 && (x.y - origin.y - 2.0).abs() < 0.01);
+    assert!((y.x - origin.x + 2.0).abs() < 0.01 && (y.y - origin.y).abs() < 0.01);
+    doc.set_style_property(host, "display", "none");
+    doc.resolve(0.0);
+    assert!(doc.content_box_to_viewport(host).is_none());
+}
+
+#[test]
+fn ancestor_overflow_clips_frame_hits_even_with_large_scrollable_extent() {
+    let (mut doc, body) = document();
+    let mut viewport = doc.viewport().clone();
+    viewport.window_size = (800, 600);
+    doc.set_viewport(viewport);
+    doc.embedder_loads_iframes = true;
+    let clip = element(
+        &mut doc,
+        body,
+        "div",
+        "width:1px;height:1px;overflow:hidden",
+    );
+    let host = element(&mut doc, clip, "iframe", "width:100px;height:80px;border:0");
+    doc.resolve(0.0);
+    assert_ne!(doc.element_from_point(40.0, 15.0), Some(host));
+    doc.set_style_property(clip, "overflow", "visible");
+    doc.resolve(0.0);
+    assert_eq!(
+        doc.element_from_point(40.0, 15.0),
+        Some(host),
+        "host rect {:?}",
+        doc.get_client_bounding_rect(host)
+    );
+}
+
+#[test]
+fn overflow_clip_preserves_border_box_hit_ownership() {
+    let (mut doc, body) = document();
+    let mut viewport = doc.viewport().clone();
+    viewport.window_size = (800, 600);
+    doc.set_viewport(viewport);
+    let target = element(
+        &mut doc,
+        body,
+        "div",
+        "width:100px;height:100px;border:20px solid;overflow:hidden",
+    );
+    doc.resolve(0.0);
+    assert_eq!(doc.element_from_point(5.0, 5.0), Some(target));
+    assert_eq!(doc.element_from_point(135.0, 135.0), Some(target));
+}
