@@ -20,6 +20,121 @@ fn document() -> (BaseDocument, NodeId) {
 }
 
 #[test]
+fn initial_containing_block_retains_absolute_overflow_and_viewport_fixed_position() {
+    let (mut doc, body) = document();
+    let mut viewport = doc.viewport().clone();
+    viewport.window_size = (800, 600);
+    doc.set_viewport(viewport);
+    let target = element(
+        &mut doc,
+        body,
+        "div",
+        "position:absolute;top:1400px;width:80px;height:30px",
+    );
+    let fixed = element(
+        &mut doc,
+        body,
+        "div",
+        "position:fixed;bottom:0;width:80px;height:30px",
+    );
+    doc.resolve(0.0);
+    assert_eq!(doc.get_client_bounding_rect(fixed).unwrap().y, 570.0);
+    doc.scroll_into_view(
+        target,
+        ScrollBehavior::Instant,
+        crate::ScrollLogicalPosition::Nearest,
+        crate::ScrollLogicalPosition::Nearest,
+    );
+    let rect = doc.get_client_bounding_rect(target).unwrap();
+    assert_eq!(rect.y, 570.0);
+    assert_eq!(doc.viewport_scroll().y, 830.0);
+    assert_eq!(doc.element_from_point(40.0, 585.0), Some(target));
+    assert_eq!(doc.get_client_bounding_rect(fixed).unwrap().y, 570.0);
+    doc.resolve(0.0);
+    assert_eq!(doc.get_client_bounding_rect(target).unwrap().y, 570.0);
+}
+
+#[test]
+fn oversized_embedding_scrolls_the_child_rectangle_instead_of_the_host() {
+    let (mut doc, body) = document();
+    let mut viewport = doc.viewport().clone();
+    viewport.window_size = (800, 600);
+    doc.set_viewport(viewport);
+    doc.embedder_loads_iframes = true;
+    let host = element(
+        &mut doc,
+        body,
+        "iframe",
+        "width:100px;height:1000px;border:0",
+    );
+    doc.resolve(0.0);
+    let rect = doc
+        .scroll_embedded_rect_into_view(host, kurbo::Rect::new(10.0, 900.0, 90.0, 930.0))
+        .unwrap();
+    assert_eq!(rect.y0, 570.0);
+    assert_eq!(rect.y1, 600.0);
+    assert!(doc.viewport_scroll().y > 0.0);
+}
+
+#[test]
+fn viewport_fixed_boxes_do_not_expand_document_scrolling() {
+    let (mut doc, body) = document();
+    let mut viewport = doc.viewport().clone();
+    viewport.window_size = (800, 600);
+    doc.set_viewport(viewport);
+    let fixed = element(
+        &mut doc,
+        body,
+        "div",
+        "position:fixed;top:1400px;width:80px;height:30px",
+    );
+    doc.resolve(0.0);
+    doc.scroll_viewport_by(0.0, 2000.0);
+    assert_eq!(doc.viewport_scroll().y, 0.0);
+    assert_eq!(doc.get_client_bounding_rect(fixed).unwrap().y, 1400.0);
+    doc.resolve(0.0);
+    doc.scroll_viewport_by(0.0, 2000.0);
+    assert_eq!(doc.viewport_scroll().y, 0.0);
+}
+
+#[test]
+fn initial_fixed_and_absolute_boxes_retain_equal_z_tree_order() {
+    for fixed_first in [true, false] {
+        let (mut doc, body) = document();
+        let mut viewport = doc.viewport().clone();
+        viewport.window_size = (800, 600);
+        doc.set_viewport(viewport);
+        let positions = if fixed_first {
+            ["fixed", "absolute"]
+        } else {
+            ["absolute", "fixed"]
+        };
+        element(
+            &mut doc,
+            body,
+            "div",
+            &format!(
+                "position:{};left:0;top:0;width:80px;height:30px",
+                positions[0]
+            ),
+        );
+        let last = element(
+            &mut doc,
+            body,
+            "div",
+            &format!(
+                "position:{};left:0;top:0;width:80px;height:30px",
+                positions[1]
+            ),
+        );
+        doc.resolve(0.0);
+        assert_eq!(doc.element_from_point(40.0, 15.0), Some(last));
+        doc.resolve(0.0);
+        assert_eq!(doc.element_from_point(40.0, 15.0), Some(last));
+    }
+}
+
+#[test]
 fn observer_resize_is_logical_untransformed_and_scaled() {
     let (mut doc, body) = document();
     let target = element(

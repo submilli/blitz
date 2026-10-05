@@ -119,6 +119,33 @@ impl BaseDocument {
     /// element's content box, including borders, padding, scroll and transforms.
     /// Layout must be current. Disconnected or unrendered hosts have no mapping.
     pub fn content_box_to_viewport(&self, id: NodeId) -> Option<Affine> {
+        let origin = self.content_origin(id)?;
+        let mut points = [origin, origin + (1.0, 0.0), origin + (0.0, 1.0)];
+        self.project_client_points(id, &mut points, None);
+        let x = points[1] - points[0];
+        let y = points[2] - points[0];
+        Some(Affine::new([x.x, x.y, y.x, y.y, points[0].x, points[0].y]))
+    }
+
+    pub(crate) fn embedded_client_rect_until(
+        &self,
+        host: NodeId,
+        rect: kurbo::Rect,
+        stop: Option<NodeId>,
+    ) -> Option<BoundingRect> {
+        let origin = self.content_origin(host)?;
+        Some(self.transform_client_rect(
+            host,
+            BoundingRect {
+                x: origin.x + rect.x0,
+                y: origin.y + rect.y0,
+                width: rect.width(),
+                height: rect.height(),
+            },
+            stop,
+        ))
+    }
+    fn content_origin(&self, id: NodeId) -> Option<Point> {
         if !self.is_connected(id) || !self.has_rendered_boxes(id) {
             return None;
         }
@@ -129,15 +156,10 @@ impl BaseDocument {
             node.scroll_offset().y as f32,
         );
         let scroll = self.geometry_viewport_scroll(id);
-        let origin = Point::new(
+        Some(Point::new(
             f64::from(position.x + layout.border.left + layout.padding.left) - scroll.x,
             f64::from(position.y + layout.border.top + layout.padding.top) - scroll.y,
-        );
-        let mut points = [origin, origin + (1.0, 0.0), origin + (0.0, 1.0)];
-        self.project_client_points(id, &mut points, None);
-        let x = points[1] - points[0];
-        let y = points[2] - points[0];
-        Some(Affine::new([x.x, x.y, y.x, y.y, points[0].x, points[0].y]))
+        ))
     }
 }
 

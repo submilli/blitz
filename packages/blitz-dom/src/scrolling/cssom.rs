@@ -168,6 +168,40 @@ impl BaseDocument {
         vertical: ScrollLogicalPosition,
         horizontal: ScrollLogicalPosition,
     ) {
+        self.scroll_box_into_view(node_id, None, behavior, vertical, horizontal);
+    }
+
+    /// Scroll a child viewport rectangle through its embedding element's
+    /// containing boxes. Return its new parent-viewport projection for nesting.
+    pub fn scroll_embedded_rect_into_view(
+        &mut self,
+        host: NodeId,
+        rect: kurbo::Rect,
+    ) -> Option<kurbo::Rect> {
+        self.scroll_box_into_view(
+            host,
+            Some(rect),
+            ScrollBehavior::Instant,
+            ScrollLogicalPosition::Nearest,
+            ScrollLogicalPosition::Nearest,
+        );
+        let rect = self.embedded_client_rect_until(host, rect, None)?;
+        Some(kurbo::Rect::new(
+            rect.x,
+            rect.y,
+            rect.x + rect.width,
+            rect.y + rect.height,
+        ))
+    }
+
+    fn scroll_box_into_view(
+        &mut self,
+        node_id: NodeId,
+        embedded_rect: Option<kurbo::Rect>,
+        behavior: ScrollBehavior,
+        vertical: ScrollLogicalPosition,
+        horizontal: ScrollLogicalPosition,
+    ) {
         if !self.has_rendered_boxes(node_id) {
             return;
         }
@@ -186,7 +220,11 @@ impl BaseDocument {
             }
             let root = self.try_root_element().is_some_and(|node| node.id == id);
             let stop = (!root).then_some(id);
-            let Some(target) = self.client_bounding_rect_until(node_id, stop) else {
+            let target = match embedded_rect {
+                Some(rect) => self.embedded_client_rect_until(node_id, rect, stop),
+                None => self.client_bounding_rect_until(node_id, stop),
+            };
+            let Some(target) = target else {
                 break;
             };
             let current = self

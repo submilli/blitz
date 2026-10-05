@@ -96,8 +96,75 @@ impl BaseDocument {
         let mut output = self.dispatch_child_layout(node_id, inputs, block_ctx);
         if inputs.run_mode == RunMode::PerformLayout {
             compute_oof_layout(self, node_id, &mut output);
+            if self
+                .try_root_element()
+                .is_some_and(|root| root.id == dom_node_id(node_id))
+                && !output.oof_candidates.is_empty()
+            {
+                // The initial containing block is the viewport. Finish these
+                // candidates inside the cache wrapper so their overflow is
+                // retained, rather than lost by Taffy's final root pass.
+                let size = self.viewport.window_size;
+                let scale = self.viewport.scale_f64() as f32;
+                let area = taffy::OofPositioningArea {
+                    size: taffy::Size {
+                        width: size.0 as f32 / scale,
+                        height: size.1 as f32 / scale,
+                    },
+                    offset: taffy::Point::ZERO,
+                };
+                let direction = self.get_core_container_style(node_id).direction();
+                let candidates = output.oof_candidates.take();
+                let result = taffy::compute_oof_layout_for_area(
+                    self,
+                    node_id,
+                    candidates,
+                    area,
+                    direction,
+                    taffy::ContainingBlockClaims {
+                        absolute: true,
+                        fixed: false,
+                    },
+                );
+                output.scrollable_overflow_rect = output
+                    .scrollable_overflow_rect
+                    .union(result.scrollable_overflow_rect);
+                // Viewport-fixed boxes retain layout ownership but do not
+                // contribute to the document's scrollable overflow.
+                let fixed = taffy::compute_oof_layout_for_area(
+                    self,
+                    node_id,
+                    result.unclaimed,
+                    area,
+                    direction,
+                    taffy::ContainingBlockClaims {
+                        absolute: false,
+                        fixed: true,
+                    },
+                );
+                let mut hoisted = result.hoisted;
+                hoisted.extend(fixed.hoisted);
+                self.sort_initial_hoisted_children(node_id, &mut hoisted);
+                self.add_hoisted_children(node_id, &hoisted);
+                output.oof_candidates = fixed.unclaimed;
+            }
         }
         output
+    }
+
+    fn sort_initial_hoisted_children(&self, root: NodeId, hoisted: &mut [NodeId]) {
+        // Separate fixed/absolute layout passes must retain composed tree order
+        // for equal-z painting, including slotted children and pseudo-elements.
+        let mut order = std::collections::BTreeMap::new();
+        let mut stack = vec![dom_node_id(root)];
+        while let Some(id) = stack.pop() {
+            let node = &self.nodes[id];
+            order.insert(u64::from(taffy_node_id(id)), order.len());
+            stack.extend(node.after());
+            stack.extend(node.flat_children().iter().rev().copied());
+            stack.extend(node.before());
+        }
+        hoisted.sort_by_key(|id| order.get(&u64::from(*id)).copied().unwrap_or(usize::MAX));
     }
 
     fn dispatch_child_layout(
