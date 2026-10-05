@@ -396,7 +396,9 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         // element under the document node, and under the real document the
         // parsed nodes would briefly be connected (visible to mutation
         // observers, which could then hold a node dropped below).
+        let base = mutr.doc.document_base_url(element_id);
         let scratch = mutr.try_create_document_node()?;
+        mutr.document_metadata_mut(scratch).inherited_base_url = Some(base);
         let context_name = mutr.element_name(element_id).cloned();
         let Some(context_name) = context_name else {
             mutr.remove_and_drop_node(scratch);

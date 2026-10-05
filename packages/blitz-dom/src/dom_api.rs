@@ -64,7 +64,7 @@ impl BaseDocument {
         use style::parser::ParserContext;
         use style::stylesheets::{CssRuleType, Origin};
         use style_traits::ParsingMode;
-        let url_data = self.url.url_extra_data();
+        let url_data = self.style_base_url(self.root_node_id);
         let mut input = cssparser::ParserInput::new(query);
         let mut parser = cssparser::Parser::new(&mut input);
         let mut context = ParserContext::new(
@@ -96,7 +96,7 @@ impl BaseDocument {
         use style::parser::ParserContext;
         use style::stylesheets::{CssRuleType, Origin};
         use style_traits::{ParsingMode, ToCss};
-        let url_data = self.url.url_extra_data();
+        let url_data = self.style_base_url(self.root_node_id);
         let mut input = cssparser::ParserInput::new(query);
         let mut parser = cssparser::Parser::new(&mut input);
         let mut context = ParserContext::new(

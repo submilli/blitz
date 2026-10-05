@@ -36,6 +36,20 @@ impl DocumentMutator<'_> {
                 pending.extend(element.shadow_root.map(|id| (id, document)));
                 pending.extend(element.template_contents.map(|id| (id, template_document)));
             }
+            // Adoption changes the declaration parser's document base. This
+            // also covers parser-created nodes staged in an inert document.
+            if old_document != document
+                && self.doc.nodes[id]
+                    .attr(crate::local_name!("style"))
+                    .is_some()
+            {
+                let base = self.doc.style_base_url(id);
+                let node = &mut self.doc.nodes[id];
+                if let Some(element) = node.element_data_mut() {
+                    element.flush_style_attribute(&self.doc.guard, &base);
+                    node.set_restyle_hint(style::invalidation::element::restyle_hints::RestyleHint::RESTYLE_STYLE_ATTRIBUTE);
+                }
+            }
             if old_document != document
                 && matches!(
                     self.doc.custom_element_state(id),

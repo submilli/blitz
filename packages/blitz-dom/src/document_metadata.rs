@@ -41,6 +41,8 @@ pub struct DocumentMetadata {
     pub content_type: Option<String>,
     /// Detached document URL; the active document uses the embedder's live URL.
     pub url: Option<url::Url>,
+    /// Captured fallback for an inherited about-blank document; never origin authority.
+    pub inherited_base_url: Option<url::Url>,
     /// Detached factories snapshot their creator's origin domain.
     pub domain: String,
 }
@@ -58,6 +60,7 @@ impl BaseDocument {
 impl DocumentMutator<'_> {
     /// Set metadata on a live Document, before exposing its wrapper.
     pub fn document_metadata_mut(&mut self, document: NodeId) -> &mut DocumentMetadata {
+        self.doc.invalidate_base_snapshot(document);
         let NodeData::Document(data) = &mut self.doc.nodes[document].data else {
             unreachable!("metadata mutations require a document node")
         };

@@ -22,7 +22,9 @@ impl BaseDocument {
         self.tree_observer = Some(observer);
     }
 
-    pub(crate) fn notify_removing(&self, node: NodeId) {
+    pub(crate) fn notify_removing(&mut self, node: NodeId) {
+        self.base_subtree_removing(node);
+        self.discard_frame_bases(node);
         if self
             .get_node(node)
             .is_some_and(|node| node.parent.is_some())
@@ -32,7 +34,9 @@ impl BaseDocument {
         }
     }
 
-    pub(crate) fn notify_inserted(&self, node: NodeId) {
+    pub(crate) fn notify_inserted(&mut self, node: NodeId) {
+        self.base_subtree_inserted(node);
+        self.capture_frame_bases(node);
         if let Some(observer) = &self.tree_observer {
             observer.inserted(self, node);
         }

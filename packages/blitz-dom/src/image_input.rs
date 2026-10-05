@@ -38,7 +38,7 @@ impl DocumentMutator<'_> {
             .filter(|s| !s.is_empty())
             .map(|s| {
                 self.doc
-                    .resolve_url(s)
+                    .resolve_url(id, s)
                     .map_or_else(|| s.to_string(), |u| u.to_string())
             });
         let is_image = element.is_image_input();
@@ -75,7 +75,7 @@ impl DocumentMutator<'_> {
         }
         // Image buttons load even while detached; decoded images survive removal.
         if let Some(source) = source {
-            if self.doc.resolve_url(&source).is_some() {
+            if self.doc.resolve_url(id, &source).is_some() {
                 self.load_image(id);
             } else if source_changed
                 || self.doc.nodes[id]

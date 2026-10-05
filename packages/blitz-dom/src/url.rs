@@ -16,10 +16,6 @@ impl DocumentUrl {
         UrlExtraData(ServoArc::clone(&self.base_url))
     }
 
-    pub(crate) fn resolve_relative(&self, raw: &str) -> Option<url::Url> {
-        self.base_url.join(raw).ok()
-    }
-
     /// Returns `true` if `other` refers to the same document as this URL, i.e. it is
     /// identical to this URL except (possibly) for the fragment (`#...`) component.
     ///

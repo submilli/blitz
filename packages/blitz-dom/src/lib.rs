@@ -37,8 +37,10 @@ pub mod custom_internals;
 ///
 /// This is the primary entry point for this crate.
 mod document;
+mod document_base;
 mod document_metadata;
 mod document_ownership;
+mod frame_bases;
 pub use document_metadata::{DocumentMetadata, DocumentType};
 pub mod dom_api;
 pub mod dom_events;

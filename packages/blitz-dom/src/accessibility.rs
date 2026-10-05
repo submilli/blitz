@@ -247,7 +247,7 @@ impl BaseDocument {
             builder.set_level(level);
         }
         if role == Role::Link
-            && let Some(url) = attr("href").and_then(|href| self.resolve_url(&href))
+            && let Some(url) = attr("href").and_then(|href| self.resolve_url(node.id, &href))
         {
             builder.set_url(url.to_string());
         }

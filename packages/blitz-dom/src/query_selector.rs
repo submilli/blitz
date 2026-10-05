@@ -232,7 +232,7 @@ impl BaseDocument {
                 location: SourceLocation { line: 0, column: 1 },
             });
         }
-        let url_extra_data = self.url.url_extra_data();
+        let url_extra_data = self.style_base_url(self.root_node_id);
         let selectors = SelectorParser::parse_author_origin_no_namespace(input, &url_extra_data)?;
         if !style::selector_limits::allowed(&selectors) {
             return Err(ParseError {

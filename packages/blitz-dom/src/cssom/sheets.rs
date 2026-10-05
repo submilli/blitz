@@ -42,9 +42,14 @@ impl BaseDocument {
     /// Construct an initially empty sheet with this document's parser and lock.
     /// Constructed sheets cannot initiate import loads.
     pub fn create_constructed_stylesheet(&self) -> CssomSheet {
+        self.create_constructed_stylesheet_for_document(self.root_node_id)
+    }
+
+    /// Capture the creator document base, including inherited secondary documents.
+    pub fn create_constructed_stylesheet_for_document(&self, document: NodeId) -> CssomSheet {
         let sheet = Stylesheet::from_str(
             "",
-            self.url.url_extra_data(),
+            self.style_base_url(document),
             Origin::Author,
             ServoArc::new(self.guard.wrap(MediaList::empty())),
             self.guard.clone(),
@@ -55,7 +60,7 @@ impl BaseDocument {
         );
         CssomSheet {
             document: self.id(),
-            owner: self.root_node().id,
+            owner: self.node_document(document),
             sheet: DocumentStyleSheet(ServoArc::new(sheet)),
             constructed: true,
             origin_clean: true,

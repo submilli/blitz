@@ -65,7 +65,12 @@ impl BaseDocument {
         .unwrap_or_default();
 
         // "Parse a URL given action... If this fails, return."
-        let Some(mut parsed_action) = self.resolve_url(action) else {
+        let parsed_action = if action.is_empty() {
+            Some(self.document_url(node_id))
+        } else {
+            self.resolve_url(node_id, action)
+        };
+        let Some(mut parsed_action) = parsed_action else {
             return;
         };
 

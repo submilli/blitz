@@ -62,7 +62,7 @@ impl BaseDocument {
             PropertyId::parse_enabled_for_all_content(property).ok()?,
             text,
             Origin::Author,
-            &self.url.url_extra_data(),
+            &self.style_base_url(self.root_node_id),
             None,
             ParsingMode::DEFAULT,
             selectors::matching::QuirksMode::NoQuirks,

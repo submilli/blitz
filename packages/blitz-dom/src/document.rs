@@ -65,6 +65,7 @@ use style::{
     stylist::Stylist,
 };
 use style_dom::ElementState;
+use style_traits::CssStringWriter;
 use thin_vec::ThinVec;
 use url::Url;
 
@@ -325,6 +326,8 @@ pub struct BaseDocument {
     /// tree or attribute changes). Lets embedders cache derived data such as
     /// live collections.
     pub(crate) dom_generation: u64,
+    pub(crate) dirty_base_documents: HashSet<NodeId>,
+    pub(crate) initial_frame_bases: HashMap<NodeId, Rc<Url>>,
     /// `<script>` elements that became connected outside the parser and have
     /// not been prepared yet; the embedder drains and runs them.
     pub(crate) connected_scripts: Vec<NodeId>,
@@ -535,6 +538,8 @@ impl BaseDocument {
             changed_nodes: HashSet::new(),
 
             dom_generation: 0,
+            dirty_base_documents: HashSet::new(),
+            initial_frame_bases: HashMap::new(),
             event_listeners: Default::default(),
             connected_scripts: Vec::new(),
             shadow_hosts: HashSet::new(),
@@ -628,6 +633,7 @@ impl BaseDocument {
     /// Set base url for resolving linked resources (stylesheets, images, fonts, etc)
     pub fn set_base_url(&mut self, url: &str) {
         self.url = DocumentUrl::from(Url::parse(url).unwrap());
+        self.invalidate_base_snapshot(self.root_node_id);
     }
 
     /// The base url used for resolving linked resources (stylesheets, images, fonts, etc)
@@ -807,28 +813,57 @@ impl BaseDocument {
     }
 
     pub fn set_style_property(&mut self, node_id: NodeId, name: &str, value: &str) {
+        let base = self.style_base_url(node_id);
         let node = &mut self.nodes[node_id];
-        let did_change = node.element_data_mut().unwrap().set_style_property(
-            name,
-            value,
-            &self.guard,
-            self.url.url_extra_data(),
-        );
+        let did_change =
+            node.element_data_mut()
+                .unwrap()
+                .set_style_property(name, value, &self.guard, base);
         if did_change {
             node.set_restyle_hint(RestyleHint::RESTYLE_STYLE_ATTRIBUTE);
+            self.sync_inline_style_attribute(node_id);
         }
     }
 
     pub fn remove_style_property(&mut self, node_id: NodeId, name: &str) {
+        let base = self.style_base_url(node_id);
         let node = &mut self.nodes[node_id];
-        let did_change = node.element_data_mut().unwrap().remove_style_property(
-            name,
-            &self.guard,
-            self.url.url_extra_data(),
-        );
+        let did_change =
+            node.element_data_mut()
+                .unwrap()
+                .remove_style_property(name, &self.guard, base);
         if did_change {
             node.set_restyle_hint(RestyleHint::RESTYLE_STYLE_ATTRIBUTE);
+            self.sync_inline_style_attribute(node_id);
         }
+    }
+
+    /// CSSOM edits update the source attribute as well as the parsed block, so
+    /// adoption can reparse URLs without discarding native declaration edits.
+    fn sync_inline_style_attribute(&mut self, node_id: NodeId) {
+        let block = self.nodes[node_id]
+            .element_data()
+            .and_then(|element| element.style_attribute.clone());
+        let css = block
+            .as_ref()
+            .map(|block| {
+                let mut css = CssStringWriter::new();
+                block
+                    .read_with(&self.guard.read())
+                    .to_css(&mut css)
+                    .expect("writing CSS into a String is infallible");
+                css
+            })
+            .unwrap_or_default();
+        self.mutate()
+            .set_attribute_by_name(node_id, "style", &css)
+            .expect("style is a valid attribute name");
+        // The attribute notification must preserve the already updated block's
+        // identity and Stylo's copy-on-write state; serialized CSS is identical.
+        self.nodes[node_id]
+            .element_data_mut()
+            .expect("inline styles belong to elements")
+            .style_attribute = block;
     }
 
     pub fn sub_document_node_ids(&self) -> Vec<NodeId> {
@@ -1151,8 +1186,8 @@ impl BaseDocument {
     /// Resolve `raw` against the document's base URL. `None` when it cannot
     /// be resolved (e.g. a relative URL in a document without a real base URL),
     /// in which case the resource is simply not loaded.
-    pub(crate) fn resolve_url(&self, raw: &str) -> Option<url::Url> {
-        self.url.resolve_relative(raw)
+    pub(crate) fn resolve_url(&self, node: NodeId, raw: &str) -> Option<url::Url> {
+        self.document_base_url(node).join(raw).ok()
     }
 
     pub fn print_tree(&self) {
@@ -1174,7 +1209,7 @@ impl BaseDocument {
                 if let Some(href) = element.attr(local_name!("href")) {
                     // println!("Node {node_id} {href} {href_to_reload} {} {}", resolved_href.as_str(), resolved_href.as_str() == url_to_reload);
                     if href == href_to_reload {
-                        let Some(resolved_href) = self.resolve_url(href) else {
+                        let Some(resolved_href) = self.resolve_url(node_id, href) else {
                             continue;
                         };
                         self.net_provider.fetch(
@@ -1209,7 +1244,7 @@ impl BaseDocument {
         }
         let css = self.nodes[target_id].text_content();
         let css = html_escape::decode_html_entities(&css);
-        let sheet = self.make_stylesheet(&css, Origin::Author);
+        let sheet = self.make_stylesheet_for_node(&css, Origin::Author, target_id);
         self.add_stylesheet_for_node(sheet, target_id);
         self.update_owner_stylesheet_media(target_id);
     }
@@ -1243,9 +1278,18 @@ impl BaseDocument {
     }
 
     pub fn make_stylesheet(&self, css: impl AsRef<str>, origin: Origin) -> DocumentStyleSheet {
+        self.make_stylesheet_for_node(css, origin, self.root_node_id)
+    }
+
+    fn make_stylesheet_for_node(
+        &self,
+        css: impl AsRef<str>,
+        origin: Origin,
+        node: NodeId,
+    ) -> DocumentStyleSheet {
         let data = Stylesheet::from_str(
             crate::css_limits::bounded(css.as_ref()),
-            self.url.url_extra_data(),
+            self.style_base_url(node),
             origin,
             ServoArc::new(self.guard.wrap(MediaList::empty())),
             self.guard.clone(),
@@ -1267,7 +1311,7 @@ impl BaseDocument {
 
     pub fn upsert_stylesheet_for_node(&mut self, node_id: NodeId) {
         let raw_styles = self.nodes[node_id].text_content();
-        let sheet = self.make_stylesheet(raw_styles, Origin::Author);
+        let sheet = self.make_stylesheet_for_node(raw_styles, Origin::Author, node_id);
         self.add_stylesheet_for_node(sheet, node_id);
         self.update_owner_stylesheet_media(node_id);
     }

@@ -214,7 +214,10 @@ impl DocumentMutator<'_> {
 
     pub fn create_element(&mut self, name: QualName, attrs: Vec<Attribute>) -> NodeId {
         let mut data = ElementData::new(name, attrs);
-        data.flush_style_attribute(self.doc.guard(), &self.doc.url.url_extra_data());
+        data.flush_style_attribute(
+            self.doc.guard(),
+            &self.doc.style_base_url(self.doc.root_node_id),
+        );
 
         let id = self.doc.create_node(NodeData::Element(Box::new(data)));
         let node = self.doc.get_node_mut(id).unwrap();
@@ -386,6 +389,7 @@ impl DocumentMutator<'_> {
         let sanitize = self.input_sanitization_needed(node_id, &name, Some(value.as_str_lossy()));
         let current_value = self.value_before_sanitizer_change(node_id, &name);
         self.set_attribute_inner(node_id, name.clone(), &value);
+        self.doc.base_href_changed(node_id, &name);
         self.canvas_dimension_changed(node_id, &name);
         if sanitize {
             self.sanitize_changed_input_value(node_id, &name, current_value);
@@ -420,6 +424,7 @@ impl DocumentMutator<'_> {
         dom_value: &crate::DomString,
     ) {
         let value = dom_value.as_str_lossy();
+        let style_base = (name.local.as_ref() == "style").then(|| self.doc.style_base_url(node_id));
         if self.doc.custom_element_state(node_id) == CustomElementState::Custom
             && self.doc.is_recording_custom_element_reactions()
         {
@@ -548,7 +553,12 @@ impl DocumentMutator<'_> {
         }
 
         if *attr == local_name!("style") {
-            element.flush_style_attribute(&self.doc.guard, &self.doc.url.url_extra_data());
+            element.flush_style_attribute(
+                &self.doc.guard,
+                style_base
+                    .as_ref()
+                    .expect("style mutations capture their parser base"),
+            );
             node.set_restyle_hint(RestyleHint::RESTYLE_STYLE_ATTRIBUTE);
             return;
         }
@@ -589,6 +599,9 @@ impl DocumentMutator<'_> {
         let sanitize = self.input_sanitization_needed(node_id, &name, None);
         let current_value = self.value_before_sanitizer_change(node_id, &name);
         self.clear_attribute_inner(node_id, name.clone());
+        if existed {
+            self.doc.base_href_changed(node_id, &name);
+        }
         if existed && sanitize {
             self.sanitize_changed_input_value(node_id, &name, current_value);
         }
@@ -603,6 +616,7 @@ impl DocumentMutator<'_> {
     }
 
     fn clear_attribute_inner(&mut self, node_id: NodeId, name: QualName) {
+        let style_base = (name.local.as_ref() == "style").then(|| self.doc.style_base_url(node_id));
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if node_is_in_document {
             self.doc.snapshot_node(node_id);
@@ -708,7 +722,12 @@ impl DocumentMutator<'_> {
         }
 
         if *attr == local_name!("style") {
-            element.flush_style_attribute(&self.doc.guard, &self.doc.url.url_extra_data());
+            element.flush_style_attribute(
+                &self.doc.guard,
+                style_base
+                    .as_ref()
+                    .expect("style mutations capture their parser base"),
+            );
             node.set_restyle_hint(RestyleHint::RESTYLE_STYLE_ATTRIBUTE);
         } else if (tag, attr) == tag_and_attr!("canvas", "src") {
             self.recompute_is_animating = true;
@@ -1255,6 +1274,7 @@ impl DocumentMutator<'_> {
 
 impl<'doc> DocumentMutator<'doc> {
     pub fn flush(&mut self) {
+        self.doc.refresh_dirty_document_bases();
         if self.recompute_is_animating {
             self.doc.has_canvas = self.doc.compute_has_canvas();
         }
@@ -1542,7 +1562,7 @@ impl<'doc> DocumentMutator<'doc> {
             return;
         }
 
-        let Some(url) = self.doc.resolve_url(href) else {
+        let Some(url) = self.doc.resolve_url(target_id, href) else {
             return;
         };
         let stylesheet_mode = blitz_traits::net::StylesheetMode::from_attribute(
@@ -1619,7 +1639,7 @@ impl<'doc> DocumentMutator<'doc> {
         let node = &self.doc.nodes[target_id];
         if let Some(raw_src) = node.attr(local_name!("src")) {
             if !raw_src.is_empty() {
-                let Some(src) = self.doc.resolve_url(raw_src) else {
+                let Some(src) = self.doc.resolve_url(target_id, raw_src) else {
                     return;
                 };
                 let src_string = src.as_str();
@@ -1708,7 +1728,7 @@ impl<'doc> DocumentMutator<'doc> {
         if raw_src.is_empty() {
             return;
         }
-        let Some(url) = self.doc.url.resolve_relative(raw_src) else {
+        let Some(url) = self.doc.resolve_url(target_id, raw_src) else {
             #[cfg(feature = "tracing")]
             tracing::warn!("Not loading iframe: could not resolve url {raw_src}");
             return;

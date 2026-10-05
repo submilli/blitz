@@ -75,17 +75,16 @@ fn reactions_for_connection_and_attribute_changes() {
     );
     doc.set_custom_element_reactions(true);
 
-    // Moving a custom element disconnects and reconnects it; built-in
-    // elements produce nothing.
+    // Undefined elements get no attribute reactions; upgrades replay them.
+    doc.mutate()
+        .set_attribute_by_name(m, "title", "one")
+        .unwrap();
+    assert!(doc.take_custom_element_reactions().is_empty());
+    doc.set_custom_element_state(m, CustomElementState::Custom);
+
+    // Move an already upgraded element to exercise both lifecycle reactions.
     let mut mutator = doc.mutate();
     mutator.pre_insert(m, host, None).unwrap();
-    // Undefined elements get no attribute reactions (their upgrade replays
-    // attributes instead)...
-    mutator.set_attribute_by_name(m, "title", "one").unwrap();
-    drop(mutator);
-    // ...custom ones do.
-    doc.set_custom_element_state(m, CustomElementState::Custom);
-    let mut mutator = doc.mutate();
     mutator.set_attribute_by_name(m, "title", "two").unwrap();
     mutator.remove_attribute_by_name(m, "title");
     mutator.remove_child(host, m).unwrap();

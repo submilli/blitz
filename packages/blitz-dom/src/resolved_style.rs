@@ -191,7 +191,7 @@ impl BaseDocument {
             property_id,
             value,
             Origin::Author,
-            &self.url.url_extra_data(),
+            &self.style_base_url(self.root_node_id),
             None,
             ParsingMode::DEFAULT,
             QuirksMode::NoQuirks,
@@ -205,7 +205,7 @@ impl BaseDocument {
     fn parse_style_attr_block(&self, style_attr: &str) -> PropertyDeclarationBlock {
         parse_style_attribute(
             crate::css_limits::bounded(style_attr),
-            &self.url.url_extra_data(),
+            &self.style_base_url(self.root_node_id),
             None,
             QuirksMode::NoQuirks,
             CssRuleType::Style,
@@ -284,7 +284,7 @@ impl BaseDocument {
                 property_id,
                 value,
                 Origin::Author,
-                &self.url.url_extra_data(),
+                &self.style_base_url(self.root_node_id),
                 None,
                 ParsingMode::DEFAULT,
                 QuirksMode::NoQuirks,
@@ -345,7 +345,7 @@ impl BaseDocument {
         if initial_value.is_some_and(|value| !crate::css_limits::allowed(value)) {
             return RegisterCustomPropertyResult::InvalidInitialValue;
         }
-        let url_data = self.url.url_extra_data();
+        let url_data = self.style_base_url(self.root_node_id);
         let result =
             self.stylist
                 .register_custom_property(&url_data, name, syntax, inherits, initial_value);

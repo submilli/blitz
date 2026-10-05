@@ -258,6 +258,7 @@ impl DocumentData {
 /// [`Node`](super::Node).
 pub struct DocumentData {
     pub metadata: crate::DocumentMetadata,
+    pub(crate) base: crate::document_base::DocumentBase,
     pub stylo_element_data: StyloData,
     /// Selector flags deposited here by `apply_selector_flags` when a
     /// `for_parent()` flag is applied while matching the root `<html>` element,
@@ -301,6 +302,7 @@ impl DocumentData {
     pub fn new() -> Self {
         Self {
             metadata: Default::default(),
+            base: Default::default(),
             stylo_element_data: Default::default(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
             guard: None,
