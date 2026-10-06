@@ -442,7 +442,7 @@ pub(crate) fn handle_pointerdown(
     // text editors. The resumable transition rechecks eligibility after
     // pointer listeners and releases native borrows before focus callbacks.
     if button == MouseEventButton::Main {
-        queue_focus(doc, Some(actual_target), dispatch_event);
+        queue_focus(doc, doc.click_focus_target(actual_target), dispatch_event);
     }
 
     // Check what kind of element we're dealing with and extract needed info

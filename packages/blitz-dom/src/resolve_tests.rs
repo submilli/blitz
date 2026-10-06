@@ -101,6 +101,21 @@ fn physical_pointer_input_focuses_buttons_and_keeps_disabled_controls_unfocused(
         .synthetic_click_event_data(Modifiers::empty());
     EventDriver::new(&mut doc, NoopEventHandler).handle_ui_event(UiEvent::PointerDown(pointer));
     assert_eq!(doc.get_focussed_node_id(), Some(button));
+    let span = element(&mut doc, button, "span");
+    doc.mutate().set_attribute(
+        span,
+        QualName::new(None, ns!(), "style".into()),
+        "display:block;width:80px;height:30px",
+    );
+    doc.clear_focus();
+    doc.resolve(0.0);
+    assert!(doc.begin_focus_transition(Some(span)).is_none());
+    let pointer = doc
+        .get_node(span)
+        .unwrap()
+        .synthetic_click_event_data(Modifiers::empty());
+    EventDriver::new(&mut doc, NoopEventHandler).handle_ui_event(UiEvent::PointerDown(pointer));
+    assert_eq!(doc.get_focussed_node_id(), Some(button));
     let disabled = element(&mut doc, body, "button");
     doc.mutate().set_text_content(disabled, "Disabled");
     doc.mutate()

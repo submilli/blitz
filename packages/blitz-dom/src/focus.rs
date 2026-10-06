@@ -91,6 +91,21 @@ struct FocusContext {
 }
 
 impl BaseDocument {
+    /// Find the focusable area containing a pointer hit in flattened ancestor
+    /// order. Shared eligibility caches ancestry so a deep inert subtree does
+    /// not rescan the same parents for each candidate. Script focus never
+    /// promotes an unfocusable receiver to its parent.
+    pub fn click_focus_target(&self, hit: NodeId) -> Option<NodeId> {
+        let mut candidates = Vec::new();
+        let mut current = Some(hit);
+        while let Some(id) = current {
+            let node = self.get_node(id)?;
+            candidates.push(id);
+            current = node.flat_parent_id();
+        }
+        self.first_programmatically_focusable(&candidates)
+    }
+
     /// First eligible control in caller order after layout has been resolved.
     /// Memoize ancestor context across candidates, including distinct DOM roots,
     /// so reporting many unfocusable controls visits each ancestor at most once.
@@ -234,5 +249,41 @@ impl BaseDocument {
             }
             focused = self.shadow_host_of(root)?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DocumentConfig, QualName};
+
+    #[test]
+    fn pointer_focus_reuses_ancestor_context_in_deep_inert_subtrees() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let mut parent = doc.root_node().id;
+        let mut candidates = Vec::new();
+        for _ in 0..1_024 {
+            let mut mutation = doc.mutate();
+            let node =
+                mutation.create_element(QualName::new(None, ns!(html), local_name!("div")), vec![]);
+            mutation.set_attribute(node, QualName::new(None, ns!(), "tabindex".into()), "-1");
+            mutation.append_children(parent, &[node]);
+            candidates.push(node);
+            parent = node;
+        }
+        let outer = candidates[0];
+        doc.mutate()
+            .set_attribute(outer, QualName::new(None, ns!(), "inert".into()), "");
+        let mut contexts = HashMap::new();
+        assert!(!doc.focusable_with_context(parent, &mut contexts));
+        let cached = contexts.len();
+        assert_eq!(cached, candidates.len() + 1);
+        for &node in candidates.iter().rev() {
+            assert!(!doc.focusable_with_context(node, &mut contexts));
+            assert_eq!(contexts.len(), cached);
+        }
+        assert_eq!(doc.click_focus_target(parent), None);
+        doc.mutate().remove_attribute_by_name(outer, "inert");
+        assert_eq!(doc.click_focus_target(parent), Some(parent));
     }
 }
