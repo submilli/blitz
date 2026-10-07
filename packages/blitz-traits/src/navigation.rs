@@ -67,6 +67,7 @@ impl NavigationOptions {
             signal: None,
             stylesheet: None,
             image: false,
+            initiator: crate::net::ResourceInitiator::Other,
         }
     }
 }

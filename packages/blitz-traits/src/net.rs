@@ -83,6 +83,18 @@ impl<F: Fn(usize) + Send + Sync + 'static> NetWaker for F {
     }
 }
 
+/// The source that initiated a resource load, independent of its URL or body.
+/// This is reporting metadata; it grants no network or origin authority.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ResourceInitiator {
+    #[default]
+    Other,
+    Link,
+    Img,
+    Input,
+    Css,
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 /// A request type loosely representing <https://fetch.spec.whatwg.org/#requests>
@@ -96,6 +108,7 @@ pub struct Request {
     pub stylesheet: Option<StylesheetMode>,
     /// No-CORS image request; origin authority comes only from response metadata.
     pub image: bool,
+    pub initiator: ResourceInitiator,
 }
 impl Request {
     /// A get request to the specified Url and an empty body
@@ -109,16 +122,24 @@ impl Request {
             signal: None,
             stylesheet: None,
             image: false,
+            initiator: ResourceInitiator::Other,
         }
     }
 
     pub fn image(mut self) -> Self {
         self.image = true;
+        self.initiator = ResourceInitiator::Img;
         self
     }
 
     pub fn stylesheet(mut self, mode: StylesheetMode) -> Self {
         self.stylesheet = Some(mode);
+        self.initiator = ResourceInitiator::Link;
+        self
+    }
+
+    pub fn initiator(mut self, initiator: ResourceInitiator) -> Self {
+        self.initiator = initiator;
         self
     }
 
@@ -292,3 +313,47 @@ impl std::fmt::Display for FormDataLimit {
     }
 }
 impl std::error::Error for FormDataLimit {}
+
+#[cfg(test)]
+mod initiator_tests {
+    use super::*;
+    #[test]
+    fn initiating_source_is_independent_of_url_extension_and_response_kind() {
+        let url = Url::parse("https://page.test/no-extension").unwrap();
+        assert_eq!(
+            Request::get(url.clone()).initiator,
+            ResourceInitiator::Other
+        );
+        assert_eq!(
+            Request::get(url.clone()).image().initiator,
+            ResourceInitiator::Img
+        );
+        assert_eq!(
+            Request::get(url.clone())
+                .image()
+                .initiator(ResourceInitiator::Input)
+                .initiator,
+            ResourceInitiator::Input
+        );
+        assert_eq!(
+            Request::get(url.clone())
+                .image()
+                .initiator(ResourceInitiator::Css)
+                .initiator,
+            ResourceInitiator::Css
+        );
+        assert_eq!(
+            Request::get(url.clone())
+                .stylesheet(StylesheetMode::NoCors)
+                .initiator,
+            ResourceInitiator::Link
+        );
+        assert_eq!(
+            Request::get(url)
+                .stylesheet(StylesheetMode::NoCors)
+                .initiator(ResourceInitiator::Css)
+                .initiator,
+            ResourceInitiator::Css
+        );
+    }
+}

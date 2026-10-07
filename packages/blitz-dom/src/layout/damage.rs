@@ -514,7 +514,9 @@ impl BaseDocument {
                             crate::net::stamped_request(
                                 (**new_url).clone(),
                                 self.abort_signal.as_ref(),
-                            ).image(),
+                            )
+                            .image()
+                            .initiator(blitz_traits::net::ResourceInitiator::Css),
                             Box::new(handler),
                         );
 

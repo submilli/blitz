@@ -1690,7 +1690,16 @@ impl<'doc> DocumentMutator<'doc> {
                 );
                 self.doc.net_provider.fetch(
                     self.doc.id(),
-                    self.doc.build_request(src).image(),
+                    self.doc.build_request(src).image().initiator(
+                        if self.doc.nodes[target_id]
+                            .element_data()
+                            .is_some_and(|e| e.is_image_input())
+                        {
+                            blitz_traits::net::ResourceInitiator::Input
+                        } else {
+                            blitz_traits::net::ResourceInitiator::Img
+                        },
+                    ),
                     Box::new(handler),
                 );
             }

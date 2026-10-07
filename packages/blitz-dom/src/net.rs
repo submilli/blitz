@@ -242,7 +242,8 @@ impl ServoStylesheetLoader for StylesheetLoader {
         self.net_provider.fetch(
             self.doc_id,
             stamped_request(url.as_ref().clone(), self.abort_signal.as_ref())
-                .stylesheet(blitz_traits::net::StylesheetMode::NoCors),
+                .stylesheet(blitz_traits::net::StylesheetMode::NoCors)
+                .initiator(blitz_traits::net::ResourceInitiator::Css),
             ResourceHandler::boxed(
                 self.tx.clone(),
                 self.doc_id,
@@ -533,7 +534,8 @@ pub(crate) fn fetch_font_face_rules<'a>(
             if let Some((url, format)) = preferred_source {
                 network_provider.fetch(
                     doc_id,
-                    stamped_request(url, abort_signal),
+                    stamped_request(url, abort_signal)
+                        .initiator(blitz_traits::net::ResourceInitiator::Css),
                     ResourceHandler::boxed(
                         tx.clone(),
                         doc_id,
@@ -767,6 +769,7 @@ mod stylesheet_authority_tests {
         struct Capture(std::sync::Mutex<Vec<String>>);
         impl NetProvider for Capture {
             fn fetch(&self, _: usize, request: Request, _: Box<dyn NetHandler>) {
+                assert_eq!(request.initiator, blitz_traits::net::ResourceInitiator::Css);
                 self.0.lock().unwrap().push(request.url.to_string());
             }
         }
@@ -833,6 +836,7 @@ mod image_authority_tests {
     impl NetProvider for ImageProvider {
         fn fetch(&self, _: usize, request: Request, handler: Box<dyn NetHandler>) {
             assert!(request.image);
+            assert_eq!(request.initiator, blitz_traits::net::ResourceInitiator::Img);
             self.requests.fetch_add(1, Ao::Relaxed);
             handler.bytes_with_metadata(
                 request.url.to_string(),
@@ -881,3 +885,6 @@ mod image_authority_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod initiator_source_tests;
