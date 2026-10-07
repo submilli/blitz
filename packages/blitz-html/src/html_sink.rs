@@ -37,6 +37,15 @@ impl HtmlParserProvider for HtmlProvider {
         DocumentHtmlParser::try_parse_inner_html_into_mutator(mutr, element_id, html)
     }
 
+    fn try_parse_html_unsafe(
+        &self,
+        mutr: &mut DocumentMutator<'_>,
+        element_id: NodeId,
+        html: &str,
+    ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
+        DocumentHtmlParser::try_parse_fragment(mutr, element_id, html, true)
+    }
+
     fn try_parse_into_document_node(
         &self,
         mutr: &mut DocumentMutator<'_>,
@@ -116,6 +125,8 @@ pub struct HtmlSink<A: DocAccess> {
     pub is_xml: bool,
     /// Fragment parsing (`innerHTML`): scripts are marked already started.
     pub fragment: bool,
+    /// Enabled for navigation and unsafe fragments, disabled for innerHTML.
+    pub declarative: bool,
     /// Build into this detached document node instead of the tree's root.
     pub document_node: Option<NodeId>,
     /// Once admission fails, this parse stops changing the document.
@@ -133,6 +144,7 @@ pub struct ParserHandle(Rc<ParserNode>);
 struct ParserNode {
     lease: Option<blitz_dom::NodeLease>,
     parser_form: Cell<Option<NodeId>>,
+    declarative_root: Cell<Option<NodeId>>,
     name: QualName,
 }
 
@@ -161,6 +173,7 @@ impl ParserHandle {
             lease,
             name,
             parser_form: Cell::new(None),
+            declarative_root: Cell::new(None),
         }))
     }
 
@@ -184,6 +197,7 @@ impl<A: DocAccess> HtmlSink<A> {
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             is_xml: false,
             fragment: false,
+            declarative: true,
             document_node: None,
             exhausted: Cell::new(false),
             allocations: None,
@@ -336,6 +350,7 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.document_node = Some(document);
         sink.fragment = true;
+        sink.declarative = false;
         let allocations = Rc::new(RefCell::new(Vec::new()));
         sink.allocations = Some(allocations.clone());
         if xml {
@@ -392,13 +407,29 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         element_id: NodeId,
         html: &str,
     ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
+        Self::try_parse_fragment(mutr, element_id, html, false)
+    }
+
+    fn try_parse_fragment(
+        mutr: &mut DocumentMutator<'_>,
+        element_id: NodeId,
+        html: &str,
+        declarative: bool,
+    ) -> Result<(), blitz_dom::NodeBudgetExceeded> {
         // Parse under a detached document: html5ever puts the fragment's root
         // element under the document node, and under the real document the
         // parsed nodes would briefly be connected (visible to mutation
         // observers, which could then hold a node dropped below).
         let base = mutr.doc.document_base_url(element_id);
+        let disabled_shadow_definitions = mutr
+            .doc
+            .document_metadata(element_id)
+            .disabled_shadow_definitions
+            .clone();
         let scratch = mutr.try_create_document_node()?;
-        mutr.document_metadata_mut(scratch).inherited_base_url = Some(base);
+        let metadata = mutr.document_metadata_mut(scratch);
+        metadata.inherited_base_url = Some(base);
+        metadata.disabled_shadow_definitions = disabled_shadow_definitions;
         let context_name = mutr.element_name(element_id).cloned();
         let Some(context_name) = context_name else {
             mutr.remove_and_drop_node(scratch);
@@ -407,6 +438,7 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         let context = ParserHandle::new(Some(mutr.doc.lease_node(element_id)), context_name);
         let mut sink = DocumentHtmlParser::new(mutr);
         sink.fragment = true;
+        sink.declarative = declarative;
         sink.document_node = Some(scratch);
         let allocations = Rc::new(RefCell::new(Vec::new()));
         sink.allocations = Some(allocations.clone());
@@ -590,7 +622,71 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         }
     }
 
+    fn allow_declarative_shadow_roots(&self, _: &Self::Handle) -> bool {
+        self.declarative && !self.is_xml && !self.exhausted.get()
+    }
+
+    fn attach_declarative_shadow(
+        &self,
+        location: &Self::Handle,
+        template: &Self::Handle,
+        attrs: &[html5ever::Attribute],
+    ) -> bool {
+        let Some(host) = location.node_id() else {
+            return false;
+        };
+        // A second declaration remains a template; it must never hydrate or
+        // clear the first root. Only the imperative API may hydrate it.
+        if self.with(|m| m.doc.shadow_root_of(host).is_some()) {
+            return false;
+        }
+        let value = |name: &str| {
+            attrs
+                .iter()
+                .find(|a| a.name.ns == html5ever::ns!() && a.name.local.as_ref() == name)
+                .map(|a| a.value.as_ref())
+        };
+        let open = match value("shadowrootmode") {
+            Some(mode) if mode.eq_ignore_ascii_case("open") => true,
+            Some(mode) if mode.eq_ignore_ascii_case("closed") => false,
+            _ => return false,
+        };
+        let init = blitz_dom::shadow::ShadowRootInit {
+            open,
+            delegates_focus: value("shadowrootdelegatesfocus").is_some(),
+            clonable: value("shadowrootclonable").is_some(),
+            serializable: value("shadowrootserializable").is_some(),
+            manual_slots: false,
+        };
+        let result = self.with(|m| m.attach_shadow(host, init));
+        let root = match result {
+            Ok(root) => root,
+            Err(blitz_dom::shadow::AttachShadowError::NodeBudgetExceeded) => {
+                self.exhausted.set(true);
+                return false;
+            }
+            Err(_) => return false,
+        };
+        if let Some(allocations) = &self.allocations {
+            allocations.borrow_mut().push(root);
+        }
+        self.with(|m| {
+            m.doc
+                .get_node_mut(root)
+                .expect("newly attached node")
+                .shadow_root_data
+                .as_deref_mut()
+                .expect("newly attached shadow root")
+                .declarative = true;
+        });
+        template.0.declarative_root.set(Some(root));
+        true
+    }
+
     fn get_template_contents(&self, target: &Self::Handle) -> Self::Handle {
+        if let Some(root) = target.0.declarative_root.get() {
+            return self.non_element(Some(root));
+        }
         if let Some(existing) = target
             .node_id()
             .and_then(|id| self.with(|m| m.try_template_contents(id)))

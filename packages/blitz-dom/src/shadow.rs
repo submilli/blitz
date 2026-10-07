@@ -105,11 +105,32 @@ impl DocumentMutator<'_> {
         let valid = element.name.ns == markup5ever::ns!(html)
             && (VALID_HOSTS.contains(&local)
                 || crate::custom_elements::is_valid_custom_element_name(local));
-        if !valid {
+        let disabled = &self.doc.document_metadata(host).disabled_shadow_definitions;
+        // Autonomous definitions take precedence over any inert `is` attribute.
+        let shadow_disabled = disabled.get(local).is_some_and(|name| name == local)
+            || element.custom_element_is.as_deref().is_some_and(|name| {
+                disabled
+                    .get(name)
+                    .is_some_and(|local_name| local_name == local)
+            });
+        if !valid || shadow_disabled {
             return Err(AttachShadowError::NotSupported);
         }
-        if element.shadow_root.is_some() {
-            return Err(AttachShadowError::AlreadyAttached);
+        if let Some(root) = element.shadow_root {
+            let data = self.doc.nodes[root]
+                .shadow_root_data
+                .as_deref()
+                .expect("host points to a shadow root");
+            if !data.declarative || data.open != init.open {
+                return Err(AttachShadowError::AlreadyAttached);
+            }
+            self.replace_all(root, None);
+            self.doc.nodes[root]
+                .shadow_root_data
+                .as_deref_mut()
+                .expect("host points to a shadow root")
+                .declarative = false;
+            return Ok(root);
         }
         let root = self
             .try_create_document_fragment()
@@ -122,6 +143,7 @@ impl DocumentMutator<'_> {
             manual_slots: init.manual_slots,
             clonable: init.clonable,
             serializable: init.serializable,
+            declarative: false,
         }));
         self.doc.nodes[host]
             .element_data_mut()

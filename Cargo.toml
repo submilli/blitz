@@ -28,7 +28,7 @@ members = [
     "examples/wgpu_texture",
     "examples/wasm_hello",
 ]
-exclude = ["sites", "packages/stylo", "packages/xml5ever"]
+exclude = ["sites", "packages/stylo", "packages/xml5ever", "packages/html5ever"]
 resolver = "2"
 
 [workspace.package]
@@ -69,7 +69,7 @@ cssparser = { version = "0.37.0" }
 
 # HTML5ever dependencies
 markup5ever = "0.39.0" # needs to match stylo web_atoms version
-html5ever = "0.39.0"   # needs to match stylo web_atoms version
+html5ever = { path = "packages/html5ever" }   # needs to match stylo web_atoms version
 xml5ever = { path = "packages/xml5ever" }    # needs to match stylo web_atoms version
 
 # Other Servo dependencies

@@ -45,6 +45,9 @@ pub struct DocumentMetadata {
     pub inherited_base_url: Option<url::Url>,
     /// Detached factories snapshot their creator's origin domain.
     pub domain: String,
+    /// Bounded registry metadata supplied by the bindings, shared with parser
+    /// scratch documents. Constructors and callbacks remain in the JS realm.
+    pub disabled_shadow_definitions: std::rc::Rc<std::collections::HashMap<String, String>>,
 }
 
 impl BaseDocument {

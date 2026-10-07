@@ -14,6 +14,16 @@ pub trait HtmlParserProvider {
         Ok(())
     }
 
+    /// Unsafe fragment parsing admits declarative shadow roots.
+    fn try_parse_html_unsafe(
+        &self,
+        mutr: &mut DocumentMutator<'_>,
+        element_id: NodeId,
+        html: &str,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
+        self.try_parse_inner_html(mutr, element_id, html)
+    }
+
     /// Fallible inert-document parsing; normal page loads may instead stop
     /// at the budget and retain their successfully parsed prefix.
     fn try_parse_into_document_node(

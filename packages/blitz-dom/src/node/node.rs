@@ -111,6 +111,8 @@ pub struct ShadowRootData {
     pub manual_slots: bool,
     pub clonable: bool,
     pub serializable: bool,
+    /// Parser-created roots can be cleared once by matching attachShadow.
+    pub declarative: bool,
 }
 
 pub struct Node {

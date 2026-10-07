@@ -861,6 +861,25 @@ impl DocumentMutator<'_> {
         id: NodeId,
         html: &str,
     ) -> Result<(), crate::NodeBudgetExceeded> {
+        self.try_replace_html(id, html, false)
+    }
+
+    /// HTML unsafe parsing enables parser-owned declarative roots. Admission
+    /// remains transactional and old children remain usable after replacement.
+    pub fn try_set_html_unsafe(
+        &mut self,
+        id: NodeId,
+        html: &str,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
+        self.try_replace_html(id, html, true)
+    }
+
+    fn try_replace_html(
+        &mut self,
+        id: NodeId,
+        html: &str,
+        declarative: bool,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
         let context = self.doc.shadow_host_of(id).unwrap_or(id);
         let Some(element) = self.doc.nodes[context].element_data() else {
             return Ok(());
@@ -880,7 +899,8 @@ impl DocumentMutator<'_> {
             return Ok(());
         }
         let scratch = self.try_create_element(name, Vec::new())?;
-        let result = self.parse_temporary_fragment(scratch, html);
+        self.set_node_document(scratch, self.doc.node_document(id));
+        let result = self.parse_temporary_fragment_mode(scratch, html, declarative);
         if let Err(error) = result {
             self.remove_and_drop_node(scratch);
             return Err(error);
@@ -969,13 +989,23 @@ impl DocumentMutator<'_> {
         scratch: NodeId,
         html: &str,
     ) -> Result<(), crate::NodeBudgetExceeded> {
+        self.parse_temporary_fragment_mode(scratch, html, false)
+    }
+
+    fn parse_temporary_fragment_mode(
+        &mut self,
+        scratch: NodeId,
+        html: &str,
+        declarative: bool,
+    ) -> Result<(), crate::NodeBudgetExceeded> {
         let log = self.doc.mutation_log.take();
         let selection_scratch = self.selection_scratch.replace(scratch);
-        let result = self
-            .doc
-            .html_parser_provider
-            .clone()
-            .try_parse_inner_html(self, scratch, html);
+        let provider = self.doc.html_parser_provider.clone();
+        let result = if declarative {
+            provider.try_parse_html_unsafe(self, scratch, html)
+        } else {
+            provider.try_parse_inner_html(self, scratch, html)
+        };
         self.doc.mutation_log = log;
         self.selection_scratch = selection_scratch;
         result
