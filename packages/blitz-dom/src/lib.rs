@@ -52,6 +52,7 @@ pub mod tree_notifications;
 pub mod node;
 pub mod shadow;
 
+mod calendar_editor;
 mod canvas_filter;
 mod canvas_font;
 mod canvas_style;

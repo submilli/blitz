@@ -21,10 +21,13 @@ pub struct FocusTransition {
     target: Option<NodeId>,
     epoch: u64,
     phase: Phase,
+    calendar_commit: Option<String>,
     _retained: Vec<NodeLease>,
 }
 #[derive(Clone, Copy)]
 enum Phase {
+    CalendarInput,
+    CalendarChange,
     Blur,
     FocusOut,
     Focus,
@@ -51,13 +54,15 @@ impl BaseDocument {
             .chain(target)
             .map(|id| self.lease_node(id))
             .collect();
+        let calendar_commit = old.and_then(|id| self.commit_calendar_field(id));
         self.clear_focus();
         self.shell_provider.request_redraw();
         Some(FocusTransition {
             old,
             target,
             epoch: self.focus_epoch,
-            phase: Phase::Blur,
+            phase: Phase::CalendarInput,
+            calendar_commit,
             _retained: retained,
         })
     }
@@ -69,6 +74,27 @@ impl FocusTransition {
     pub fn next_event(&mut self, doc: &mut BaseDocument) -> Option<DomEvent> {
         loop {
             match self.phase {
+                Phase::CalendarInput => {
+                    self.phase = Phase::CalendarChange;
+                    if let (Some(id), Some(value)) = (self.old, self.calendar_commit.as_ref()) {
+                        return Some(DomEvent::new(
+                            id,
+                            DomEventData::Input(blitz_traits::events::BlitzInputEvent {
+                                value: value.clone(),
+                            }),
+                        ));
+                    }
+                }
+                Phase::CalendarChange => {
+                    self.phase = Phase::Blur;
+                    if let (Some(id), Some(value)) = (self.old, self.calendar_commit.take()) {
+                        return Some(DomEvent::new(
+                            id,
+                            DomEventData::Change(blitz_traits::events::BlitzInputEvent { value }),
+                        ));
+                    }
+                }
+
                 Phase::Blur => {
                     self.phase = Phase::FocusOut;
                     if let Some(old) = self.old {

@@ -394,6 +394,7 @@ pub struct BaseDocument {
     pub html_parser_provider: Arc<dyn HtmlParserProvider>,
     /// Where "now" comes from. Set via [`DocumentConfig::clock`].
     pub clock: Arc<dyn Clock>,
+    pub(crate) calendar_reference_year: u32,
     /// Carried on every sub-resource `Request` this document issues; aborting
     /// it cancels all in-flight fetches tied to this document. Set via
     /// [`DocumentConfig::abort_signal`].
@@ -568,6 +569,7 @@ impl BaseDocument {
             shell_provider,
             html_parser_provider,
             clock,
+            calendar_reference_year: 1970,
             abort_signal: config.abort_signal,
             last_mousedown_time: None,
             mousedown_position: taffy::Point::ZERO,

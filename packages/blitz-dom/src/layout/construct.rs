@@ -550,10 +550,16 @@ fn collect_layout_children_with_wrap(
             if tag_name == "textarea" {
                 create_text_editor(doc, container_node_id, true);
                 return;
-            } else if matches!(
-                type_attr,
-                None | Some("text" | "password" | "email" | "number" | "search" | "tel" | "url")
-            ) {
+            } else if type_attr
+                .and_then(crate::calendar_editor::Kind::parse)
+                .is_some()
+                || matches!(
+                    type_attr,
+                    None | Some(
+                        "text" | "password" | "email" | "number" | "search" | "tel" | "url"
+                    )
+                )
+            {
                 create_text_editor(doc, container_node_id, false);
                 return;
             } else if matches!(type_attr, Some("checkbox" | "radio")) {
@@ -1046,7 +1052,11 @@ fn create_text_editor(doc: &mut BaseDocument, input_element_id: NodeId, is_multi
     editor.set_alignment(alignment);
 
     editor.refresh_layout(&mut doc.font_ctx.lock().unwrap(), &mut doc.layout_ctx);
-    doc.project_control_selection(input_element_id);
+    if doc.ensure_calendar_editor(input_element_id) {
+        doc.project_calendar_editor(input_element_id);
+    } else {
+        doc.project_control_selection(input_element_id);
+    }
 }
 
 fn create_checkbox_input(doc: &mut BaseDocument, input_element_id: NodeId) {

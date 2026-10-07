@@ -1,5 +1,5 @@
 //! Native candidate selection and live constraint state.
-mod calendar;
+pub(crate) mod calendar;
 mod number;
 mod pattern;
 pub(crate) mod text;

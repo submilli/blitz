@@ -243,6 +243,7 @@ impl crate::DocumentMutator<'_> {
         if &*name.local == "type" {
             if let Some(e) = self.doc.nodes[id].element_data_mut() {
                 e.clear_file_selection();
+                e.form_state.calendar = None;
             }
         }
         let Some(e) = self.doc.nodes[id].element_data() else {

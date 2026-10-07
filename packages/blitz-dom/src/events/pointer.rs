@@ -366,6 +366,7 @@ pub(crate) fn handle_pointermove<F: FnMut(super::GeneratedEvent)>(
             .editor
             .driver(&mut doc.font_ctx.lock().unwrap(), &mut doc.layout_ctx)
             .extend_selection_to_point(x as f32, y as f32);
+        doc.select_calendar_field(target, &mut dispatch_event);
 
         changed = true;
     } else if event.is_mouse()
@@ -545,6 +546,7 @@ pub(crate) fn handle_pointerdown(
 
                 drop(font_ctx);
             }
+            doc.select_calendar_field(actual_target, &mut |event| dispatch_event(event));
         }
     }
 }

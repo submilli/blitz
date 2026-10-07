@@ -47,6 +47,7 @@ macro_rules! local_names {
 /// follows the `value`/`checked` attributes.
 #[derive(Debug, Clone, Default)]
 pub struct FormControlState {
+    pub(crate) calendar: Option<crate::calendar_editor::CalendarEditor>,
     /// Host-authorized immutable file snapshots; reset with file selection.
     pub files: std::sync::Arc<[blitz_traits::net::FormFile]>,
     /// Authoritative current value; the text editor only owns its scalar projection.

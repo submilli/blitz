@@ -531,6 +531,7 @@ impl DocumentMutator<'_> {
             el.form_state.selection =
                 crate::form_selection::ControlSelection::caret(value.to_utf16().len());
         }
+        el.form_state.calendar = None;
         el.form_state.value = Some(value.clone());
         el.form_state.value_dirty = true;
         el.form_state.last_change_by_user = false;

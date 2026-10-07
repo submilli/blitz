@@ -103,7 +103,7 @@ fn time(value: &str) -> Option<f64> {
     parts.next().is_none().then_some(millis as f64)
 }
 
-pub(super) fn parse(kind: &str, value: &str) -> Option<f64> {
+pub(crate) fn parse(kind: &str, value: &str) -> Option<f64> {
     match kind {
         "date" => date(value),
         "month" => month(value),
@@ -119,7 +119,7 @@ pub(super) fn parse(kind: &str, value: &str) -> Option<f64> {
 }
 
 /// Local datetimes use the shortest normalized time representation.
-pub(super) fn normalize_datetime(value: &str) -> String {
+pub(crate) fn normalize_datetime(value: &str) -> String {
     let Some((date, time)) = value.split_once(['T', ' ']) else {
         return String::new();
     };

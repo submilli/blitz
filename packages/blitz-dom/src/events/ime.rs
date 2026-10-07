@@ -8,6 +8,9 @@ pub(crate) fn handle_ime_event<F: FnMut(super::GeneratedEvent)>(
     dispatch_event: F,
 ) -> Option<super::FormAction> {
     if let Some(node_id) = doc.focus_node_id {
+        if doc.ensure_calendar_editor(node_id) {
+            return None;
+        }
         let node = &mut doc.nodes[node_id];
         let text_input_data = node
             .data

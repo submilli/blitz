@@ -163,6 +163,9 @@ pub(super) fn constraints(
         } else {
             parse(kind, raw).is_none()
         };
+    if let Some(editor) = e.form_state.calendar.as_ref() {
+        state.bad_input = editor.bad_input();
+    }
     let parsed = if kind == "number" && e.form_state.last_change_by_user {
         user_value(value).and_then(|v| v.parse::<f64>().ok())
     } else {

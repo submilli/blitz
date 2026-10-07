@@ -18,7 +18,48 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(super::GeneratedEvent)>(
     event: KeyboardOrTextInputEvent,
     mut dispatch_event: F,
 ) -> Option<super::FormAction> {
+    if let KeyboardOrTextInputEvent::AppleStandardKeyBinding(command) = &event {
+        if doc.focus_node_id == Some(target) && doc.ensure_calendar_editor(target) {
+            let key = match command.as_str() {
+                "moveLeft:" | "moveBackward:" => Some(Key::ArrowLeft),
+                "moveRight:" | "moveForward:" => Some(Key::ArrowRight),
+                "moveUp:" => Some(Key::ArrowUp),
+                "moveDown:" => Some(Key::ArrowDown),
+                "deleteBackward:" => Some(Key::Backspace),
+                "deleteForward:" => Some(Key::Delete),
+                "insertTab:" => Some(Key::Tab),
+                "insertBacktab:" => Some(Key::Tab),
+                "insertNewline:" | "insertLineBreak:" => Some(Key::Enter),
+                _ => None,
+            };
+            let key = key?;
+            let event = BlitzKeyEvent {
+                key,
+                code: keyboard_types::Code::Unidentified,
+                modifiers: if command == "insertBacktab:" {
+                    Modifiers::SHIFT
+                } else {
+                    Modifiers::empty()
+                },
+                location: keyboard_types::Location::Standard,
+                is_auto_repeating: false,
+                is_composing: false,
+                state: blitz_traits::events::KeyState::Pressed,
+                text: None,
+            };
+            return handle_key_or_input_event(
+                doc,
+                target,
+                KeyboardOrTextInputEvent::KeyPress(event),
+                dispatch_event,
+            );
+        }
+    }
     if let KeyboardOrTextInputEvent::KeyPress(event) = &event {
+        if doc.focus_node_id == Some(target) && doc.calendar_key(target, event, &mut dispatch_event)
+        {
+            return None;
+        }
         if event.key == Key::Tab {
             doc.flush_style_and_layout(0.0);
             let backwards = event.modifiers.contains(Modifiers::SHIFT);
