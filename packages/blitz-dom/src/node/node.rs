@@ -160,6 +160,9 @@ pub struct Node {
 
     // Flags
     pub flags: NodeFlags,
+    /// Structural selector dependencies apply to elements and their parent
+    /// containers, including documents and shadow-root fragments.
+    selector_flags: Cell<ElementSelectorFlags>,
 
     /// For a shadow root (a fragment attached to a host element): its host
     /// and options. `None` for every other node.
@@ -227,13 +230,15 @@ universal_accessors! {
     // carries these:
     element_state / element_state_mut: ElementState,
     snapshot_handled / snapshot_handled_mut: AtomicBool,
-    // `apply_selector_flags` deposits `for_parent()` flags on the parent node,
-    // and the parent of the root <html> element is the document -- so the
-    // document has to be able to hold selector flags too.
-    selector_flags / selector_flags_mut: Cell<ElementSelectorFlags>,
+
 }
 
 impl Node {
+    #[inline]
+    pub fn selector_flags(&self) -> &Cell<ElementSelectorFlags> {
+        &self.selector_flags
+    }
+
     /// This node's layout output state, or a shared default if layout has
     /// never written to this node.
     ///
@@ -475,6 +480,7 @@ impl Node {
             sc_contribution_cache: RefCell::new(ThinVec::new()),
 
             flags: NodeFlags::empty(),
+            selector_flags: Cell::new(ElementSelectorFlags::empty()),
             shadow_root_data: None,
             manual_slot: None,
             manual_slottables: Vec::new(),

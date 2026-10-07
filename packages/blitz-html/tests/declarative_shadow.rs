@@ -160,3 +160,32 @@ fn registered_disabled_shadow_hosts_keep_the_template() {
         1
     );
 }
+
+#[test]
+fn structural_selectors_on_shadow_children_survive_sibling_mutations() {
+    let mut doc = document(128);
+    let host = doc.query_selector("#host").unwrap().unwrap();
+    doc.mutate().try_set_html_unsafe(host,
+        "<div id=styled><template shadowrootmode=open><style>b { display:block; width:11px } b:first-child { width:31px } b:nth-child(2) { width:22px }</style><b id=first>one</b><b id=second>two</b></template></div>"
+    ).unwrap();
+    let styled = doc.query_selector("#styled").unwrap().unwrap();
+    let root = doc.shadow_root_of(styled).unwrap();
+    let first = doc.query_selector_in(root, "#first").unwrap().unwrap();
+    let second = doc.query_selector_in(root, "#second").unwrap().unwrap();
+    doc.resolve(0.0);
+    assert_eq!(doc.get_node(first).unwrap().final_layout().size.width, 22.0);
+    assert_eq!(
+        doc.get_node(second).unwrap().final_layout().size.width,
+        11.0
+    );
+    doc.mutate().remove_node(second);
+    doc.resolve(0.0);
+    assert_eq!(doc.get_node(first).unwrap().final_layout().size.width, 22.0);
+    doc.mutate().insert_nodes_before(first, &[second]);
+    doc.resolve(0.0);
+    assert_eq!(
+        doc.get_node(second).unwrap().final_layout().size.width,
+        22.0
+    );
+    assert_eq!(doc.get_node(first).unwrap().final_layout().size.width, 11.0);
+}

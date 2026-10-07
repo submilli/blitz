@@ -3,8 +3,7 @@ use cssparser::ParserInput;
 use kurbo::{Affine, Rect as KurboRect};
 use linebender_resource_handle::Blob;
 use markup5ever::{LocalName, QualName, local_name};
-use selectors::matching::{ElementSelectorFlags, QuirksMode};
-use std::cell::Cell;
+use selectors::matching::QuirksMode;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -154,7 +153,6 @@ pub struct ElementData {
     // ---------------------------------------------------------------------
     /// Style data from stylo, plus a lock guard that allows access to it.
     pub stylo_element_data: StyloData,
-    pub selector_flags: Cell<ElementSelectorFlags>,
     /// A clone of the document's shared style lock. Set when the owning
     /// [`Node`](super::Node) is constructed.
     pub guard: Option<SharedRwLock>,
@@ -261,10 +259,6 @@ pub struct DocumentData {
     pub metadata: crate::DocumentMetadata,
     pub(crate) base: crate::document_base::DocumentBase,
     pub stylo_element_data: StyloData,
-    /// Selector flags deposited here by `apply_selector_flags` when a
-    /// `for_parent()` flag is applied while matching the root `<html>` element,
-    /// whose parent node is the document.
-    pub selector_flags: Cell<ElementSelectorFlags>,
     /// A clone of the document's shared style lock. Set when the owning
     /// [`Node`](super::Node) is constructed.
     pub guard: Option<SharedRwLock>,
@@ -279,8 +273,7 @@ pub struct DocumentData {
     pub transform: Option<Box<Affine>>,
 }
 
-// Hand-written like `ElementData`'s, because `ElementSelectorFlags` does not
-// implement `Debug`. Every other field is still reported.
+// Report the document state without requiring Debug on stylesheet internals.
 impl std::fmt::Debug for DocumentData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DocumentData")
@@ -305,7 +298,6 @@ impl DocumentData {
             metadata: Default::default(),
             base: Default::default(),
             stylo_element_data: Default::default(),
-            selector_flags: Cell::new(ElementSelectorFlags::empty()),
             guard: None,
             dirty_descendants: AtomicBool::new(true),
             damaged_descendants: AtomicBool::new(true),
@@ -383,7 +375,6 @@ impl Clone for ElementData {
 
             // Runtime state: reset to defaults.
             stylo_element_data: Default::default(),
-            selector_flags: Cell::new(ElementSelectorFlags::empty()),
             guard: self.guard.clone(),
             element_state: self.element_state,
             has_snapshot: false,
@@ -525,7 +516,6 @@ impl ElementData {
             mask_images: ThinVec::new(),
 
             stylo_element_data: Default::default(),
-            selector_flags: Cell::new(ElementSelectorFlags::empty()),
             guard: None,
             element_state: ElementState::empty(),
             has_snapshot: false,
