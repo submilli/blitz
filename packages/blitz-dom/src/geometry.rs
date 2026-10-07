@@ -5,7 +5,9 @@ use kurbo::{Affine, Point};
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
 
 mod observers;
+mod visibility;
 pub use observers::{IntersectionGeometry, ResizeGeometry};
+pub use visibility::VisibilityBudget;
 
 impl BaseDocument {
     /// Whether the element generates boxes in the active document after layout.
@@ -165,6 +167,8 @@ impl BaseDocument {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod visibility_tests;
 
 /// Untransformed CSSOM layout metrics. Floating-point values are rounded by the
 /// Web IDL adapter; scroll positions retain subpixel precision separately.

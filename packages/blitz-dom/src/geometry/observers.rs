@@ -109,6 +109,18 @@ impl BaseDocument {
             self.transform_client_rect(id, root_rect, None)
         });
         let mut hit = Some(bounds);
+        let mut clip_ancestor = Some(target);
+        while let Some(id) = clip_ancestor {
+            // Chrome excludes an explicit root's own clip-path from its root
+            // intersection rectangle; static ancestors below it still clip paint.
+            if Some(id) == element_root {
+                break;
+            }
+            if let Some(clip) = self.observer_shape_clip_rect(id) {
+                hit = hit.and_then(|rect| clip_axes(rect, clip, true, true));
+            }
+            clip_ancestor = self.get_node(id).and_then(|n| n.flat_parent_id());
+        }
         let mut current = node.containing_block();
         let mut reached_root = element_root.is_none();
         while let Some(id) = current {
@@ -149,6 +161,71 @@ impl BaseDocument {
             intersects: hit.is_some(),
             ratio,
         }
+    }
+
+    // Use the same basic-shape paths as the painter; intersections use their
+    // bounding rectangle rather than the filled area of the shape.
+    fn observer_shape_clip_rect(&self, id: NodeId) -> Option<BoundingRect> {
+        use style::values::computed::basic_shape::ClipPath;
+        use style::values::generics::basic_shape::{ShapeBox, ShapeGeometryBox};
+        let node = self.get_node(id)?;
+        let ClipPath::Shape(shape, geometry_box) = node.primary_styles()?.clone_clip_path() else {
+            return None;
+        };
+        let layout = node.unrounded_layout();
+        let (mut left, mut top, mut right, mut bottom) = (
+            0.0,
+            0.0,
+            f64::from(layout.size.width),
+            f64::from(layout.size.height),
+        );
+        match geometry_box {
+            ShapeGeometryBox::FillBox | ShapeGeometryBox::ShapeBox(ShapeBox::ContentBox) => {
+                left += f64::from(layout.border.left + layout.padding.left);
+                top += f64::from(layout.border.top + layout.padding.top);
+                right -= f64::from(layout.border.right + layout.padding.right);
+                bottom -= f64::from(layout.border.bottom + layout.padding.bottom);
+            }
+            ShapeGeometryBox::ShapeBox(ShapeBox::PaddingBox) => {
+                left += f64::from(layout.border.left);
+                top += f64::from(layout.border.top);
+                right -= f64::from(layout.border.right);
+                bottom -= f64::from(layout.border.bottom);
+            }
+            ShapeGeometryBox::ShapeBox(ShapeBox::MarginBox) => {
+                left -= f64::from(layout.margin.left);
+                top -= f64::from(layout.margin.top);
+                right += f64::from(layout.margin.right);
+                bottom += f64::from(layout.margin.bottom);
+            }
+            _ => {}
+        }
+        use kurbo::Shape;
+        let reference = crate::ShapeReferenceBox {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        };
+        let bounds = crate::basic_shape_to_path(&shape, reference)
+            .map(|p| p.bounding_box())
+            .unwrap_or(kurbo::Rect::ZERO);
+        let (left, top, right, bottom) = (bounds.x0, bounds.y0, bounds.x1, bounds.y1);
+        let pos = node.unrounded_absolute_position(
+            node.scroll_offset().x as f32,
+            node.scroll_offset().y as f32,
+        );
+        let scroll = self.geometry_viewport_scroll(id);
+        Some(self.transform_client_rect(
+            id,
+            BoundingRect {
+                x: f64::from(pos.x) - scroll.x + left,
+                y: f64::from(pos.y) - scroll.y + top,
+                width: (right - left).max(0.0),
+                height: (bottom - top).max(0.0),
+            },
+            None,
+        ))
     }
 
     fn observer_clip_rect(&self, id: NodeId, transformed: bool) -> Option<BoundingRect> {

@@ -435,6 +435,16 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
 
         // Compute clip-path (if any) and wrap all rendering in a clip layer
         let clip_path_shape = cx.clip_path_shape();
+        if clip_path_shape.is_none()
+            && matches!(
+                styles.clone_clip_path(),
+                style::values::computed::basic_shape::ClipPath::Shape(_, _)
+            )
+        {
+            // An empty or unadmitted basic clip draws nothing. Falling back to
+            // an unclipped box would contradict observer evidence and its bounds.
+            return;
+        }
         let has_clip_path = clip_path_shape.is_some();
         let default_clip = cx.frame.border_box_path();
         let mut clip_path_for_layer = clip_path_shape.unwrap_or(default_clip);

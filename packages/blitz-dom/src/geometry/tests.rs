@@ -1,6 +1,6 @@
 use crate::{BaseDocument, DocumentConfig, NodeId, QualName, ScrollBehavior, ns};
 
-fn element(doc: &mut BaseDocument, parent: NodeId, name: &str, css: &str) -> NodeId {
+pub(super) fn element(doc: &mut BaseDocument, parent: NodeId, name: &str, css: &str) -> NodeId {
     let id = {
         let mut mutation = doc.mutate();
         let id = mutation.create_element(QualName::new(None, ns!(html), name.into()), vec![]);
@@ -11,7 +11,7 @@ fn element(doc: &mut BaseDocument, parent: NodeId, name: &str, css: &str) -> Nod
         .set_attribute(id, QualName::new(None, ns!(), "style".into()), css);
     id
 }
-fn document() -> (BaseDocument, NodeId) {
+pub(super) fn document() -> (BaseDocument, NodeId) {
     let mut doc = BaseDocument::new(DocumentConfig::default());
     let root = doc.root_node().id;
     let html = element(&mut doc, root, "html", "margin:0;padding:0");

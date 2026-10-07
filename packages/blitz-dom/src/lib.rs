@@ -81,7 +81,7 @@ pub use checkable_activation::CheckableActivation;
 mod disabled;
 mod focus;
 mod geometry;
-pub use geometry::{BoxMetrics, IntersectionGeometry, ResizeGeometry};
+pub use geometry::{BoxMetrics, IntersectionGeometry, ResizeGeometry, VisibilityBudget};
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;
@@ -368,3 +368,7 @@ mod font_ctx_tests {
         assert_eq!(ctx.collection.family_names().count(), 1);
     }
 }
+
+mod shape_path;
+pub(crate) use shape_path::basic_shape_work;
+pub use shape_path::{ShapeReferenceBox, basic_shape_to_path};
