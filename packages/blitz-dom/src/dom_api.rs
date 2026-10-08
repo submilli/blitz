@@ -279,6 +279,40 @@ impl BaseDocument {
         Ok(())
     }
 
+    /// The validity checks of [replace](https://dom.spec.whatwg.org/#concept-node-replace)
+    /// `child` with `node` in `parent`, before any change.
+    pub fn check_replace_child(
+        &self,
+        parent: NodeId,
+        node: NodeId,
+        child: NodeId,
+    ) -> Result<(), DomError> {
+        let parent_kind = self.node_type(parent);
+        if !matches!(
+            parent_kind,
+            node_type::DOCUMENT | node_type::DOCUMENT_FRAGMENT | node_type::ELEMENT
+        ) {
+            return Err(DomError::HierarchyRequest);
+        }
+        if self.is_host_including_inclusive_ancestor(node, parent) {
+            return Err(DomError::HierarchyRequest);
+        }
+        if self.nodes[child].parent != Some(parent) {
+            return Err(DomError::NotFound);
+        }
+        let node_kind = self.node_type(node);
+        if node_kind == node_type::DOCUMENT
+            || (node_kind == node_type::TEXT && parent_kind == node_type::DOCUMENT)
+            || (node_kind == node_type::DOCUMENT_TYPE && parent_kind != node_type::DOCUMENT)
+        {
+            return Err(DomError::HierarchyRequest);
+        }
+        if parent_kind == node_type::DOCUMENT {
+            self.check_document_child_constraints(node, parent, Some(child), Some(child))?;
+        }
+        Ok(())
+    }
+
     /// The document-specific rules of pre-insertion (and replacement, where
     /// `replacing` is the child being replaced).
     fn check_document_child_constraints(
@@ -358,8 +392,8 @@ pub fn attribute_qualified_name(attr: &Attribute) -> String {
 
 impl BaseDocument {
     fn is_html_element(&self, id: NodeId) -> bool {
-        self.nodes[id]
-            .element_data()
+        self.get_node(id)
+            .and_then(|node| node.element_data())
             .is_some_and(|el| el.name.ns == ns!(html))
     }
 
@@ -374,10 +408,10 @@ impl BaseDocument {
     }
 
     /// "Get an attribute by name": the first attribute whose qualified name
-    /// matches.
+    /// matches. `None` for an ID this document does not hold.
     pub fn attribute_by_name(&self, id: NodeId, name: &str) -> Option<&Attribute> {
         let name = self.normalize_attribute_name(id, name);
-        self.nodes[id]
+        self.get_node(id)?
             .element_data()?
             .attrs()
             .iter()
@@ -718,30 +752,7 @@ impl DocumentMutator<'_> {
         node: NodeId,
         child: NodeId,
     ) -> Result<NodeId, DomError> {
-        let doc = &*self.doc;
-        let parent_kind = doc.node_type(parent);
-        if !matches!(
-            parent_kind,
-            node_type::DOCUMENT | node_type::DOCUMENT_FRAGMENT | node_type::ELEMENT
-        ) {
-            return Err(DomError::HierarchyRequest);
-        }
-        if doc.is_host_including_inclusive_ancestor(node, parent) {
-            return Err(DomError::HierarchyRequest);
-        }
-        if doc.nodes[child].parent != Some(parent) {
-            return Err(DomError::NotFound);
-        }
-        let node_kind = doc.node_type(node);
-        if node_kind == node_type::DOCUMENT
-            || (node_kind == node_type::TEXT && parent_kind == node_type::DOCUMENT)
-            || (node_kind == node_type::DOCUMENT_TYPE && parent_kind != node_type::DOCUMENT)
-        {
-            return Err(DomError::HierarchyRequest);
-        }
-        if parent_kind == node_type::DOCUMENT {
-            doc.check_document_child_constraints(node, parent, Some(child), Some(child))?;
-        }
+        self.doc.check_replace_child(parent, node, child)?;
         if child == node {
             return Ok(child);
         }
@@ -1070,55 +1081,12 @@ impl DocumentMutator<'_> {
         }
     }
 
-    /// A detached copy of `id` alone, without children.
+    /// A detached copy of `id` alone, without children, carrying what the
+    /// clone steps copy (shared with cross-arena import).
     fn clone_one(&mut self, id: NodeId) -> NodeId {
-        match self.doc.nodes[id].data.clone() {
-            NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
-                let attrs: Vec<Attribute> = el.attrs().to_vec();
-                let copy = self.create_element(el.name.clone(), attrs);
-                self.doc.nodes[copy]
-                    .element_data_mut()
-                    .expect("cloned element")
-                    .custom_element_is = el.custom_element_is.clone();
-                let custom_state = if el.custom_element_is.is_some() {
-                    crate::custom_elements::CustomElementState::Undefined
-                } else {
-                    crate::custom_elements::CustomElementState::initial(&el.name)
-                };
-                self.doc.set_custom_element_state(copy, custom_state);
-                if el.name.ns == ns!(html) && matches!(&*el.name.local, "input" | "textarea") {
-                    let original = self.doc.nodes[id].element_data().expect("source element");
-                    let state = original.form_state.clone();
-                    let value = state.value.clone().or_else(|| self.doc.form_value_dom(id));
-                    let target = self.doc.nodes[copy]
-                        .element_data_mut()
-                        .expect("cloned element");
-                    target.form_state.value = is_text_control(&el).then_some(value).flatten();
-                    target.form_state.value_dirty = state.value_dirty;
-                    target.form_state.last_change_by_user = state.last_change_by_user;
-                    if &*el.name.local == "input" {
-                        target.form_state.files = state.files;
-                        target.form_state.checked = state.checked;
-                        target.form_state.checked_dirty = state.checked_dirty;
-                    }
-                }
-                copy
-            }
-            NodeData::Text(t) => self.create_text_node(&t.content),
-            NodeData::Comment { contents } => self.create_comment_node(&contents),
-            NodeData::ProcessingInstruction { target, contents } => {
-                self.create_processing_instruction(&target, &contents)
-            }
-            NodeData::Doctype {
-                name,
-                public_id,
-                system_id,
-            } => self.create_doctype(&name, &public_id, &system_id),
-            NodeData::DocumentFragment => self.create_document_fragment(),
-            // Unreachable: `clone_node` returns early for a document, and a
-            // document is never a child.
-            NodeData::Document(_) => self.create_document_node(),
-        }
+        let document = self.doc.node_document(id);
+        let seed = crate::node_seed::Seed::capture(self.doc, id, false);
+        self.plant(seed, document)
     }
 }
 

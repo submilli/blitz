@@ -120,6 +120,20 @@ impl EventListeners {
         }
     }
 
+    /// Detach a target's listeners so they can follow the node to another
+    /// arena. Unlike removal, an in-progress dispatch still invokes them.
+    pub fn take_target(&mut self, target: EventTargetId) -> Vec<Rc<Listener>> {
+        self.map.remove(&target).unwrap_or_default()
+    }
+
+    /// Attach listeners taken with [`Self::take_target`], after any already
+    /// registered on `target`.
+    pub fn restore_target(&mut self, target: EventTargetId, listeners: Vec<Rc<Listener>>) {
+        if !listeners.is_empty() {
+            self.map.entry(target).or_default().extend(listeners);
+        }
+    }
+
     /// A snapshot of the listeners for `event_type` on `target`.
     pub fn listeners(&self, target: EventTargetId, event_type: &str) -> Vec<Rc<Listener>> {
         self.map

@@ -348,7 +348,8 @@ pub struct BaseDocument {
     pub(crate) validation_error: std::cell::Cell<Option<crate::ValidationError>>,
     /// Custom element reactions, while recorded (see [`crate::custom_elements`]).
     pub(crate) form_associated_custom: std::collections::HashSet<NodeId>,
-    pub(crate) custom_element_reactions: Option<Vec<crate::custom_elements::CustomElementReaction>>,
+    pub(crate) custom_element_reactions:
+        Option<std::collections::VecDeque<crate::custom_elements::CustomElementReaction>>,
     pub(crate) custom_element_reaction_bytes: usize,
     pub(crate) custom_element_reaction_overflow: bool,
     /// DOM event listeners, per target.

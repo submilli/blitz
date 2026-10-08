@@ -20,6 +20,18 @@ pub struct CustomInternals {
     owner: Option<NodeId>,
     disabled: bool,
 }
+impl CustomInternals {
+    /// The state a transferred element keeps. Form ownership and disabledness
+    /// are derived again from the destination tree.
+    pub(crate) fn for_transfer(&self) -> Self {
+        Self {
+            owner: None,
+            disabled: false,
+            ..self.clone()
+        }
+    }
+}
+
 /// A validation message exceeded the native retained-payload budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidationMessageLimit;

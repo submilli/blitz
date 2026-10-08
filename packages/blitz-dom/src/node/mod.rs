@@ -24,6 +24,7 @@ pub use element::{
     ListItemLayout, ListItemLayoutPosition, Marker, RasterImageData, SpecialElementData,
     SpecialElementType, Status,
 };
+pub(crate) use element::{FormControlState, ScriptState};
 pub use node::*;
 pub use scrollbar::{ScrollbarColor, ScrollbarRef, ScrollbarWidth};
 pub use stylo_data::ComputedStyleRef;
