@@ -335,12 +335,40 @@ fn resolve_line_height(font_ctx: &mut FontContext, style: &ComputedValues, scale
 /// Whether an inline-level element is laid out as a Parley style span (as opposed
 /// to an atomic inline box) within an inline formatting context.
 fn is_inline_style_span(element_data: &ElementData) -> bool {
+    inline_element(element_data) == InlineElement::Span
+}
+
+/// How an element with `display: inline` takes part in inline layout. Caret
+/// navigation walks inline content with the same classification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InlineElement {
+    /// `<input type=hidden>` takes no part in layout.
+    Hidden,
+    /// Replaced elements and controls are atomic inline boxes.
+    Atom,
+    /// `<br>` is a preserved line feed.
+    Break,
+    /// Anything else is a style span around its children.
+    Span,
+}
+
+pub(crate) fn inline_element(element_data: &ElementData) -> InlineElement {
     let tag_name = &element_data.name.local;
-    !(is_replaced_element(tag_name)
+    if *tag_name == local_name!("input") && element_data.attr(local_name!("type")) == Some("hidden")
+    {
+        return InlineElement::Hidden;
+    }
+    if is_replaced_element(tag_name)
         || *tag_name == local_name!("input")
         || *tag_name == local_name!("textarea")
         || *tag_name == local_name!("button")
-        || *tag_name == local_name!("br"))
+    {
+        return InlineElement::Atom;
+    }
+    if *tag_name == local_name!("br") {
+        return InlineElement::Break;
+    }
+    InlineElement::Span
 }
 
 /// Iterate a node's `::before` pseudo, children and `::after` pseudo, in tree order.
@@ -1122,11 +1150,9 @@ pub(crate) fn find_inline_layout_embedded_boxes(
 
         match &node.data {
             NodeData::Element(element_data) | NodeData::AnonymousBlock(element_data) => {
-                // if the input type is hidden, hide it
-                if *element_data.name.local == *"input" {
-                    if let Some("hidden") = element_data.attr(local_name!("type")) {
-                        return;
-                    }
+                let kind = inline_element(element_data);
+                if kind == InlineElement::Hidden {
+                    return;
                 }
 
                 let display = node.display_style().unwrap_or(Display::inline());
@@ -1147,15 +1173,9 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                         });
                     }
                     (DisplayOutside::Inline, DisplayInside::Flow) => {
-                        let tag_name = &element_data.name.local;
-
-                        if is_replaced_element(tag_name)
-                            || *tag_name == local_name!("input")
-                            || *tag_name == local_name!("textarea")
-                            || *tag_name == local_name!("button")
-                        {
+                        if kind == InlineElement::Atom {
                             layout_children.push(node_id);
-                        } else if *tag_name == local_name!("br") {
+                        } else if kind == InlineElement::Break {
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                         } else {
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
@@ -1326,11 +1346,9 @@ pub(crate) fn build_inline_layout_into(
 
         match &node.data {
             NodeData::Element(element_data) | NodeData::AnonymousBlock(element_data) => {
-                // if the input type is hidden, hide it
-                if *element_data.name.local == *"input" {
-                    if let Some("hidden") = element_data.attr(local_name!("type")) {
-                        return;
-                    }
+                let kind = inline_element(element_data);
+                if kind == InlineElement::Hidden {
+                    return;
                 }
 
                 let display = node.display_style().unwrap_or(Display::inline());
@@ -1382,13 +1400,7 @@ pub(crate) fn build_inline_layout_into(
                         builder.pop_style_span();
                     }
                     (DisplayOutside::Inline, DisplayInside::Flow) => {
-                        let tag_name = &element_data.name.local;
-
-                        if is_replaced_element(tag_name)
-                            || *tag_name == local_name!("input")
-                            || *tag_name == local_name!("textarea")
-                            || *tag_name == local_name!("button")
-                        {
+                        if kind == InlineElement::Atom {
                             builder.push_inline_box(InlineBox {
                                 id: node_id.as_u64(),
                                 kind: box_kind,
@@ -1399,7 +1411,7 @@ pub(crate) fn build_inline_layout_into(
                                 height: 0.0,
                                 baseline: None,
                             });
-                        } else if *tag_name == local_name!("br") {
+                        } else if kind == InlineElement::Break {
                             // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                             // TODO: update span id for br spans
                             builder.push_style_modification_span(&[

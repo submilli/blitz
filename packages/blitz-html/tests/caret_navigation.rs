@@ -1,0 +1,605 @@
+//! `Selection.modify` caret movement over laid-out content. Expected
+//! positions were measured in Chrome 154 on macOS.
+
+mod common;
+
+use blitz_dom::caret::{Alter, Direction, Granularity, ModifyRequest};
+use blitz_dom::{BaseDocument, NodeId, ranges::Boundary};
+use common::{parse, q};
+
+const FORWARD: Direction = Direction::Forward;
+const BACKWARD: Direction = Direction::Backward;
+
+fn laid_out(html: &str) -> BaseDocument {
+    let mut doc = parse(html);
+    *doc.font_ctx().lock().unwrap() = blitz_dom::build_single_font_ctx(include_bytes!(
+        "../../blitz-dom/assets/test-fonts/LiberationSans-Regular.ttf"
+    ));
+    doc.resolve(0.0);
+    doc
+}
+
+fn child(doc: &BaseDocument, selector: &str, index: usize) -> NodeId {
+    doc.get_node(q(doc, selector)).unwrap().children[index]
+}
+
+fn at(node: NodeId, offset: usize) -> Boundary {
+    Boundary { node, offset }
+}
+
+/// Apply steps to a selection, collecting each resulting (anchor, focus).
+fn walk(
+    doc: &BaseDocument,
+    start: (Boundary, Boundary),
+    steps: &[(Alter, Direction, Granularity)],
+) -> Vec<(Boundary, Boundary)> {
+    let (mut anchor, mut focus) = start;
+    let mut line_x = None;
+    steps
+        .iter()
+        .map(|&(alter, direction, granularity)| {
+            let request = ModifyRequest {
+                alter,
+                direction,
+                granularity,
+                line_x,
+            };
+            if let Some(moved) = doc.modify_selection(anchor, focus, request) {
+                (anchor, focus, line_x) = (moved.anchor, moved.focus, moved.line_x);
+            }
+            (anchor, focus)
+        })
+        .collect()
+}
+
+fn carets(
+    doc: &BaseDocument,
+    start: Boundary,
+    steps: &[(Alter, Direction, Granularity)],
+) -> Vec<Boundary> {
+    walk(doc, (start, start), steps)
+        .into_iter()
+        .map(|(anchor, focus)| {
+            assert_eq!(anchor, focus);
+            focus
+        })
+        .collect()
+}
+
+fn moves(
+    direction: Direction,
+    granularity: Granularity,
+    count: usize,
+) -> Vec<(Alter, Direction, Granularity)> {
+    vec![(Alter::Move, direction, granularity); count]
+}
+
+#[test]
+fn characters_cross_blocks_and_prefer_the_end_of_a_preceding_text_node() {
+    let doc = laid_out("<p>abc</p><p>def</p>");
+    let (abc, def) = (child(&doc, "p", 0), child(&doc, "p + p", 0));
+    let steps = [
+        moves(FORWARD, Granularity::Character, 1),
+        moves(BACKWARD, Granularity::Character, 2),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(abc, 3), &steps),
+        [at(def, 0), at(abc, 3), at(abc, 2)]
+    );
+
+    let doc = laid_out("<p><b>abc</b>def</p>");
+    let (abc, def) = (child(&doc, "b", 0), child(&doc, "p", 1));
+    let steps = [
+        moves(FORWARD, Granularity::Character, 2),
+        moves(BACKWARD, Granularity::Character, 2),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(abc, 2), &steps),
+        [at(abc, 3), at(def, 1), at(abc, 3), at(abc, 2)]
+    );
+}
+
+#[test]
+fn collapsed_hidden_and_generated_content_take_no_caret_positions() {
+    let doc = laid_out("<p>a   b</p><p>   ab</p><p>ab </p><p>cd</p>");
+    let spaced = child(&doc, "p", 0);
+    let steps = [
+        moves(FORWARD, Granularity::Character, 2),
+        moves(BACKWARD, Granularity::Character, 1),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(spaced, 0), &steps),
+        [at(spaced, 1), at(spaced, 2), at(spaced, 1)]
+    );
+    let leading = child(&doc, "p:nth-child(2)", 0);
+    assert_eq!(
+        carets(
+            &doc,
+            at(leading, 0),
+            &moves(FORWARD, Granularity::Character, 1)
+        ),
+        [at(leading, 4)]
+    );
+    let (trailing, next) = (
+        child(&doc, "p:nth-child(3)", 0),
+        child(&doc, "p:nth-child(4)", 0),
+    );
+    let steps = [
+        moves(FORWARD, Granularity::Character, 1),
+        moves(BACKWARD, Granularity::Character, 1),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(trailing, 2), &steps),
+        [at(next, 0), at(trailing, 2)]
+    );
+
+    for style in ["display:none", "visibility:hidden"] {
+        let doc = laid_out(&format!("<p>ab<span style='{style}'>XYZ</span>cd</p>"));
+        let (ab, cd) = (child(&doc, "p", 0), child(&doc, "p", 2));
+        let steps = [
+            moves(FORWARD, Granularity::Character, 1),
+            moves(BACKWARD, Granularity::Character, 1),
+        ]
+        .concat();
+        assert_eq!(
+            carets(&doc, at(ab, 2), &steps),
+            [at(cd, 1), at(ab, 2)],
+            "{style}"
+        );
+    }
+
+    let doc =
+        laid_out("<style>q::before{content:'XX'}q::after{content:'YY'}</style><p><q>ab</q>cd</p>");
+    let (ab, cd) = (child(&doc, "q", 0), child(&doc, "p", 1));
+    let steps = [
+        moves(BACKWARD, Granularity::Character, 1),
+        moves(FORWARD, Granularity::Character, 3),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(ab, 0), &steps),
+        [at(ab, 0), at(ab, 1), at(ab, 2), at(cd, 1)]
+    );
+}
+
+#[test]
+fn atoms_breaks_and_inline_blocks_are_stepped_like_chrome() {
+    let doc = laid_out("<p>ab<img style='width:10px;height:10px'>cd</p>");
+    let (p, ab, cd) = (q(&doc, "p"), child(&doc, "p", 0), child(&doc, "p", 2));
+    let steps = [
+        moves(FORWARD, Granularity::Character, 2),
+        moves(BACKWARD, Granularity::Character, 2),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(ab, 2), &steps),
+        [at(p, 2), at(cd, 1), at(p, 2), at(ab, 2)]
+    );
+
+    let doc = laid_out("<p>a<br><br>b</p>");
+    let (p, a, b) = (q(&doc, "p"), child(&doc, "p", 0), child(&doc, "p", 3));
+    let steps = moves(FORWARD, Granularity::Character, 2);
+    assert_eq!(carets(&doc, at(a, 1), &steps), [at(p, 2), at(b, 0)]);
+
+    let doc = laid_out("<p>ab<span style='display:inline-block'>cd</span>ef</p>");
+    let (ab, cd, ef) = (
+        child(&doc, "p", 0),
+        child(&doc, "span", 0),
+        child(&doc, "p", 2),
+    );
+    let steps = moves(FORWARD, Granularity::Character, 4);
+    assert_eq!(
+        carets(&doc, at(ab, 2), &steps),
+        [at(cd, 1), at(cd, 2), at(ef, 1), at(ef, 2)]
+    );
+
+    let doc = laid_out("<p>ab<span style='user-select:none'>XY</span>cd</p>");
+    let (ab, cd) = (child(&doc, "p", 0), child(&doc, "p", 2));
+    assert_eq!(
+        carets(&doc, at(ab, 2), &moves(FORWARD, Granularity::Character, 2)),
+        [at(cd, 0), at(cd, 1)]
+    );
+}
+
+#[test]
+fn grapheme_clusters_are_single_steps() {
+    let doc = laid_out("<p>e\u{301}x\u{1F600}y\u{1F1EF}\u{1F1F5}z</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [
+        moves(FORWARD, Granularity::Character, 5),
+        moves(BACKWARD, Granularity::Character, 2),
+    ]
+    .concat();
+    let offsets: Vec<_> = carets(&doc, at(t, 0), &steps)
+        .iter()
+        .map(|b| b.offset)
+        .collect();
+    assert_eq!(offsets, [2, 3, 5, 6, 10, 6, 5]);
+}
+
+#[test]
+fn words_and_sentences_follow_icu_segments() {
+    let doc = laid_out("<p>hello world, foo</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [
+        moves(FORWARD, Granularity::Word, 4),
+        moves(BACKWARD, Granularity::Word, 4),
+    ]
+    .concat();
+    let offsets: Vec<_> = carets(&doc, at(t, 0), &steps)
+        .iter()
+        .map(|b| b.offset)
+        .collect();
+    assert_eq!(offsets, [5, 11, 12, 16, 13, 11, 6, 0]);
+
+    let doc = laid_out("<p>One two. Three four. Five.</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::Sentence),
+        (Alter::Move, FORWARD, Granularity::SentenceBoundary),
+        (Alter::Move, BACKWARD, Granularity::SentenceBoundary),
+        (Alter::Move, BACKWARD, Granularity::Sentence),
+    ];
+    let offsets: Vec<_> = carets(&doc, at(t, 1), &steps)
+        .iter()
+        .map(|b| b.offset)
+        .collect();
+    assert_eq!(offsets, [9, 21, 9, 0]);
+}
+
+#[test]
+fn lines_keep_their_horizontal_position_and_end_at_the_document_edges() {
+    let doc = laid_out("<p>abcd<br>efgh<br>ij</p>");
+    let (abcd, efgh, ij) = (
+        child(&doc, "p", 0),
+        child(&doc, "p", 2),
+        child(&doc, "p", 4),
+    );
+    let steps = [
+        moves(FORWARD, Granularity::Line, 3),
+        moves(BACKWARD, Granularity::Line, 2),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(abcd, 0), &steps),
+        [at(efgh, 0), at(ij, 0), at(ij, 2), at(efgh, 0), at(abcd, 0)]
+    );
+
+    let doc = laid_out("<p>abc</p><p>def</p><p>ghi</p>");
+    let (abc, def, ghi) = (
+        child(&doc, "p", 0),
+        child(&doc, "p + p", 0),
+        child(&doc, "p + p + p", 0),
+    );
+    let steps = [
+        moves(FORWARD, Granularity::Line, 2),
+        moves(BACKWARD, Granularity::Line, 1),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(abc, 0), &steps),
+        [at(def, 0), at(ghi, 0), at(def, 0)]
+    );
+
+    let doc = laid_out("<p>ab cd<br>ef</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+        (Alter::Move, BACKWARD, Granularity::LineBoundary),
+        (Alter::Extend, FORWARD, Granularity::LineBoundary),
+    ];
+    assert_eq!(
+        walk(&doc, (at(t, 1), at(t, 1)), &steps),
+        [
+            (at(t, 5), at(t, 5)),
+            (at(t, 5), at(t, 5)),
+            (at(t, 0), at(t, 0)),
+            (at(t, 0), at(t, 5))
+        ]
+    );
+}
+
+#[test]
+fn extension_keeps_the_anchor_side_and_boundaries_grow_the_selection() {
+    let doc = laid_out("<p>one two three</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [
+        (Alter::Extend, FORWARD, Granularity::Word),
+        (Alter::Extend, BACKWARD, Granularity::Word),
+        (Alter::Extend, BACKWARD, Granularity::Word),
+    ];
+    assert_eq!(
+        walk(&doc, (at(t, 5), at(t, 5)), &steps),
+        [
+            (at(t, 5), at(t, 7)),
+            (at(t, 5), at(t, 5)),
+            (at(t, 5), at(t, 4))
+        ]
+    );
+
+    let doc = laid_out("<p>ab cd</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [(Alter::Extend, BACKWARD, Granularity::LineBoundary)];
+    assert_eq!(
+        walk(&doc, (at(t, 2), at(t, 4)), &steps),
+        [(at(t, 0), at(t, 4))]
+    );
+
+    let doc = laid_out("<p>abcdef</p>");
+    let t = child(&doc, "p", 0);
+    let collapse = [(Alter::Move, FORWARD, Granularity::Character)];
+    assert_eq!(
+        walk(&doc, (at(t, 4), at(t, 1)), &collapse),
+        [(at(t, 4), at(t, 4))]
+    );
+    let word = [(Alter::Move, BACKWARD, Granularity::Word)];
+    let doc = laid_out("<p>one two three</p>");
+    let t = child(&doc, "p", 0);
+    assert_eq!(
+        walk(&doc, (at(t, 5), at(t, 9)), &word),
+        [(at(t, 8), at(t, 8))]
+    );
+}
+
+#[test]
+fn element_positions_and_empty_documents() {
+    let doc = laid_out("<p>ab</p><div>cd<p>ef</p></div>");
+    let (body, ab, ef) = (
+        q(&doc, "body"),
+        child(&doc, "p", 0),
+        child(&doc, "div p", 0),
+    );
+    let cd = child(&doc, "div", 0);
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::DocumentBoundary),
+        (Alter::Move, BACKWARD, Granularity::DocumentBoundary),
+    ];
+    assert_eq!(carets(&doc, at(cd, 1), &steps), [at(ef, 2), at(ab, 0)]);
+    let steps = [(Alter::Move, FORWARD, Granularity::Character)];
+    assert_eq!(carets(&doc, at(body, 1), &steps), [at(cd, 1)]);
+
+    let doc = laid_out("<body></body>");
+    let body = q(&doc, "body");
+    let request = ModifyRequest {
+        alter: Alter::Move,
+        direction: FORWARD,
+        granularity: Granularity::Character,
+        line_x: None,
+    };
+    assert_eq!(
+        doc.modify_selection(at(body, 0), at(body, 0), request),
+        None
+    );
+}
+
+#[test]
+fn right_to_left_paragraphs_map_left_to_logical_forward() {
+    let doc = laid_out("<p dir=rtl>\u{5D0}\u{5D1}\u{5D2}</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::Character),
+        (Alter::Move, Direction::Left, Granularity::Character),
+        (Alter::Move, Direction::Right, Granularity::Character),
+        (Alter::Move, Direction::Right, Granularity::Character),
+    ];
+    let offsets: Vec<_> = carets(&doc, at(t, 1), &steps)
+        .iter()
+        .map(|b| b.offset)
+        .collect();
+    assert_eq!(offsets, [2, 3, 2, 1]);
+}
+
+#[test]
+fn deeply_nested_inline_content_is_navigable() {
+    let depth = 300;
+    let html = format!(
+        "<p>{}x{}</p>",
+        "<span>".repeat(depth),
+        "</span>".repeat(depth)
+    );
+    let doc = laid_out(&html);
+    let p = q(&doc, "p");
+    let request = ModifyRequest {
+        alter: Alter::Move,
+        direction: FORWARD,
+        granularity: Granularity::DocumentBoundary,
+        line_x: None,
+    };
+    let moved = doc.modify_selection(at(p, 0), at(p, 0), request).unwrap();
+    assert_eq!(moved.focus.offset, 1);
+}
+
+#[test]
+fn empty_lines_between_breaks_are_line_stops() {
+    let doc = laid_out("<p>a<br><br>b</p>");
+    let (p, b) = (q(&doc, "p"), child(&doc, "p", 3));
+    let steps = [
+        moves(BACKWARD, Granularity::Line, 1),
+        moves(FORWARD, Granularity::Line, 2),
+    ]
+    .concat();
+    assert_eq!(
+        carets(&doc, at(b, 0), &steps),
+        [at(p, 2), at(b, 0), at(b, 1)]
+    );
+}
+
+#[test]
+fn text_controls_move_over_their_editor_layout() {
+    use blitz_dom::form_selection::{ControlSelection, SelectionDirection};
+    let mut doc = laid_out("<input value='abc def'><textarea>ab\ncd</textarea>");
+    let (input, area) = (q(&doc, "input"), q(&doc, "textarea"));
+    let caret = |offset| ControlSelection {
+        start: offset,
+        end: offset,
+        direction: SelectionDirection::None,
+    };
+    let run = |doc: &mut BaseDocument, id, start, steps: &[(Alter, Direction, Granularity)]| {
+        doc.mutate().set_control_selection(id, caret(start));
+        let mut line_x = None;
+        let mut out = Vec::new();
+        for &(alter, direction, granularity) in steps {
+            doc.resolve(0.0);
+            let request = ModifyRequest {
+                alter,
+                direction,
+                granularity,
+                line_x,
+            };
+            line_x = doc
+                .mutate()
+                .modify_control_selection(id, request)
+                .unwrap()
+                .line_x;
+            let s = doc.control_selection(id).unwrap();
+            out.push((s.start, s.end, s.direction));
+        }
+        out
+    };
+    use SelectionDirection as D;
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::Character),
+        (Alter::Extend, FORWARD, Granularity::Word),
+        (Alter::Move, BACKWARD, Granularity::Character),
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+        (Alter::Move, BACKWARD, Granularity::DocumentBoundary),
+    ];
+    assert_eq!(
+        run(&mut doc, input, 1, &steps),
+        [
+            (2, 2, D::None),
+            (2, 3, D::Forward),
+            (2, 2, D::None),
+            (7, 7, D::None),
+            (0, 0, D::None)
+        ]
+    );
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::Line),
+        (Alter::Extend, BACKWARD, Granularity::Character),
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+    ];
+    assert_eq!(
+        run(&mut doc, area, 1, &steps),
+        [(4, 4, D::None), (3, 4, D::Backward), (5, 5, D::None)]
+    );
+}
+
+#[test]
+fn source_newlines_before_breaks_collapse_and_preserved_newlines_break() {
+    let doc = laid_out("<p>ab\n<br>cd</p>");
+    let (ab, cd) = (child(&doc, "p", 0), child(&doc, "p", 2));
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::Character),
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+    ];
+    assert_eq!(carets(&doc, at(ab, 2), &steps), [at(cd, 0), at(cd, 2)]);
+
+    let doc = laid_out("<pre>ab\ncd\nef</pre>");
+    let t = child(&doc, "pre", 0);
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+        (Alter::Move, FORWARD, Granularity::Character),
+        (Alter::Move, FORWARD, Granularity::ParagraphBoundary),
+        (Alter::Move, BACKWARD, Granularity::Paragraph),
+    ];
+    let offsets: Vec<_> = carets(&doc, at(t, 1), &steps)
+        .iter()
+        .map(|b| b.offset)
+        .collect();
+    assert_eq!(offsets, [2, 2, 3, 5, 2]);
+}
+
+#[test]
+fn transformed_generated_content_and_final_sigma_stay_aligned() {
+    let doc = laid_out("<style>p{text-transform:uppercase}p::before{content:'x'}</style><p>ab</p>");
+    let t = child(&doc, "p", 0);
+    let steps = moves(FORWARD, Granularity::Character, 2);
+    assert_eq!(carets(&doc, at(t, 0), &steps), [at(t, 1), at(t, 2)]);
+
+    let doc = laid_out(
+        "<p style='text-transform:lowercase'>\u{39F}\u{394}\u{39F}\u{3A3} \u{391}\u{392}</p>",
+    );
+    let t = child(&doc, "p", 0);
+    let offsets: Vec<_> = carets(&doc, at(t, 0), &moves(FORWARD, Granularity::Word, 2))
+        .iter()
+        .map(|b| b.offset)
+        .collect();
+    assert_eq!(offsets, [4, 7]);
+}
+
+#[test]
+fn embedded_boxes_are_navigated_in_tree_order() {
+    let doc = laid_out("<p>ab<span style='display:inline-flex'>cd</span>ef</p>");
+    let (ab, cd, ef) = (
+        child(&doc, "p", 0),
+        child(&doc, "span", 0),
+        child(&doc, "p", 2),
+    );
+    assert_eq!(
+        carets(&doc, at(ab, 2), &moves(FORWARD, Granularity::Character, 3)),
+        [at(cd, 1), at(cd, 2), at(ef, 1)]
+    );
+
+    let doc = laid_out("<div>ab<span style='display:inline-block'><div>cd</div></span>ef</div>");
+    let (ab, cd, ef) = (
+        child(&doc, "div", 0),
+        child(&doc, "span div", 0),
+        child(&doc, "div", 2),
+    );
+    assert_eq!(
+        carets(&doc, at(ab, 2), &moves(FORWARD, Granularity::Character, 4)),
+        [at(cd, 0), at(cd, 1), at(cd, 2), at(ef, 0)]
+    );
+
+    let doc = laid_out("<p>ab<span style='position:absolute;left:300px'>XY</span>cd</p>");
+    let (xy, cd) = (child(&doc, "span", 0), child(&doc, "p", 2));
+    assert_eq!(
+        carets(&doc, at(xy, 0), &moves(FORWARD, Granularity::Character, 3)),
+        [at(xy, 1), at(xy, 2), at(cd, 0)]
+    );
+
+    let doc = laid_out(
+        "<div style='display:flex'><p style='order:2'>ab</p><p style='order:1'>cd</p></div>",
+    );
+    let (ab, cd) = (child(&doc, "p", 0), child(&doc, "p + p", 0));
+    assert_eq!(
+        carets(&doc, at(ab, 1), &moves(FORWARD, Granularity::Character, 3)),
+        [at(ab, 2), at(cd, 0), at(cd, 1)]
+    );
+}
+
+#[test]
+fn soft_wrapped_lines_end_before_their_hanging_space() {
+    let doc = laid_out("<p style='width:1px'>abc def ghi</p>");
+    let t = child(&doc, "p", 0);
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+        (Alter::Move, FORWARD, Granularity::LineBoundary),
+        (Alter::Move, FORWARD, Granularity::Character),
+        (Alter::Move, FORWARD, Granularity::Line),
+        (Alter::Move, BACKWARD, Granularity::LineBoundary),
+        (Alter::Move, FORWARD, Granularity::Line),
+    ];
+    let offsets: Vec<_> = carets(&doc, at(t, 1), &steps)
+        .iter()
+        .map(|b| b.offset)
+        .collect();
+    assert_eq!(offsets, [3, 3, 4, 8, 8, 11]);
+}
+
+#[test]
+fn a_combining_mark_after_an_atom_starts_its_own_unit() {
+    let doc = laid_out("<p>a<img style='width:10px;height:10px'>\u{301}b</p>");
+    let (p, mark) = (q(&doc, "p"), child(&doc, "p", 2));
+    let steps = moves(FORWARD, Granularity::Character, 2);
+    let moved = carets(&doc, at(p, 1), &steps);
+    assert_eq!(moved[0], at(p, 2));
+    assert_eq!(moved[1].node, mark);
+}

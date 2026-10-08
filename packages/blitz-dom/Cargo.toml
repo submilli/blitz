@@ -80,6 +80,8 @@ kurbo = { workspace = true }
 icu_casemap = "2.3"
 icu_locale_core = "2.3"
 icu_properties = "2.3"
+# Caret movement segments words and sentences as Chrome's ICU does.
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 
 # Other dependencies
 slotmap = { workspace = true }
