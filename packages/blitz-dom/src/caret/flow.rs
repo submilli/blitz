@@ -234,7 +234,7 @@ impl Flow {
         let first = self.units.iter().position(|u| u.edges.line == line)?;
         let last = self.units.iter().rposition(|u| u.edges.line == line)?;
         let wraps = self.units.get(last + 1).is_some();
-        let hangs = wraps && last > first && self.unit_text(last).trim().is_empty();
+        let hangs = wraps && last > first && is_collapsed_space(self.unit_text(last));
         let end = if self.units[last].kind == UnitKind::Break || hangs {
             last
         } else {
@@ -249,6 +249,15 @@ impl Flow {
             .map(|u| u.edges.line + 1)
             .max()
             .unwrap_or(0)
+    }
+
+    /// Whether `index` both ends a line and starts the next one.
+    pub(super) fn is_soft_wrap(&self, index: usize) -> bool {
+        let Some(before) = index.checked_sub(1).and_then(|i| self.units.get(i)) else {
+            return false;
+        };
+        let after = self.units.get(index);
+        before.kind != UnitKind::Break && after.is_some_and(|u| u.edges.line != before.edges.line)
     }
 
     /// The paragraph around `index`: boundaries between forced breaks.
@@ -271,4 +280,9 @@ impl Flow {
             .unwrap_or(self.text.len());
         self.text.get(self.offset(index)..end).unwrap_or("")
     }
+}
+
+/// Collapsed white space, which Parley keeps as spaces and tabs.
+fn is_collapsed_space(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b == b' ' || b == b'\t')
 }

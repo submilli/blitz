@@ -11,6 +11,7 @@
 use super::flow::Flow;
 use super::segments;
 use super::{Alter, Direction, Granularity, ModifyRequest};
+use crate::NodeId;
 use std::cmp::Ordering;
 
 /// A caret stop: a unit boundary in one flow, ordered by flow then boundary.
@@ -65,9 +66,9 @@ pub(super) trait Flows {
     fn count(&self) -> usize;
     fn flow(&self, index: usize) -> Option<&Flow>;
 
-    /// Whether two stops are in the same node tree.
-    fn same_tree(&self, _: Caret, _: Caret) -> bool {
-        true
+    /// The root of the node tree a stop is in; one tree when `None`.
+    fn tree(&self, _: Caret) -> Option<NodeId> {
+        None
     }
 }
 
@@ -79,7 +80,9 @@ pub(super) fn modify(
     request: ModifyRequest,
 ) -> Option<(Carets, Option<f32>)> {
     let Carets { anchor, focus } = selection;
-    // A caret's two ends share the focus's affinity.
+    // Affinity only matters at a soft wrap; a caret's ends share it.
+    let mut focus = focus;
+    focus.upstream &= flows.flow(focus.flow)?.is_soft_wrap(focus.index);
     let anchor = if anchor == focus { focus } else { anchor };
     let rtl = flows.flow(focus.flow)?.rtl();
     let forward = match request.direction {
@@ -149,8 +152,9 @@ fn clamp_to_tree(flows: &dyn Flows, fixed: Caret, moving: Caret) -> Caret {
         flows,
         forward: moving < fixed,
     };
+    let tree = flows.tree(fixed);
     let mut caret = moving;
-    while caret != fixed && !flows.same_tree(fixed, caret) {
+    while caret != fixed && flows.tree(caret) != tree {
         match toward.character(caret) {
             Some(next) if next != caret => caret = next,
             _ => return fixed,
@@ -261,10 +265,15 @@ impl Mover<'_> {
         } else {
             segments::previous_sentence(flow.text(), offset)
         };
-        Some(Caret::at(
-            caret.flow,
-            flow.stop_near(flow.index_at(found?))?,
-        ))
+        let index = flow.stop_near(flow.index_at(found?))?;
+        // A boundary with no stop past the caret (unselectable content at
+        // the flow's end) leaves the flow.
+        let advances = if self.forward {
+            index > caret.index
+        } else {
+            index < caret.index
+        };
+        advances.then(|| Caret::at(caret.flow, index))
     }
 
     /// The stop on the next line nearest `x`. Past the last line, the caret
@@ -321,7 +330,9 @@ impl Mover<'_> {
         let flow = self.flows.flow(caret.flow)?;
         let line = line_of(flow, caret);
         let (start, end) = flow.line_range(line)?;
-        let mut found = self.outermost_stop(flow, caret, start, end);
+        let mut found = self
+            .outermost_stop(flow, caret.flow, start, end)
+            .unwrap_or(caret);
         let open = |flow: &Flow, start: usize, end: usize| {
             if self.forward {
                 end == flow.len()
@@ -340,7 +351,11 @@ impl Mover<'_> {
                 let Some((start, end)) = next.line_range(line) else {
                     break;
                 };
-                found = self.outermost_stop(next, Caret::at(index, start), start, end);
+                // A flow with no stop on the line (only unselectable content)
+                // keeps the previous end.
+                if let Some(stop) = self.outermost_stop(next, index, start, end) {
+                    found = stop;
+                }
                 if !open(next, start, end) {
                     break;
                 }
@@ -354,12 +369,15 @@ impl Mover<'_> {
     fn paragraph_boundary(&self, caret: Caret) -> Option<Caret> {
         let flow = self.flows.flow(caret.flow)?;
         let (start, end) = flow.paragraph_range(caret.index);
-        Some(self.outermost_stop(flow, caret, start, end))
+        Some(
+            self.outermost_stop(flow, caret.flow, start, end)
+                .unwrap_or(caret),
+        )
     }
 
     /// The outermost stop of `start..=end` in the direction of movement.
-    fn outermost_stop(&self, flow: &Flow, caret: Caret, start: usize, end: usize) -> Caret {
-        let index = if self.forward {
+    fn outermost_stop(&self, flow: &Flow, index: usize, start: usize, end: usize) -> Option<Caret> {
+        let stop = if self.forward {
             Some(end)
                 .filter(|&i| flow.point(i).is_some())
                 .or_else(|| flow.previous_stop(end))
@@ -368,7 +386,7 @@ impl Mover<'_> {
                 .filter(|&i| flow.point(i).is_some())
                 .or_else(|| flow.next_stop(start))
         };
-        Caret::at(caret.flow, index.unwrap_or(caret.index))
+        Some(Caret::at(index, stop?))
     }
 
     fn document_boundary(&self) -> Option<Caret> {

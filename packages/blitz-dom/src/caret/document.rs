@@ -4,7 +4,9 @@ use super::flow::Flow;
 use super::navigate::{self, Caret, Carets, Flows};
 use super::order::{self, Key, TreeOrder};
 use super::{Modified, ModifyRequest, build};
-use crate::{BaseDocument, ranges::Boundary};
+use crate::{BaseDocument, NodeId, ranges::Boundary};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 impl BaseDocument {
     /// Move or extend a document selection. Returns `None` when an endpoint
@@ -39,6 +41,8 @@ struct DocumentFlows<'a> {
     doc: &'a BaseDocument,
     order: TreeOrder,
     flows: Vec<Flow>,
+    /// Tree roots found so far, so clamping walks each ancestor chain once.
+    roots: RefCell<HashMap<NodeId, NodeId>>,
 }
 
 impl<'a> DocumentFlows<'a> {
@@ -50,7 +54,12 @@ impl<'a> DocumentFlows<'a> {
             .filter(|flow| flow.first_key().is_some())
             .collect();
         flows.sort_by_key(Flow::first_key);
-        Self { doc, order, flows }
+        Self {
+            doc,
+            order,
+            flows,
+            roots: RefCell::default(),
+        }
     }
 
     /// The caret stop a boundary point renders at. Inside an inline root
@@ -132,6 +141,27 @@ impl<'a> DocumentFlows<'a> {
         self.order.root_span(self.doc, flow.root())
     }
 
+    /// The root of a node's tree, memoized along the ancestor chain.
+    fn tree_root(&self, node: NodeId) -> NodeId {
+        let mut roots = self.roots.borrow_mut();
+        let mut path = Vec::new();
+        let mut current = node;
+        let root = loop {
+            if let Some(&root) = roots.get(&current) {
+                break root;
+            }
+            path.push(current);
+            match self.doc.get_node(current).and_then(|n| n.parent) {
+                Some(parent) => current = parent,
+                None => break current,
+            }
+        };
+        for id in path {
+            roots.insert(id, root);
+        }
+        root
+    }
+
     fn point(&self, caret: Caret) -> Option<Boundary> {
         self.flows.get(caret.flow)?.point(caret.index)
     }
@@ -146,11 +176,7 @@ impl Flows for DocumentFlows<'_> {
         self.flows.get(index)
     }
 
-    fn same_tree(&self, a: Caret, b: Caret) -> bool {
-        let root = |caret| {
-            self.point(caret)
-                .map(|point| self.doc.tree_root(point.node))
-        };
-        root(a) == root(b)
+    fn tree(&self, caret: Caret) -> Option<NodeId> {
+        Some(self.tree_root(self.point(caret)?.node))
     }
 }

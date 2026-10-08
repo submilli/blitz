@@ -746,3 +746,22 @@ fn extension_stays_in_the_anchor_tree() {
         [(at(tail, 2), at(tail, 0))]
     );
 }
+
+#[test]
+fn flows_without_stops_neither_stall_line_ends_nor_sentences() {
+    let doc = laid_out(
+        "<div>ab<span style='display:inline-block'><div>cd</div></span><span style='user-select:none'>XY</span></div>",
+    );
+    let ab = child(&doc, "div", 0);
+    let moved = carets(
+        &doc,
+        at(ab, 0),
+        &moves(FORWARD, Granularity::LineBoundary, 1),
+    );
+    assert_eq!(moved, [at(ab, 2)]);
+
+    let doc = laid_out("<p>Hi. <span style='user-select:none'>X</span></p><p>Next.</p>");
+    let (hi, next) = (child(&doc, "p", 0), child(&doc, "p + p", 0));
+    let moved = carets(&doc, at(hi, 0), &moves(FORWARD, Granularity::Sentence, 2));
+    assert_eq!(moved[1].node, next);
+}

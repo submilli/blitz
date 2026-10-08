@@ -324,6 +324,9 @@ impl Builder<'_> {
     /// A floated or positioned replaced element is a flow of one atom. It
     /// takes no inline space, so both its sides draw at its start edge.
     fn floated_atom(&mut self, id: NodeId) {
+        if self.opaque.is_some() || self.order.is_unselectable(id) {
+            return;
+        }
         let x = self.doc.nodes[id].unrounded_absolute_position(0.0, 0.0).x;
         let edges = Edges {
             leading: x,
@@ -405,6 +408,10 @@ impl Builder<'_> {
     /// End the current flow at an embedded box; a space before it is kept.
     fn split(&mut self) {
         self.hanging_space = false;
+        // An unselectable run continuing past the box is a unit on each side.
+        if let Some(edges) = self.opaque.as_mut().and_then(|o| o.edges.take()) {
+            self.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
+        }
         let rtl = self.flow.rtl();
         let flow = std::mem::replace(&mut self.flow, Flow::new(self.root, rtl));
         if flow.first_key().is_some() {
