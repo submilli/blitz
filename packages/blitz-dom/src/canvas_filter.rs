@@ -36,6 +36,8 @@ pub enum CanvasFilter {
 pub struct CanvasFilters {
     pub serialized: String,
     pub operations: Vec<CanvasFilter>,
+    #[cfg(feature = "svg")]
+    pub svg: Vec<Option<crate::CanvasSvgFilter>>,
 }
 
 impl Default for CanvasFilters {
@@ -43,6 +45,8 @@ impl Default for CanvasFilters {
         Self {
             serialized: "none".into(),
             operations: Vec::new(),
+            #[cfg(feature = "svg")]
+            svg: Vec::new(),
         }
     }
 }
@@ -77,7 +81,7 @@ impl BaseDocument {
         // Chrome snapshots the drawing context font, including for hidden and
         // detached canvases. The already-computed shorthand fixes relative units.
         let parent = self.canvas_computed_style(node, "font", &font.serialized)?;
-        let declarations = self.canvas_style_declarations("filter", text)?;
+        let declarations = self.canvas_style_declarations_for(node, "filter", text)?;
         let style = self.compute_canvas_style(&declarations, &parent);
         let filters = &style.get_effects().filter.0;
         if filters.len() > 32 {
@@ -87,6 +91,8 @@ impl BaseDocument {
         Some(CanvasFilters {
             serialized: text.into(),
             operations,
+            #[cfg(feature = "svg")]
+            svg: Vec::new(),
         })
     }
 }
@@ -115,7 +121,7 @@ fn convert(filter: &Filter) -> Option<CanvasFilter> {
                 .resolve_to_absolute(&AbsoluteColor::BLACK)
                 .as_color_color(),
         },
-        Filter::Url(value) => CanvasFilter::Reference(value.to_css_string()),
+        Filter::Url(value) => CanvasFilter::Reference(value.url()?.as_str().into()),
     })
 }
 

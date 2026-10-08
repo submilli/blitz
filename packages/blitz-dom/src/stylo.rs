@@ -246,7 +246,7 @@ impl<'a> TDocument for BlitzNode<'a> {
     }
 
     fn is_html_document(&self) -> bool {
-        true
+        matches!(&self.data, NodeData::Document(data) if data.metadata.document_type.is_html())
     }
 
     fn quirks_mode(&self) -> QuirksMode {
@@ -451,7 +451,9 @@ impl selectors::Element for BlitzNode<'_> {
     }
 
     fn is_html_element_in_html_document(&self) -> bool {
-        true // self.has_namespace(ns!(html))
+        self.element_data()
+            .is_some_and(|element| element.name.ns == ns!(html))
+            && self.with(self.owner_document).is_html_document()
     }
 
     fn has_local_name(&self, local_name: &LocalName) -> bool {
@@ -695,7 +697,8 @@ impl<'a> TElement for BlitzNode<'a> {
 
     // need to check the namespace
     fn is_svg_element(&self) -> bool {
-        false
+        self.element_data()
+            .is_some_and(|element| element.name.ns == ns!(svg))
     }
 
     fn style_attribute(&self) -> Option<ArcBorrow<'_, Locked<PropertyDeclarationBlock>>> {
@@ -933,6 +936,10 @@ impl<'a> TElement for BlitzNode<'a> {
                 LayerOrder::root(),
             ));
         };
+
+        for declaration in self.svg_filter_presentation_hints() {
+            push_style(declaration);
+        }
 
         fn parse_color_attr(value: &str) -> Option<(u8, u8, u8, f32)> {
             if !value.starts_with('#') {

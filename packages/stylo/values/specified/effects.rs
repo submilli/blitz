@@ -8,7 +8,6 @@ use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
 use crate::values::computed::effects::BoxShadow as ComputedBoxShadow;
 use crate::values::computed::effects::SimpleShadow as ComputedSimpleShadow;
-#[cfg(feature = "gecko")]
 use crate::values::computed::url::ComputedUrl;
 use crate::values::computed::Angle as ComputedAngle;
 use crate::values::computed::CSSPixelLength as ComputedCSSPixelLength;
@@ -25,11 +24,8 @@ use crate::values::generics::effects::SimpleShadow as GenericSimpleShadow;
 use crate::values::generics::{NonNegative, ZeroToOne};
 use crate::values::specified::color::Color;
 use crate::values::specified::length::{Length, NonNegativeLength};
-#[cfg(feature = "gecko")]
 use crate::values::specified::url::SpecifiedUrl;
 use crate::values::specified::{Angle, NonNegativeNumberOrPercentage, Number, NumberOrPercentage};
-#[cfg(feature = "servo")]
-use crate::values::Impossible;
 use crate::Zero;
 use cssparser::{match_ignore_ascii_case, BasicParseErrorKind, Parser, Token};
 use style_traits::{ParseError, StyleParseErrorKind, ValueParseErrorKind};
@@ -39,12 +35,7 @@ pub type BoxShadow =
     GenericBoxShadow<Option<Color>, Length, Option<NonNegativeLength>, Option<Length>>;
 
 /// A specified value for a single `filter`.
-#[cfg(feature = "gecko")]
 pub type SpecifiedFilter = GenericFilter<Angle, FilterFactor, Length, SimpleShadow, SpecifiedUrl>;
-
-/// A specified value for a single `filter`.
-#[cfg(feature = "servo")]
-pub type SpecifiedFilter = GenericFilter<Angle, FilterFactor, Length, SimpleShadow, Impossible>;
 
 pub use self::SpecifiedFilter as Filter;
 
@@ -295,7 +286,10 @@ impl Filter {
             #[cfg(feature = "gecko")]
             Filter::Url(ref url) => Ok(ComputedFilter::Url(ComputedUrl(url.clone()))),
             #[cfg(feature = "servo")]
-            Filter::Url(_) => Err(()),
+            Filter::Url(ref url) => Ok(ComputedFilter::Url(match url.url() {
+                Some(resolved) => ComputedUrl::Valid(resolved.clone()),
+                None => return Err(()),
+            })),
         }
     }
 }
@@ -306,7 +300,6 @@ impl Parse for Filter {
         context: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self, ParseError<'i>> {
-        #[cfg(feature = "gecko")]
         {
             if let Ok(url) = input.try_parse(|i| SpecifiedUrl::parse(context, i)) {
                 return Ok(GenericFilter::Url(url));

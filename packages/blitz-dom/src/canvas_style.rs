@@ -53,6 +53,15 @@ impl BaseDocument {
         property: &str,
         text: &str,
     ) -> Option<PropertyDeclarationBlock> {
+        self.canvas_style_declarations_for(self.root_node_id, property, text)
+    }
+
+    pub(crate) fn canvas_style_declarations_for(
+        &self,
+        node: NodeId,
+        property: &str,
+        text: &str,
+    ) -> Option<PropertyDeclarationBlock> {
         if text.len() > 4096 || !crate::css_limits::allowed(text) {
             return None;
         }
@@ -62,7 +71,7 @@ impl BaseDocument {
             PropertyId::parse_enabled_for_all_content(property).ok()?,
             text,
             Origin::Author,
-            &self.style_base_url(self.root_node_id),
+            &self.style_base_url(node),
             None,
             ParsingMode::DEFAULT,
             selectors::matching::QuirksMode::NoQuirks,

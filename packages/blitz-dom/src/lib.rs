@@ -55,6 +55,16 @@ pub mod shadow;
 
 mod calendar_editor;
 mod canvas_filter;
+#[cfg(feature = "svg")]
+mod canvas_svg_filter;
+#[cfg(feature = "svg")]
+pub use canvas_svg_filter::{CanvasSvgFilter, CanvasSvgLimit};
+#[cfg(feature = "svg")]
+pub use usvg::filter as canvas_svg_types;
+#[cfg(feature = "svg")]
+pub use usvg::{
+    BlendMode as CanvasSvgBlendMode, Color as CanvasSvgColor, NonZeroRect as CanvasSvgRect,
+};
 mod canvas_font;
 mod canvas_style;
 mod checkable_activation;
@@ -118,6 +128,7 @@ mod stylo_device;
 mod stylo_to_cursor_icon;
 mod stylo_to_kurbo;
 mod stylo_to_parley;
+mod svg_presentation;
 pub mod traversal;
 /// Versioned storage for the nodes of the DOM tree.
 mod tree;
