@@ -103,7 +103,7 @@ struct Builder<'a> {
     /// caret position when the line ends after it.
     hanging_space: bool,
     opaque: Option<Opaque>,
-    /// The line of the last unit, where a float splitting the flow sits.
+    /// The line content continues on, where a float splitting the flow sits.
     line: u32,
 }
 
@@ -335,7 +335,7 @@ impl Builder<'_> {
         let edges = Edges {
             leading: x,
             trailing: x,
-            line: self.line,
+            line: self.layers.last().and_then(|l| l.line).unwrap_or(self.line),
         };
         let around = sibling_points(self.doc, id);
         if let Some((before, _)) = around {
@@ -398,7 +398,11 @@ impl Builder<'_> {
     }
 
     fn push_unit(&mut self, kind: UnitKind, edges: Edges, text: &str) {
-        self.line = edges.line;
+        // Content after a forced break starts the next line.
+        self.line = match kind {
+            UnitKind::Break => edges.line.saturating_add(1),
+            UnitKind::Text | UnitKind::Atom => edges.line,
+        };
         self.flow.push_unit(kind, edges, text);
         self.hanging_space = false;
     }

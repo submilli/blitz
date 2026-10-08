@@ -177,8 +177,12 @@ impl Flow {
     }
 
     /// The stop of a boundary point that renders in this flow.
-    pub(super) fn exact(&self, key: Key) -> Option<usize> {
-        let entry = self.entries.iter().find(|entry| entry.key == key)?;
+    /// `candidate` limits the match to points that represent their stop.
+    pub(super) fn exact(&self, key: Key, candidate: bool) -> Option<usize> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.key == key && (entry.candidate || !candidate))?;
         self.stop_near(entry.index)
     }
 

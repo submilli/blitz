@@ -81,11 +81,13 @@ impl<'a> DocumentFlows<'a> {
     }
 
     /// The stop of a point that renders, in a flow of the owning root.
+    /// A point that represents a stop wins over one that only renders
+    /// there (the position after a `<br>` that a following float also
+    /// starts at), so returned points locate back to the same stop.
     fn exact(&self, key: Key, owner: Option<(Key, Key)>) -> Option<Caret> {
-        self.find(|flow| {
-            let owned = owner.is_none_or(|owner| self.within(flow, owner));
-            flow.exact(key).filter(|_| owned)
-        })
+        let owned = |flow: &Flow| owner.is_none_or(|owner| self.within(flow, owner));
+        self.find(|flow| flow.exact(key, true).filter(|_| owned(flow)))
+            .or_else(|| self.find(|flow| flow.exact(key, false).filter(|_| owned(flow))))
     }
 
     /// The last stop before the point among the owning root's flows.

@@ -803,3 +803,14 @@ fn stored_upstream_affinity_applies_only_at_a_soft_wrap() {
     let moved = doc.modify_selection(at(cd, 0), at(cd, 0), request).unwrap();
     assert_eq!(moved.focus, at(ef, 0));
 }
+
+#[test]
+fn floats_opening_a_line_belong_to_it_and_locate_back() {
+    let doc = laid_out("<p>aaa<br><img style='float:left;width:10px;height:10px'>hello world</p>");
+    let (p, aaa, hello) = (q(&doc, "p"), child(&doc, "p", 0), child(&doc, "p", 3));
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+    assert_eq!(carets(&doc, at(p, 3), &forward), [at(hello, 11)]);
+    let lines = moves(FORWARD, Granularity::Line, 2);
+    let moved = carets(&doc, at(aaa, 1), &lines);
+    assert_ne!(moved[0], moved[1], "line steps must not stall on the float");
+}

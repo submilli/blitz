@@ -67,7 +67,7 @@ impl SingleFlow {
     /// next one.
     fn caret(&self, offset: usize) -> Option<Caret> {
         let key = Key::control(offset);
-        let index = self.0.exact(key).or_else(|| self.0.after(key))?;
+        let index = self.0.exact(key, false).or_else(|| self.0.after(key))?;
         Some(Caret::at(0, index))
     }
 }
