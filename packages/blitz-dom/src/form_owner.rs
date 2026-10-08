@@ -134,7 +134,7 @@ impl BaseDocument {
         owners
     }
 
-    fn is_html_form(&self, id: NodeId) -> bool {
+    pub(crate) fn is_html_form(&self, id: NodeId) -> bool {
         self.get_node(id)
             .and_then(|n| n.element_data())
             .is_some_and(|e| e.name.ns == ns!(html) && &*e.name.local == "form")

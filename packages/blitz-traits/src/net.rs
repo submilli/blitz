@@ -292,6 +292,8 @@ impl AbortSignal {
 /// and asynchronous I/O. The name is presentation metadata, never a read target.
 #[derive(Clone, PartialEq)]
 pub struct FormFile {
+    /// File API millisecond timestamp retained from its authorized source.
+    pub last_modified: f64,
     pub name: String,
     pub content_type: String,
     pub bytes: std::sync::Arc<[u8]>,

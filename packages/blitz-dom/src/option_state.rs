@@ -186,7 +186,12 @@ impl DocumentMutator<'_> {
         self.reconcile_select(select);
     }
 
-    fn write_option_selectedness(&mut self, option: NodeId, selected: bool, dirty: Option<bool>) {
+    pub(crate) fn write_option_selectedness(
+        &mut self,
+        option: NodeId,
+        selected: bool,
+        dirty: Option<bool>,
+    ) {
         self.doc
             .snapshot_node_and(option, ElementState::CHECKED, |node| {
                 if let Some(el) = node.element_data_mut() {

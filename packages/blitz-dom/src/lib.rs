@@ -40,6 +40,7 @@ mod document;
 mod document_base;
 mod document_metadata;
 mod document_ownership;
+pub mod form_history;
 mod frame_bases;
 pub use document_metadata::{DocumentMetadata, DocumentType};
 pub mod dom_api;

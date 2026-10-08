@@ -225,6 +225,7 @@ fn host_prepared_files_have_bounded_contents_and_selection_lifecycle() {
     let input = q(&doc, "input");
     let form = q(&doc, "form");
     let file = FormFile {
+        last_modified: 123.0,
         name: "sample.txt".into(),
         content_type: "text/plain".into(),
         bytes: Arc::from(&b"a\0b"[..]),
@@ -277,6 +278,7 @@ fn shared_file_selections_fail_entry_admission_before_metadata_amplification() {
     let input = q(&doc, "input");
     let form = q(&doc, "form");
     let file = FormFile {
+        last_modified: 123.0,
         name: "n".repeat(4096),
         content_type: String::new(),
         bytes: Arc::from(&b""[..]),
@@ -330,6 +332,7 @@ fn prepared_selection_validity_type_change_and_clone_lifecycle() {
     let form = q(&doc, "form");
     assert!(doc.control_validity(input).unwrap().value_missing);
     let file = FormFile {
+        last_modified: 123.0,
         name: "f".into(),
         content_type: String::new(),
         bytes: Arc::from(&b""[..]),
