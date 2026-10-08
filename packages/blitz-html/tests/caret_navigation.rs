@@ -814,3 +814,27 @@ fn floats_opening_a_line_belong_to_it_and_locate_back() {
     let moved = carets(&doc, at(aaa, 1), &lines);
     assert_ne!(moved[0], moved[1], "line steps must not stall on the float");
 }
+
+#[test]
+fn breaks_in_nested_boxes_and_unselectable_runs_place_later_floats() {
+    let float = "<img style='float:left;width:10px;height:10px'>";
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+
+    let doc = laid_out(&format!(
+        "<p>aaa <span style='display:inline-block'>x<br></span>{float}bbb</p>"
+    ));
+    let (p, bbb) = (q(&doc, "p"), child(&doc, "p", 3));
+    assert_eq!(carets(&doc, at(p, 3), &forward), [at(bbb, 3)]);
+
+    let doc = laid_out(&format!(
+        "<p>q <span style='display:inline-block'>{float}yy</span> zz</p>"
+    ));
+    let (first, zz) = (child(&doc, "p", 0), child(&doc, "p", 2));
+    assert_eq!(carets(&doc, at(first, 0), &forward), [at(zz, 3)]);
+
+    let doc = laid_out(&format!(
+        "<p>aaa<span style='user-select:none'>b<br></span>{float}cc</p>"
+    ));
+    let (p, cc) = (q(&doc, "p"), child(&doc, "p", 3));
+    assert_eq!(carets(&doc, at(p, 3), &forward), [at(cc, 2)]);
+}

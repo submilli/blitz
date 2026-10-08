@@ -275,6 +275,9 @@ impl Builder<'_> {
             if style.visible {
                 self.extend_opaque(edges);
             }
+            if breaks {
+                self.advance_line(UnitKind::Break, edges);
+            }
             return;
         }
         if continues && !self.flow.is_empty() {
@@ -359,7 +362,8 @@ impl Builder<'_> {
             return;
         };
         if self.opaque.is_some() {
-            return self.extend_opaque(edges);
+            self.extend_opaque(edges);
+            return self.advance_line(UnitKind::Break, edges);
         }
         self.drop_hanging_space();
         let around = sibling_points(self.doc, id);
@@ -377,11 +381,32 @@ impl Builder<'_> {
             return;
         }
         if let Some(edges) = self.opaque.take().and_then(|o| o.edges) {
-            self.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
+            self.push_opaque_unit(edges);
         }
     }
 
+    /// An unselectable run's unit. Its edges start where the run started,
+    /// so the line content continues on, tracked as the run was walked,
+    /// stays as it is.
+    fn push_opaque_unit(&mut self, edges: Edges) {
+        self.flow.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
+        self.hanging_space = false;
+    }
+
+    /// Track the line content continues on: the next one after a forced
+    /// break, except inside a nested box, whose lines all draw on one line
+    /// of the root.
+    fn advance_line(&mut self, kind: UnitKind, edges: Edges) {
+        let nested = self.layers.last().is_some_and(|layer| layer.line.is_some());
+        self.line = if kind == UnitKind::Break && !nested {
+            edges.line.saturating_add(1)
+        } else {
+            edges.line
+        };
+    }
+
     fn extend_opaque(&mut self, edges: Edges) {
+        self.line = edges.line;
         if let Some(opaque) = &mut self.opaque {
             opaque.edges = Some(match opaque.edges {
                 Some(first) => Edges {
@@ -398,11 +423,7 @@ impl Builder<'_> {
     }
 
     fn push_unit(&mut self, kind: UnitKind, edges: Edges, text: &str) {
-        // Content after a forced break starts the next line.
-        self.line = match kind {
-            UnitKind::Break => edges.line.saturating_add(1),
-            UnitKind::Text | UnitKind::Atom => edges.line,
-        };
+        self.advance_line(kind, edges);
         self.flow.push_unit(kind, edges, text);
         self.hanging_space = false;
     }
@@ -419,7 +440,7 @@ impl Builder<'_> {
         self.hanging_space = false;
         // An unselectable run continuing past the box is a unit on each side.
         if let Some(edges) = self.opaque.as_mut().and_then(|o| o.edges.take()) {
-            self.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
+            self.push_opaque_unit(edges);
         }
         let rtl = self.flow.rtl();
         let flow = std::mem::replace(&mut self.flow, Flow::new(self.root, rtl));
