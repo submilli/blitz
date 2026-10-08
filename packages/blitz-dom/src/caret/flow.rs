@@ -286,3 +286,18 @@ impl Flow {
 fn is_collapsed_space(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|b| b == b' ' || b == b'\t')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_collapsed_space;
+
+    #[test]
+    fn only_collapsed_spaces_and_tabs_hang() {
+        assert!(is_collapsed_space(" "));
+        assert!(is_collapsed_space(" \t"));
+        assert!(!is_collapsed_space(""));
+        assert!(!is_collapsed_space("\u{a0}"));
+        assert!(!is_collapsed_space("\u{3000}"));
+        assert!(!is_collapsed_space(" \u{301}"));
+    }
+}

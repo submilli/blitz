@@ -765,3 +765,41 @@ fn flows_without_stops_neither_stall_line_ends_nor_sentences() {
     let moved = carets(&doc, at(hi, 0), &moves(FORWARD, Granularity::Sentence, 2));
     assert_eq!(moved[1].node, next);
 }
+
+#[test]
+fn floats_on_later_lines_do_not_end_the_line() {
+    let doc = laid_out("<p>aaa<br>hello <img style='float:left;width:10px;height:10px'> world</p>");
+    let (hello, world) = (child(&doc, "p", 2), child(&doc, "p", 4));
+    let moved = carets(
+        &doc,
+        at(hello, 2),
+        &moves(FORWARD, Granularity::LineBoundary, 1),
+    );
+    assert_eq!(moved, [at(world, 6)]);
+}
+
+#[test]
+fn unselectable_floats_take_no_stops() {
+    let doc =
+        laid_out("<p>ab<img style='float:left;user-select:none;width:10px;height:10px'>cd</p>");
+    let (ab, cd) = (child(&doc, "p", 0), child(&doc, "p", 2));
+    assert_eq!(
+        carets(&doc, at(ab, 0), &moves(FORWARD, Granularity::Character, 4)),
+        [at(ab, 1), at(ab, 2), at(cd, 0), at(cd, 1)]
+    );
+}
+
+#[test]
+fn stored_upstream_affinity_applies_only_at_a_soft_wrap() {
+    let doc = laid_out("<p>ab<br>cd<br>ef</p>");
+    let (cd, ef) = (child(&doc, "p", 2), child(&doc, "p", 4));
+    let request = ModifyRequest {
+        alter: Alter::Move,
+        direction: FORWARD,
+        granularity: Granularity::Line,
+        line_x: None,
+        upstream: true,
+    };
+    let moved = doc.modify_selection(at(cd, 0), at(cd, 0), request).unwrap();
+    assert_eq!(moved.focus, at(ef, 0));
+}
