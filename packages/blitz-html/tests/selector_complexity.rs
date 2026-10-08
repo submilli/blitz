@@ -40,6 +40,18 @@ fn reported_query_finishes_well_under_a_second() {
 
 #[test]
 fn every_query_path_rejects_excessive_search_nesting() {
+    // The raw parses below bypass the nesting guard and recurse 129 levels,
+    // which in debug builds sits near the 2 MiB test-thread stack. Pages run
+    // on 8 MiB stacks, natively and in Wasm.
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(rejects_excessive_search_nesting)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn rejects_excessive_search_nesting() {
     let doc = chain("");
     let target = q(&doc, "#target");
     let root = q(&doc, "main");

@@ -49,7 +49,8 @@ impl DocumentMutator<'_> {
         if previous != source {
             self.doc.failed_image_inputs.remove(&id);
             if let Some(old_url) = previous.as_deref() {
-                self.doc.remove_image_waiter(id, old_url);
+                let key = crate::image_request::ImageKey::no_cors(old_url);
+                self.doc.remove_image_waiter(id, &key);
             }
             let node = &mut self.doc.nodes[id];
             let element = node.element_data_mut().expect("image input is an element");
@@ -93,15 +94,11 @@ impl BaseDocument {
         let Some(node) = self.nodes.get_mut(id) else {
             return;
         };
-        let Some(element) = node.element_data_mut().filter(|e| {
+        if node.element_data().is_some_and(|e| {
             e.is_image_input() && e.form_state.image_input_source.as_deref() == Some(url)
-        }) else {
-            return;
-        };
-        element.form_state.image_input_image = None;
-        element.special_data = SpecialElementData::None;
-        node.clear_layout_cache();
-        node.insert_damage(crate::layout::damage::ALL_DAMAGE);
+        }) {
+            self.break_image(id);
+        }
     }
 
     /// Image-button dimensions after resolving layout. With no decoded image,

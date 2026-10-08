@@ -363,15 +363,22 @@ pub struct BaseDocument {
     #[cfg(feature = "custom-widget")]
     pub(crate) pending_resource_deallocations: Vec<anyrender::ResourceId>,
 
-    /// Cache of loaded images, keyed by URL. Allows reusing images across multiple
-    /// elements without re-fetching from the network.
-    pub(crate) image_cache: HashMap<String, ImageData>,
+    /// Cache of loaded images, keyed by URL and CORS setting. Allows reusing
+    /// images across multiple elements without re-fetching from the network.
+    pub(crate) image_cache: HashMap<crate::image_request::ImageKey, ImageData>,
     pub(crate) failed_image_inputs: HashMap<NodeId, String>,
 
     /// Tracks in-flight image requests. When an image is being fetched, additional
-    /// requests for the same URL are queued here instead of starting new fetches.
-    /// Value is a list of (node_id, image_type) pairs waiting for the image.
-    pub(crate) pending_images: HashMap<String, crate::image_request::PendingImage>,
+    /// requests for the same URL and CORS setting are queued here instead of
+    /// starting new fetches.
+    pub(crate) pending_images:
+        HashMap<crate::image_request::ImageKey, crate::image_request::PendingImage>,
+    /// The request each `<img>` or image button is waiting for, recorded
+    /// when it started: later base URL changes do not supersede it.
+    /// Invariant: an entry's node is a waiter of `pending_images[key]`,
+    /// which roots it for reclamation, so its `NodeId` is never reused
+    /// while the entry exists.
+    pub(crate) current_image_requests: HashMap<NodeId, crate::image_request::ImageKey>,
 
     /// Nodes whose `background-image`/`mask-image` layers need flushing to
     /// dedicated storage on the node because their style changed (populated by
@@ -561,6 +568,7 @@ impl BaseDocument {
             image_cache: HashMap::new(),
             failed_image_inputs: HashMap::new(),
             pending_images: HashMap::new(),
+            current_image_requests: HashMap::new(),
             pending_style_image_nodes: Vec::new(),
             pending_critical_resources: HashSet::new(),
             parser_forms: Default::default(),
@@ -1217,7 +1225,7 @@ impl BaseDocument {
                         self.net_provider.fetch(
                             self.id(),
                             self.build_request(resolved_href.clone()).stylesheet(
-                                blitz_traits::net::StylesheetMode::from_attribute(
+                                blitz_traits::net::CorsSettings::from_attribute(
                                     element.attr(local_name!("crossorigin")),
                                 ),
                             ),
@@ -1408,14 +1416,7 @@ impl BaseDocument {
             Ok(resource) => resource,
             Err(err) => {
                 if let Some(url) = res.resolved_url.as_ref() {
-                    let waiting_nodes = self
-                        .take_image_waiters(url, res.request_id)
-                        .unwrap_or_default();
-                    for &(id, kind) in &waiting_nodes {
-                        if matches!(kind, ImageType::Image) {
-                            self.fail_image_input(id, url);
-                        }
-                    }
+                    let waiting_nodes = self.fail_image_request(url, res.request_id);
                     #[cfg(feature = "tracing")]
                     tracing::warn!(
                         url = url.as_str(),
@@ -1532,7 +1533,7 @@ impl BaseDocument {
     /// (`<img>` elements, `background-image` layers and `mask-image` layers).
     fn apply_loaded_image(&mut self, url: &str, request_id: usize, image: ImageData) {
         // Get all nodes waiting for this image
-        let Some(waiting_nodes) = self.take_image_waiters(url, request_id) else {
+        let Some((key, waiting_nodes)) = self.take_image_waiters(url, request_id) else {
             return;
         };
 
@@ -1543,23 +1544,19 @@ impl BaseDocument {
         );
 
         // Cache the image
-        self.image_cache.insert(url.to_string(), image.clone());
+        self.cache_image(key.clone(), &image);
 
         // Apply to all waiting nodes
         for (node_id, image_type) in waiting_nodes {
+            if matches!(image_type, ImageType::Image) && !self.take_current_request(node_id, &key) {
+                continue;
+            }
             let Some(node) = self.get_node_mut(node_id) else {
                 continue;
             };
 
             match image_type {
                 ImageType::Image => {
-                    if let Some(element) = node.element_data()
-                        && element.name.local.as_ref() == "input"
-                        && (!element.is_image_input()
-                            || element.form_state.image_input_source.as_deref() != Some(url))
-                    {
-                        continue;
-                    }
                     let element = node.element_data_mut().expect("image waiter is an element");
                     if element.is_image_input() {
                         element.form_state.image_input_image = Some(Box::new(image.clone()));

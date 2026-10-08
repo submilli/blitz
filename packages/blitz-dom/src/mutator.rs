@@ -388,7 +388,10 @@ impl DocumentMutator<'_> {
         }
         let sanitize = self.input_sanitization_needed(node_id, &name, Some(value.as_str_lossy()));
         let current_value = self.value_before_sanitizer_change(node_id, &name);
+        let cors_before = self.img_cors_setting(node_id, &name);
+        self.img_source_changed(node_id, &name);
         self.set_attribute_inner(node_id, name.clone(), &value);
+        self.img_cors_setting_changed(node_id, cors_before);
         self.doc.base_href_changed(node_id, &name);
         self.canvas_dimension_changed(node_id, &name);
         if sanitize {
@@ -598,7 +601,10 @@ impl DocumentMutator<'_> {
         }
         let sanitize = self.input_sanitization_needed(node_id, &name, None);
         let current_value = self.value_before_sanitizer_change(node_id, &name);
+        let cors_before = self.img_cors_setting(node_id, &name);
+        self.img_source_changed(node_id, &name);
         self.clear_attribute_inner(node_id, name.clone());
+        self.img_cors_setting_changed(node_id, cors_before);
         if existed {
             self.doc.base_href_changed(node_id, &name);
         }
@@ -1565,9 +1571,8 @@ impl<'doc> DocumentMutator<'doc> {
         let Some(url) = self.doc.resolve_url(target_id, href) else {
             return;
         };
-        let stylesheet_mode = blitz_traits::net::StylesheetMode::from_attribute(
-            node.attr(local_name!("crossorigin")),
-        );
+        let stylesheet_mode =
+            blitz_traits::net::CorsSettings::from_attribute(node.attr(local_name!("crossorigin")));
         let handler = ResourceHandler::new(
             self.doc.tx.clone(),
             self.doc.id(),
@@ -1636,74 +1641,76 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     pub(crate) fn load_image(&mut self, target_id: NodeId) {
-        let node = &self.doc.nodes[target_id];
-        if let Some(raw_src) = node.attr(local_name!("src")) {
-            if !raw_src.is_empty() {
-                let Some(src) = self.doc.resolve_url(target_id, raw_src) else {
-                    return;
-                };
-                let src_string = src.as_str();
+        // Any new load supersedes the one in flight, even when the new `src`
+        // cannot be requested.
+        let Some((key, url)) = self.doc.image_request(target_id) else {
+            self.doc.current_image_requests.remove(&target_id);
+            return;
+        };
 
-                // Check cache first
-                if let Some(cached_image) = self.doc.image_cache.get(src_string) {
-                    #[cfg(feature = "tracing")]
-                    tracing::info!("Loading image {src_string} from cache");
-                    let node = &mut self.doc.nodes[target_id];
-                    let element = node
-                        .element_data_mut()
-                        .expect("image request is an element");
-                    if element.is_image_input() {
-                        element.form_state.image_input_image = Some(Box::new(cached_image.clone()));
-                    }
-                    element.special_data =
-                        SpecialElementData::Image(Box::new(cached_image.clone()));
-                    node.clear_layout_cache();
-                    node.insert_damage(ALL_DAMAGE);
-                    return;
-                }
-
-                // Check if there's already a pending request for this URL
-                if let Some(waiting_list) = self.doc.pending_images.get_mut(src_string) {
-                    #[cfg(feature = "tracing")]
-                    tracing::info!("Image {src_string} already pending, queueing node {target_id}");
-                    waiting_list.waiters.insert((target_id, ImageType::Image));
-                    return;
-                }
-
-                // Start fetch and track as pending
-                #[cfg(feature = "tracing")]
-                tracing::info!("Fetching image {src_string}");
-                let handler = ResourceHandler::new(
-                    self.doc.tx.clone(),
-                    self.doc.id(),
-                    None,
-                    self.doc.shell_provider.clone(),
-                    ImageHandler::new(ImageType::Image, self.doc.svg_fonts.clone()),
-                );
-                self.doc.pending_images.insert(
-                    src_string.to_string(),
-                    crate::image_request::PendingImage::new(
-                        handler.request_id(),
-                        target_id,
-                        ImageType::Image,
-                    ),
-                );
-                self.doc.net_provider.fetch(
-                    self.doc.id(),
-                    self.doc.build_request(src).image().initiator(
-                        if self.doc.nodes[target_id]
-                            .element_data()
-                            .is_some_and(|e| e.is_image_input())
-                        {
-                            blitz_traits::net::ResourceInitiator::Input
-                        } else {
-                            blitz_traits::net::ResourceInitiator::Img
-                        },
-                    ),
-                    Box::new(handler),
-                );
+        if let Some(cached_image) = self.doc.image_cache.get(&key) {
+            self.doc.current_image_requests.remove(&target_id);
+            #[cfg(feature = "tracing")]
+            tracing::info!("Loading image {} from cache", key.url);
+            let node = &mut self.doc.nodes[target_id];
+            let element = node
+                .element_data_mut()
+                .expect("image request is an element");
+            if element.is_image_input() {
+                element.form_state.image_input_image = Some(Box::new(cached_image.clone()));
             }
+            element.special_data = SpecialElementData::Image(Box::new(cached_image.clone()));
+            node.clear_layout_cache();
+            node.insert_damage(ALL_DAMAGE);
+            return;
         }
+
+        self.doc
+            .current_image_requests
+            .insert(target_id, key.clone());
+        if let Some(waiting_list) = self.doc.pending_images.get_mut(&key) {
+            #[cfg(feature = "tracing")]
+            tracing::info!(
+                "Image {} already pending, queueing node {target_id}",
+                key.url
+            );
+            waiting_list.waiters.insert((target_id, ImageType::Image));
+            return;
+        }
+
+        #[cfg(feature = "tracing")]
+        tracing::info!("Fetching image {}", key.url);
+        let handler = ResourceHandler::new(
+            self.doc.tx.clone(),
+            self.doc.id(),
+            None,
+            self.doc.shell_provider.clone(),
+            ImageHandler::new(ImageType::Image, &key.url, self.doc.svg_fonts.clone()),
+        );
+        let initiator = if self.doc.nodes[target_id]
+            .element_data()
+            .is_some_and(|e| e.is_image_input())
+        {
+            blitz_traits::net::ResourceInitiator::Input
+        } else {
+            blitz_traits::net::ResourceInitiator::Img
+        };
+        let request = self
+            .doc
+            .build_request(url)
+            .image(key.mode)
+            .initiator(initiator);
+        self.doc.pending_images.insert(
+            key,
+            crate::image_request::PendingImage::new(
+                handler.request_id(),
+                target_id,
+                ImageType::Image,
+            ),
+        );
+        self.doc
+            .net_provider
+            .fetch(self.doc.id(), request, Box::new(handler));
     }
 
     fn load_iframe(&mut self, target_id: NodeId) {

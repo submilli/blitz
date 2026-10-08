@@ -45,6 +45,11 @@ pub trait NetHandler: Send + Sync + 'static {
         let _ = metadata;
         self.bytes(resolved_url, bytes);
     }
+
+    /// The provider could not deliver a response: a network or policy error,
+    /// a failed CORS check, or a request it dropped. Handlers that keep no
+    /// pending state may ignore it.
+    fn failed(self: Box<Self>) {}
 }
 
 /// Authority supplied by the network provider, never by document attributes.
@@ -54,14 +59,19 @@ pub struct ResponseMetadata {
     pub image_origin_clean: bool,
 }
 
-/// The link element's CORS request setting. This describes intent, not authority.
-#[derive(Debug, Clone, Copy)]
-pub enum StylesheetMode {
+/// A [CORS settings attribute](https://html.spec.whatwg.org/multipage/urls-and-fetching.html#cors-settings-attributes)
+/// state. This describes the request's intent, never its authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CorsSettings {
     NoCors,
     Anonymous,
     UseCredentials,
 }
-impl StylesheetMode {
+impl CorsSettings {
+    /// Every state, for consumers that look up an image under each identity.
+    pub const ALL: [Self; 3] = [Self::NoCors, Self::Anonymous, Self::UseCredentials];
+
+    /// A missing attribute is No CORS; empty and invalid values are Anonymous.
     pub fn from_attribute(value: Option<&str>) -> Self {
         match value {
             None => Self::NoCors,
@@ -105,9 +115,10 @@ pub struct Request {
     pub headers: HeaderMap,
     pub body: Body,
     pub signal: Option<AbortSignal>,
-    pub stylesheet: Option<StylesheetMode>,
-    /// No-CORS image request; origin authority comes only from response metadata.
-    pub image: bool,
+    pub stylesheet: Option<CorsSettings>,
+    /// An image request and its CORS setting. Pixel readback authority comes
+    /// only from the provider's response metadata.
+    pub image: Option<CorsSettings>,
     pub initiator: ResourceInitiator,
 }
 impl Request {
@@ -121,18 +132,18 @@ impl Request {
             body: Body::Empty,
             signal: None,
             stylesheet: None,
-            image: false,
+            image: None,
             initiator: ResourceInitiator::Other,
         }
     }
 
-    pub fn image(mut self) -> Self {
-        self.image = true;
+    pub fn image(mut self, mode: CorsSettings) -> Self {
+        self.image = Some(mode);
         self.initiator = ResourceInitiator::Img;
         self
     }
 
-    pub fn stylesheet(mut self, mode: StylesheetMode) -> Self {
+    pub fn stylesheet(mut self, mode: CorsSettings) -> Self {
         self.stylesheet = Some(mode);
         self.initiator = ResourceInitiator::Link;
         self
@@ -327,35 +338,59 @@ mod initiator_tests {
             ResourceInitiator::Other
         );
         assert_eq!(
-            Request::get(url.clone()).image().initiator,
+            Request::get(url.clone())
+                .image(CorsSettings::NoCors)
+                .initiator,
             ResourceInitiator::Img
         );
         assert_eq!(
             Request::get(url.clone())
-                .image()
+                .image(CorsSettings::NoCors)
                 .initiator(ResourceInitiator::Input)
                 .initiator,
             ResourceInitiator::Input
         );
         assert_eq!(
             Request::get(url.clone())
-                .image()
+                .image(CorsSettings::NoCors)
                 .initiator(ResourceInitiator::Css)
                 .initiator,
             ResourceInitiator::Css
         );
         assert_eq!(
             Request::get(url.clone())
-                .stylesheet(StylesheetMode::NoCors)
+                .stylesheet(CorsSettings::NoCors)
                 .initiator,
             ResourceInitiator::Link
         );
         assert_eq!(
             Request::get(url)
-                .stylesheet(StylesheetMode::NoCors)
+                .stylesheet(CorsSettings::NoCors)
                 .initiator(ResourceInitiator::Css)
                 .initiator,
             ResourceInitiator::Css
         );
+    }
+}
+
+#[cfg(test)]
+mod cors_settings_tests {
+    use super::*;
+    #[test]
+    fn cors_settings_follow_the_html_attribute_states() {
+        for (value, expected) in [
+            (None, CorsSettings::NoCors),
+            (Some(""), CorsSettings::Anonymous),
+            (Some("anonymous"), CorsSettings::Anonymous),
+            (Some("bogus"), CorsSettings::Anonymous),
+            (Some("use-credentials"), CorsSettings::UseCredentials),
+            (Some("Use-Credentials"), CorsSettings::UseCredentials),
+        ] {
+            assert_eq!(CorsSettings::from_attribute(value), expected, "{value:?}");
+        }
+        let url = Url::parse("https://page.test/a.png").unwrap();
+        let request = Request::get(url).image(CorsSettings::Anonymous);
+        assert_eq!(request.image, Some(CorsSettings::Anonymous));
+        assert_eq!(request.initiator, ResourceInitiator::Img);
     }
 }

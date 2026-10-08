@@ -476,7 +476,8 @@ impl BaseDocument {
 
                     // Check cache first
                     let url_str = new_url.as_str();
-                    if let Some(cached_image) = self.image_cache.get(url_str) {
+                    let key = crate::image_request::ImageKey::no_cors(url_str);
+                    if let Some(cached_image) = self.image_cache.get(&key) {
                         #[cfg(feature = "tracing")]
                         tracing::info!("Loading image {url_str} from cache");
                         Some(ImageResourceData {
@@ -484,7 +485,7 @@ impl BaseDocument {
                             status: Status::Ok,
                             image: cached_image.clone(),
                         })
-                    } else if let Some(waiting_list) = self.pending_images.get_mut(url_str) {
+                    } else if let Some(waiting_list) = self.pending_images.get_mut(&key) {
                         // Image is already being fetched, queue this node
                         #[cfg(feature = "tracing")]
                         tracing::info!("Image {url_str} already pending, queueing node {node_id}");
@@ -499,10 +500,14 @@ impl BaseDocument {
                             doc_id,
                             None,
                             self.shell_provider.clone(),
-                            ImageHandler::new(kind.image_type(idx), self.svg_fonts.clone()),
+                            ImageHandler::new(
+                                kind.image_type(idx),
+                                url_str,
+                                self.svg_fonts.clone(),
+                            ),
                         );
                         self.pending_images.insert(
-                            url_str.to_string(),
+                            key,
                             crate::image_request::PendingImage::new(
                                 handler.request_id(),
                                 node_id,
@@ -515,7 +520,7 @@ impl BaseDocument {
                                 (**new_url).clone(),
                                 self.abort_signal.as_ref(),
                             )
-                            .image()
+                            .image(blitz_traits::net::CorsSettings::NoCors)
                             .initiator(blitz_traits::net::ResourceInitiator::Css),
                             Box::new(handler),
                         );

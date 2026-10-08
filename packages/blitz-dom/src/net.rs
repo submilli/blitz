@@ -242,7 +242,7 @@ impl ServoStylesheetLoader for StylesheetLoader {
         self.net_provider.fetch(
             self.doc_id,
             stamped_request(url.as_ref().clone(), self.abort_signal.as_ref())
-                .stylesheet(blitz_traits::net::StylesheetMode::NoCors)
+                .stylesheet(blitz_traits::net::CorsSettings::NoCors)
                 .initiator(blitz_traits::net::ResourceInitiator::Css),
             ResourceHandler::boxed(
                 self.tx.clone(),
@@ -583,13 +583,24 @@ impl NetHandler for ResourceHandler<DocumentSrcHandler> {
 
 pub struct ImageHandler {
     kind: ImageType,
+    /// The URL this fetch was requested for. It completes the pending entry
+    /// under that URL even after redirects change the response URL.
+    request_url: String,
     #[cfg_attr(not(feature = "svg"), allow(dead_code))]
     svg_fonts: crate::util::SvgFonts,
 }
 impl ImageHandler {
     /// `svg_fonts` is the document's, for text in SVG images.
-    pub(crate) fn new(kind: ImageType, svg_fonts: crate::util::SvgFonts) -> Self {
-        Self { kind, svg_fonts }
+    pub(crate) fn new(
+        kind: ImageType,
+        request_url: impl Into<String>,
+        svg_fonts: crate::util::SvgFonts,
+    ) -> Self {
+        Self {
+            kind,
+            request_url: request_url.into(),
+            svg_fonts,
+        }
     }
 }
 
@@ -600,12 +611,19 @@ impl NetHandler for ResourceHandler<ImageHandler> {
 
     fn bytes_with_metadata(
         self: Box<Self>,
-        resolved_url: String,
+        _resolved_url: String,
         bytes: Bytes,
         metadata: blitz_traits::net::ResponseMetadata,
     ) {
         let result = self.data.parse(bytes, metadata.image_origin_clean);
-        self.respond(resolved_url, result)
+        self.respond(self.data.request_url.clone(), result)
+    }
+
+    fn failed(self: Box<Self>) {
+        self.respond(
+            self.data.request_url.clone(),
+            Err(String::from("Image request failed")),
+        )
     }
 }
 
@@ -835,7 +853,7 @@ mod image_authority_tests {
     }
     impl NetProvider for ImageProvider {
         fn fetch(&self, _: usize, request: Request, handler: Box<dyn NetHandler>) {
-            assert!(request.image);
+            assert_eq!(request.image, Some(blitz_traits::net::CorsSettings::NoCors));
             assert_eq!(request.initiator, blitz_traits::net::ResourceInitiator::Img);
             self.requests.fetch_add(1, Ao::Relaxed);
             handler.bytes_with_metadata(

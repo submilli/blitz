@@ -66,7 +66,7 @@ impl NavigationOptions {
             body: self.document_resource,
             signal: None,
             stylesheet: None,
-            image: false,
+            image: None,
             initiator: crate::net::ResourceInitiator::Other,
         }
     }

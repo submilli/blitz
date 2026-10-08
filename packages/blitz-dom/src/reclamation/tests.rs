@@ -88,7 +88,7 @@ fn queued_reactions_and_images_release_their_native_roots() {
     doc.set_custom_element_reactions(true);
     doc.record_custom_element_reaction(CustomElementReaction::Disconnected(reaction));
     doc.pending_images.insert(
-        "fixture".into(),
+        crate::image_request::ImageKey::new("fixture", blitz_traits::net::CorsSettings::NoCors),
         crate::image_request::PendingImage::new(0, image, crate::util::ImageType::Image),
     );
     doc.pending_style_image_nodes.push(background);
