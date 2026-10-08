@@ -44,7 +44,7 @@ pub(super) struct Flow {
     /// Text offset of every unit's start; `finish` appends the end.
     offsets: Vec<usize>,
     units: Vec<Unit>,
-    /// Entries in push order, whose indices never decrease.
+    /// Entries in push order, whose indices never decrease (`push_entry`).
     entries: Vec<Entry>,
     /// The representative DOM point of every unit boundary that is a stop.
     stops: Vec<Option<Boundary>>,
@@ -97,7 +97,14 @@ impl Flow {
         }
     }
 
-    pub(super) fn push_entry(&mut self, entry: Entry) {
+    /// Record an entry. Indices never decrease, which lets `pop_unit` move
+    /// only the trailing entries: a point recorded after a later boundary
+    /// (a grapheme continuation after a collapsed space) takes that boundary.
+    pub(super) fn push_entry(&mut self, mut entry: Entry) {
+        if let Some(last) = self.entries.last() {
+            entry.index = entry.index.max(last.index);
+        }
+        entry.index = entry.index.min(self.units.len());
         self.entries.push(entry);
     }
 
@@ -114,8 +121,11 @@ impl Flow {
         self.offsets.push(self.text.len());
         self.stops = vec![None; self.units.len() + 1];
         for entry in &self.entries {
-            if entry.candidate && self.stops[entry.index].is_none() {
-                self.stops[entry.index] = Some(entry.point);
+            let Some(stop) = self.stops.get_mut(entry.index) else {
+                continue;
+            };
+            if entry.candidate && stop.is_none() {
+                *stop = Some(entry.point);
             }
         }
         self
@@ -136,10 +146,6 @@ impl Flow {
     /// The tree-order key of the first entry, which orders flows.
     pub(super) fn first_key(&self) -> Option<Key> {
         self.entries.first().map(|entry| entry.key)
-    }
-
-    pub(super) fn last_key(&self) -> Option<Key> {
-        self.entries.last().map(|entry| entry.key)
     }
 
     pub(super) fn point(&self, index: usize) -> Option<Boundary> {
@@ -174,6 +180,15 @@ impl Flow {
     pub(super) fn exact(&self, key: Key) -> Option<usize> {
         let entry = self.entries.iter().find(|entry| entry.key == key)?;
         self.stop_near(entry.index)
+    }
+
+    /// The last stop represented by a point at or before `key`.
+    pub(super) fn before(&self, key: Key) -> Option<usize> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.candidate && entry.key <= key)
+            .map(|entry| entry.index)
     }
 
     /// The first stop represented by a point after `key`.

@@ -40,14 +40,15 @@ impl TextStyle {
         }
     }
 
-    /// Whether `ch` is white space this style may collapse.
+    /// Whether `ch` is white space this style may collapse, as Parley
+    /// decides it: all ASCII white space, or only spaces and tabs where
+    /// segment breaks are preserved.
     pub(super) fn collapsible(&self, ch: char) -> bool {
-        let space = matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{c}');
-        space
-            && matches!(
-                self.white_space,
-                WhiteSpace::Collapse | WhiteSpace::PreserveBreaks
-            )
+        match self.white_space {
+            WhiteSpace::Collapse => ch.is_ascii_whitespace(),
+            WhiteSpace::PreserveBreaks => matches!(ch, ' ' | '\t'),
+            _ => false,
+        }
     }
 }
 
@@ -68,16 +69,13 @@ impl<'a> Aligner<'a> {
     }
 
     /// The laid-out range of one DOM character, or `None` when layout
-    /// collapsed it away. Collapsible white space matches one laid-out space
-    /// (a preserved segment break matches a line feed); other characters
-    /// must match their transformed form exactly.
+    /// collapsed it away. Collapsible white space matches one laid-out space;
+    /// other characters must match their transformed form exactly.
     pub(super) fn char(&mut self, ch: char, style: TextStyle) -> Option<Range<usize>> {
         let rest = &self.text[self.position..];
         let start = self.position;
         if style.collapsible(ch) {
-            let preserved = ch == '\n' && style.white_space == WhiteSpace::PreserveBreaks;
-            let wanted = if preserved { '\n' } else { ' ' };
-            if !rest.starts_with(wanted) {
+            if !rest.starts_with(' ') {
                 return None;
             }
             self.position += 1;

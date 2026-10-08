@@ -13,7 +13,7 @@ use super::order::{TreeOrder, flattened_root, is_out_of_flow};
 use crate::layout::construct::{InlineElement, inline_element};
 use crate::node::{ListItemLayoutPosition, Marker, NodeData, TextLayout};
 use crate::{BaseDocument, NodeId, ranges::Boundary};
-use style::values::computed::{Display, UserSelect};
+use style::values::computed::Display;
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
 
 /// The flows of a laid-out inline root, empty without a current layout.
@@ -33,7 +33,7 @@ pub(super) fn document_flows(doc: &BaseDocument, order: &TreeOrder, root: NodeId
         opaque: None,
     };
     builder.marker(root);
-    if unselectable(doc, root) {
+    if order.is_unselectable(root) {
         builder.opaque = Some(Opaque {
             element: root,
             edges: None,
@@ -51,12 +51,6 @@ fn inline_layout(doc: &BaseDocument, id: NodeId) -> Option<&TextLayout> {
         .element_data()?
         .inline_layout_data
         .as_deref()
-}
-
-fn unselectable(doc: &BaseDocument, id: NodeId) -> bool {
-    doc.nodes[id]
-        .primary_styles()
-        .is_some_and(|s| s.clone_user_select() == UserSelect::None)
 }
 
 /// One Parley layout being aligned.
@@ -175,14 +169,23 @@ impl Builder<'_> {
     }
 
     fn span(&mut self, id: NodeId, generated: bool, pending: &mut Vec<Step>) {
-        if self.opaque.is_none() && !generated && unselectable(self.doc, id) {
-            self.opaque = Some(Opaque {
-                element: id,
-                edges: None,
-            });
-            pending.push(Step::LeaveOpaque(id));
+        if !generated {
+            self.enter_opaque(id, pending);
         }
         push_children(self.doc, id, pending, generated);
+    }
+
+    /// Content of an unselectable element inside a selectable one becomes
+    /// one opaque unit.
+    fn enter_opaque(&mut self, id: NodeId, pending: &mut Vec<Step>) {
+        if self.opaque.is_some() || !self.order.is_unselectable(id) {
+            return;
+        }
+        self.opaque = Some(Opaque {
+            element: id,
+            edges: None,
+        });
+        pending.push(Step::LeaveOpaque(id));
     }
 
     /// An inline-level box whose own inline content continues this flow
@@ -190,7 +193,11 @@ impl Builder<'_> {
     /// other box ends this flow, its content forming flows of its own.
     fn inline_box(&mut self, id: NodeId, kind: InlineElement, pending: &mut Vec<Step>) {
         if is_out_of_flow(&self.doc.nodes[id]) {
-            return self.split();
+            self.split();
+            if kind == InlineElement::Atom {
+                self.floated_atom(id);
+            }
+            return;
         }
         if kind == InlineElement::Atom {
             return self.atom(id);
@@ -201,6 +208,7 @@ impl Builder<'_> {
         let Some(text) = inline_layout(self.doc, inner) else {
             return self.split();
         };
+        self.enter_opaque(id, pending);
         let line = self.layers.last().and_then(|layer| {
             let edge = layer.geometry.inline_box(id.as_u64())?;
             Some(layer.line.unwrap_or(edge.line))
@@ -221,9 +229,12 @@ impl Builder<'_> {
             .and_then(|parent| self.doc.nodes[parent].primary_styles());
         let style = TextStyle::of(parent.as_deref().map(|s| &**s));
         if generated {
-            // Generated content takes layout text but no caret positions.
+            // Generated content takes layout text but no caret positions;
+            // like any content, it keeps a preceding space from hanging.
             for ch in data.content.as_str_lossy().chars() {
-                self.align(ch, style);
+                if self.align(ch, style).is_some() && !style.collapsible(ch) {
+                    self.hanging_space = false;
+                }
             }
             return;
         }
@@ -249,7 +260,13 @@ impl Builder<'_> {
         };
         let edges = layer.edges(range.start, range.end);
         let text = layer.aligner.slice(range.clone());
-        let continues = !layer.aligner.starts_grapheme(range.start);
+        // Chrome steps over a CR and an LF separately, though they form one
+        // grapheme cluster.
+        let breaks = text == "\n" || text == "\r";
+        let continues = !layer.aligner.starts_grapheme(range.start) && !breaks;
+        if !style.collapsible(ch) {
+            self.hanging_space = false;
+        }
         if !selectable {
             self.entry(point, self.flow.len(), false);
             if style.visible {
@@ -260,12 +277,13 @@ impl Builder<'_> {
         if continues && !self.flow.is_empty() {
             self.entry(point, self.flow.len() - 1, false);
             if self.flow.extend_text(text, edges.trailing) {
+                // A space carrying a combining mark no longer hangs.
+                self.hanging_space = false;
                 return;
             }
         }
         self.entry(point, self.flow.len(), true);
-        if text == "\n" {
-            self.drop_hanging_space();
+        if breaks {
             self.push_unit(UnitKind::Break, edges, text);
             return;
         }
@@ -301,6 +319,26 @@ impl Builder<'_> {
         if let Some((_, after)) = around {
             self.entry(after, self.flow.len(), true);
         }
+    }
+
+    /// A floated or positioned replaced element is a flow of one atom. It
+    /// takes no inline space, so both its sides draw at its start edge.
+    fn floated_atom(&mut self, id: NodeId) {
+        let x = self.doc.nodes[id].unrounded_absolute_position(0.0, 0.0).x;
+        let edges = Edges {
+            leading: x,
+            trailing: x,
+            line: 0,
+        };
+        let around = sibling_points(self.doc, id);
+        if let Some((before, _)) = around {
+            self.entry(before, self.flow.len(), true);
+        }
+        self.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
+        if let Some((_, after)) = around {
+            self.entry(after, self.flow.len(), true);
+        }
+        self.split();
     }
 
     /// A `<br>` is a unit of its own; the line ends before it, so collapsible

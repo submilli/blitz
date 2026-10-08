@@ -15,6 +15,8 @@ use icu_segmenter::GraphemeClusterSegmenter;
 pub struct ControlModified {
     /// The horizontal position to pass to the next line or paragraph step.
     pub line_x: Option<f32>,
+    /// The focus affinity to pass to the next step.
+    pub upstream: bool,
 }
 
 impl DocumentMutator<'_> {
@@ -28,17 +30,20 @@ impl DocumentMutator<'_> {
         request: ModifyRequest,
     ) -> Option<ControlModified> {
         let selection = self.doc.control_selection(id)?;
-        let flow = Single(control_flow(self.doc, id)?);
+        let flow = SingleFlow(control_flow(self.doc, id)?);
         let (anchor, focus) = match selection.direction {
             SelectionDirection::Backward => (selection.end, selection.start),
             _ => (selection.start, selection.end),
         };
+        let mut focus = flow.caret(focus)?;
+        focus.upstream = request.upstream;
         let carets = Carets {
             anchor: flow.caret(anchor)?,
-            focus: flow.caret(focus)?,
+            focus,
         };
         let (moved, line_x) = navigate::modify(&flow, carets, request)?;
         let anchor = flow.0.point(moved.anchor.index)?.offset;
+        let upstream = moved.focus.upstream;
         let focus = flow.0.point(moved.focus.index)?.offset;
         let direction = match anchor.cmp(&focus) {
             std::cmp::Ordering::Less => SelectionDirection::Forward,
@@ -51,23 +56,23 @@ impl DocumentMutator<'_> {
             direction,
         };
         self.set_control_selection(id, selection);
-        Some(ControlModified { line_x })
+        Some(ControlModified { line_x, upstream })
     }
 }
 
-struct Single(Flow);
+struct SingleFlow(Flow);
 
-impl Single {
+impl SingleFlow {
     /// The stop at a UTF-16 offset; an offset inside a grapheme takes the
     /// next one.
     fn caret(&self, offset: usize) -> Option<Caret> {
         let key = Key::control(offset);
         let index = self.0.exact(key).or_else(|| self.0.after(key))?;
-        Some(Caret { flow: 0, index })
+        Some(Caret::at(0, index))
     }
 }
 
-impl Flows for Single {
+impl Flows for SingleFlow {
     fn count(&self) -> usize {
         1
     }

@@ -3,8 +3,9 @@
 
 use crate::layout::construct::{InlineElement, inline_element};
 use crate::{BaseDocument, NodeId, ranges::Boundary};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use style::computed_values::float::T as Float;
+use style::values::computed::UserSelect;
 
 /// A boundary point's place in flat-tree order: before node number `node`,
 /// plus a UTF-16 offset inside a Text node. A text control's flow instead
@@ -28,36 +29,61 @@ impl Key {
 
 /// Flat-tree preorder numbers. A node's span covers its own number and every
 /// number in its subtree, so the boundary after it is the end of its span.
+/// The walk also resolves which elements are unselectable.
 pub(super) struct TreeOrder {
     spans: HashMap<NodeId, (u32, u32)>,
+    unselectable: HashSet<NodeId>,
+}
+
+/// One step of the preorder walk: enter a node (with whether its parent's
+/// used `user-select` is `none`), or close its span.
+enum Visit {
+    Enter(NodeId, bool),
+    Leave(NodeId),
 }
 
 impl TreeOrder {
     pub(super) fn new(doc: &BaseDocument) -> Self {
         let mut spans: HashMap<NodeId, (u32, u32)> = HashMap::new();
+        let mut unselectable = HashSet::new();
         let mut next = 0u32;
-        let mut pending = vec![(doc.root_node().id, false)];
-        while let Some((id, done)) = pending.pop() {
-            if done {
-                if let Some(span) = spans.get_mut(&id) {
-                    span.1 = next;
+        let mut pending = vec![Visit::Enter(doc.root_node().id, false)];
+        while let Some(visit) = pending.pop() {
+            let (id, inherited) = match visit {
+                Visit::Leave(id) => {
+                    if let Some(span) = spans.get_mut(&id) {
+                        span.1 = next;
+                    }
+                    continue;
                 }
-                continue;
-            }
+                Visit::Enter(id, inherited) => (id, inherited),
+            };
             spans.insert(id, (next, next));
             next = next.saturating_add(1);
-            pending.push((id, true));
+            pending.push(Visit::Leave(id));
             let node = &doc.nodes[id];
+            let none = used_user_select_none(node, inherited);
+            if none {
+                unselectable.insert(id);
+            }
             let children = node
                 .before()
                 .into_iter()
                 .chain(node.flat_children().iter().copied())
                 .chain(node.after());
             let start = pending.len();
-            pending.extend(children.map(|child| (child, false)));
+            pending.extend(children.map(|child| Visit::Enter(child, none)));
             pending[start..].reverse();
         }
-        Self { spans }
+        Self {
+            spans,
+            unselectable,
+        }
+    }
+
+    /// Whether an element's used `user-select` is `none`.
+    pub(super) fn is_unselectable(&self, id: NodeId) -> bool {
+        self.unselectable.contains(&id)
     }
 
     /// Text boundaries keep their offset; any other boundary is the point
@@ -201,4 +227,14 @@ fn push_layout_children(
     let ids = children.as_deref().unwrap_or(node.flat_children());
     pending.extend(ids.iter().map(|&child| (child, embedded)));
     pending[start..].reverse();
+}
+
+/// `user-select: auto` uses `none` inside an unselectable parent.
+/// <https://drafts.csswg.org/css-ui/#valdef-user-select-auto>
+fn used_user_select_none(node: &crate::Node, inherited: bool) -> bool {
+    match node.primary_styles().map(|s| s.clone_user_select()) {
+        Some(UserSelect::None) => true,
+        Some(UserSelect::Auto) | None => inherited,
+        Some(_) => false,
+    }
 }

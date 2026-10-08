@@ -144,7 +144,7 @@ impl ClusterEdge {
 /// The document position of a box's content edge, where its layout starts.
 fn content_origin(node: &Node) -> (f32, f32) {
     let layout = node.final_layout();
-    let position = node.absolute_position(0.0, 0.0);
+    let position = node.unrounded_absolute_position(0.0, 0.0);
     (
         position.x + layout.border.left + layout.padding.left,
         position.y + layout.border.top + layout.padding.top,

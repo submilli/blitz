@@ -1172,12 +1172,14 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                             );
                         });
                     }
-                    (DisplayOutside::Inline, DisplayInside::Flow) => {
-                        if kind == InlineElement::Atom {
+                    (DisplayOutside::Inline, DisplayInside::Flow) => match kind {
+                        InlineElement::Atom => {
                             layout_children.push(node_id);
-                        } else if kind == InlineElement::Break {
+                        }
+                        InlineElement::Break => {
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                        } else {
+                        }
+                        InlineElement::Span | InlineElement::Hidden => {
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                             iter_children_and_pseudos!(nodes[node_id], |child_id| {
                                 find_inline_layout_embedded_boxes_recursive(
@@ -1188,7 +1190,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                                 );
                             });
                         }
-                    }
+                    },
                     // Inline box
                     (_, _) => {
                         layout_children.push(node_id);
@@ -1400,81 +1402,85 @@ pub(crate) fn build_inline_layout_into(
                         builder.pop_style_span();
                     }
                     (DisplayOutside::Inline, DisplayInside::Flow) => {
-                        if kind == InlineElement::Atom {
-                            builder.push_inline_box(InlineBox {
-                                id: node_id.as_u64(),
-                                kind: box_kind,
-                                // Overridden by push_inline_box method
-                                index: 0,
-                                // Width and height are set during layout
-                                width: 0.0,
-                                height: 0.0,
-                                baseline: None,
-                            });
-                        } else if kind == InlineElement::Break {
-                            // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                            // TODO: update span id for br spans
-                            builder.push_style_modification_span(&[
-                                parley::StyleProperty::WhiteSpaceCollapse(
-                                    WhiteSpaceCollapse::Preserve,
-                                ),
-                            ]);
-                            builder.push_text("\n");
-                            builder.pop_style_span();
-                        } else {
-                            // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                            let mut style = node
-                                .primary_styles()
-                                .map(|s| stylo_to_parley::style(node.id, &s))
-                                .unwrap_or_else(|| parley::TextStyle {
-                                    white_space_collapse: WhiteSpaceCollapse::Collapse,
-                                    ..Default::default()
+                        match kind {
+                            InlineElement::Atom => {
+                                builder.push_inline_box(InlineBox {
+                                    id: node_id.as_u64(),
+                                    kind: box_kind,
+                                    // Overridden by push_inline_box method
+                                    index: 0,
+                                    // Width and height are set during layout
+                                    width: 0.0,
+                                    height: 0.0,
+                                    baseline: None,
                                 });
-
-                            // Floor the line-height of the span by the line-height of the inline context
-                            // See https://www.w3.org/TR/CSS21/visudet.html#line-height
-                            if let Some(line_height) = span_line_heights.get(&node_id) {
-                                style.line_height = parley::LineHeight::Absolute(*line_height);
                             }
-
-                            // dbg!(node_id);
-                            // dbg!(&style);
-
-                            builder.push_style_span(style);
-
-                            if let Some(before_id) = node.before() {
-                                build_inline_layout_recursive(
-                                    builder,
-                                    nodes,
-                                    node_id,
-                                    before_id,
-                                    text_transform,
-                                    span_line_heights,
-                                );
+                            InlineElement::Break => {
+                                // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
+                                // TODO: update span id for br spans
+                                builder.push_style_modification_span(&[
+                                    parley::StyleProperty::WhiteSpaceCollapse(
+                                        WhiteSpaceCollapse::Preserve,
+                                    ),
+                                ]);
+                                builder.push_text("\n");
+                                builder.pop_style_span();
                             }
+                            InlineElement::Span | InlineElement::Hidden => {
+                                // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
+                                let mut style = node
+                                    .primary_styles()
+                                    .map(|s| stylo_to_parley::style(node.id, &s))
+                                    .unwrap_or_else(|| parley::TextStyle {
+                                        white_space_collapse: WhiteSpaceCollapse::Collapse,
+                                        ..Default::default()
+                                    });
 
-                            for child_id in node.flat_children().iter().copied() {
-                                build_inline_layout_recursive(
-                                    builder,
-                                    nodes,
-                                    node_id,
-                                    child_id,
-                                    text_transform,
-                                    span_line_heights,
-                                );
-                            }
-                            if let Some(after_id) = node.after() {
-                                build_inline_layout_recursive(
-                                    builder,
-                                    nodes,
-                                    node_id,
-                                    after_id,
-                                    text_transform,
-                                    span_line_heights,
-                                );
-                            }
+                                // Floor the line-height of the span by the line-height of the inline context
+                                // See https://www.w3.org/TR/CSS21/visudet.html#line-height
+                                if let Some(line_height) = span_line_heights.get(&node_id) {
+                                    style.line_height = parley::LineHeight::Absolute(*line_height);
+                                }
 
-                            builder.pop_style_span();
+                                // dbg!(node_id);
+                                // dbg!(&style);
+
+                                builder.push_style_span(style);
+
+                                if let Some(before_id) = node.before() {
+                                    build_inline_layout_recursive(
+                                        builder,
+                                        nodes,
+                                        node_id,
+                                        before_id,
+                                        text_transform,
+                                        span_line_heights,
+                                    );
+                                }
+
+                                for child_id in node.flat_children().iter().copied() {
+                                    build_inline_layout_recursive(
+                                        builder,
+                                        nodes,
+                                        node_id,
+                                        child_id,
+                                        text_transform,
+                                        span_line_heights,
+                                    );
+                                }
+                                if let Some(after_id) = node.after() {
+                                    build_inline_layout_recursive(
+                                        builder,
+                                        nodes,
+                                        node_id,
+                                        after_id,
+                                        text_transform,
+                                        span_line_heights,
+                                    );
+                                }
+
+                                builder.pop_style_span();
+                            }
                         }
                     }
                     // Inline box
