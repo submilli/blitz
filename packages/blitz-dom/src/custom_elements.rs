@@ -218,7 +218,11 @@ impl BaseDocument {
     /// Set an element's state (the embedder does this when it upgrades or
     /// constructs it), restyling it for `:defined`.
     pub fn set_custom_element_state(&mut self, node_id: NodeId, state: CustomElementState) {
-        let Some(element) = self.nodes[node_id].element_data_mut() else {
+        // The embedder supplies the ID; an unknown one changes nothing.
+        let Some(element) = self
+            .get_node_mut(node_id)
+            .and_then(|node| node.element_data_mut())
+        else {
             return;
         };
         if element.custom_element_state == state {
@@ -235,8 +239,11 @@ impl BaseDocument {
     /// Queue the pre-construction lifecycle snapshot for an upgrade.
     pub fn upgrade_reactions(&mut self, id: NodeId) -> Vec<CustomElementReaction> {
         let mut reactions = Vec::new();
+        if self.get_node(id).is_none() {
+            return reactions;
+        }
         let mut bytes = 0usize;
-        if let Some(element) = self.nodes[id].element_data() {
+        if let Some(element) = self.get_node(id).and_then(|node| node.element_data()) {
             for attr in element.attrs().iter() {
                 let retained =
                     attr.name.local.len() + attr.name.ns.len() + attr.value.retained_bytes();
@@ -722,5 +729,14 @@ mod bounds_tests {
         assert!(doc.take_custom_element_reaction_overflow());
         doc.record_custom_element_reaction(CustomElementReaction::Connected(id));
         assert_eq!(doc.take_custom_element_reactions().len(), 1);
+    }
+
+    #[test]
+    fn unknown_embedder_ids_change_nothing() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        let unknown = NodeId::from_u64(u64::MAX - 1);
+        assert!(doc.get_node(unknown).is_none());
+        doc.set_custom_element_state(unknown, CustomElementState::Custom);
+        assert!(doc.upgrade_reactions(unknown).is_empty());
     }
 }
