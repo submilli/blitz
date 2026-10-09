@@ -203,10 +203,17 @@ impl Mover<'_> {
         }
     }
 
-    /// The horizontal position of a caret on its own line; a float's stop
-    /// takes that of the content it stands for.
+    /// The horizontal position of a caret on its own line. A float's stop
+    /// takes that of the content it stands for on the float's line, and
+    /// otherwise draws at the float's start edge.
     fn x(&self, caret: Caret) -> Option<f32> {
-        let caret = float::stand_in(self.flows, caret).unwrap_or(caret);
+        let flow = self.flows.flow(caret.flow)?;
+        let beside = float::stand_in(self.flows, caret).filter(|beside| {
+            self.flows.flow(beside.flow).is_some_and(|beside_flow| {
+                beside_flow.root() == flow.root() && line_of(beside_flow, *beside) == flow.line(0)
+            })
+        });
+        let caret = beside.unwrap_or(caret);
         let flow = self.flows.flow(caret.flow)?;
         Some(flow.x(caret.index, line_of(flow, caret)))
     }

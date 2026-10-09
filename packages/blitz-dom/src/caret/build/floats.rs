@@ -15,12 +15,19 @@ impl Builder<'_> {
     /// its start edge.
     pub(super) fn floated_atom(&mut self, id: NodeId) {
         let closed = self.flows.len();
+        let collapsible_end = self.hanging_space;
         self.split();
-        if self.opaque.is_some() || self.order.is_unselectable(id) {
+        if self.opaque.is_some() {
             return;
         }
+        if self.order.is_unselectable(id) {
+            // It takes no stops, but a float stop before it stands for
+            // nothing past it, as for a box without content.
+            let line = self.layers.last().map_or(0, Layer::continuing_line);
+            return self.reach(Walked::Box { end: None, line });
+        }
         let previous = self.flows.get(closed);
-        let before = float::before_stop(self.line_start, self.last, previous);
+        let before = float::before_stop(self.line_start, self.last, previous, collapsible_end);
         let x = self.doc.nodes[id].unrounded_absolute_position(0.0, 0.0).x;
         let Some(line) = self.layers.last().map(Layer::continuing_line) else {
             return;
@@ -40,7 +47,8 @@ impl Builder<'_> {
         }
         self.flow.set_float_stops(FloatStops {
             before,
-            after: Beside::Stays,
+            after: Beside::LineEnd,
+            after_break: matches!(self.last, Walked::Break),
         });
         let index = self.flows.len();
         self.split();
@@ -62,7 +70,9 @@ impl Builder<'_> {
             .display_style()
             .is_some_and(|display| display.outside() == DisplayOutside::Inline);
         if floated || (inline_level && !is_out_of_flow(node)) {
-            self.reach(Walked::Box(self.order.end(id)));
+            let line = self.layers.last().map_or(0, |layer| layer.box_line(id));
+            let end = self.order.end(id);
+            self.reach(Walked::Box { end, line });
             self.line_start = false;
         }
     }
@@ -74,7 +84,7 @@ impl Builder<'_> {
             && let Some(flow) = self.flows.get_mut(index)
             && let Some(stops) = flow.float_stops()
         {
-            flow.set_float_after(float::after_stop(next, stops.before));
+            flow.set_float_after(float::after_stop(next, stops));
         }
         self.last = next;
     }

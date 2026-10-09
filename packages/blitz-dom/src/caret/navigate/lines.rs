@@ -25,7 +25,8 @@ impl Mover<'_> {
 
     /// The flow and line a vertical step starts from. A float's stop starts
     /// from the content it stands for; one opening a line, from the line
-    /// before, which is `None` above the root's first line.
+    /// before (`None` above the root's first line); one ending the root,
+    /// moving backward, from the line below.
     fn vertical_origin(&self, caret: Caret) -> Option<(usize, Option<u32>)> {
         let flow = self.flows.flow(caret.flow)?;
         let Some(stops) = flow.float_stops() else {
@@ -41,6 +42,7 @@ impl Mover<'_> {
         let line = flow.line(0);
         Some(match stops.side(caret.index > 0) {
             Beside::LineStart => (caret.flow, line.checked_sub(1)),
+            Beside::LineEnd if !self.forward => (caret.flow, line.checked_add(1)),
             _ => (caret.flow, Some(line)),
         })
     }
@@ -127,70 +129,84 @@ impl Mover<'_> {
         let mut found = self
             .outermost_stop(flow, caret.flow, start, end)
             .unwrap_or(caret);
-        let open = |flow: &Flow, start: usize, end: usize| {
-            if self.forward {
-                end == flow.len()
-            } else {
-                start == 0
-            }
-        };
-        if open(flow, start, end) {
-            // A float has no line box and is passed over, unless content
-            // that takes no stops (hidden text, an empty box) follows it:
-            // Chrome then canonicalizes the line's end to the float's stop.
-            let mut passed_float = None;
-            for index in self.beyond(caret.flow) {
-                let Some(next) = self.flows.flow(index) else {
-                    break;
-                };
-                if next.root() != flow.root() {
-                    continue;
-                }
-                if next.is_float() {
-                    let stop = if self.forward {
-                        next.last_stop()
-                    } else {
-                        next.first_stop()
-                    };
-                    passed_float = stop.map(|stop| Caret::at(index, stop));
-                    if self.forward && ends_before_a_box(next) {
-                        found = passed_float.take().unwrap_or(found);
-                    }
-                    continue;
-                }
-                if next.is_empty() {
-                    found = passed_float.take().unwrap_or(found);
-                    continue;
-                }
-                let float = passed_float.take();
-                let Some((start, end)) = next.line_range(line) else {
-                    break;
-                };
-                // A flow with no stop on the line (only unselectable content)
-                // keeps the previous end. A line ending right after a float
-                // (before a forced break) ends where the float's stop stands.
-                if let Some(stop) = self.outermost_stop(next, index, start, end) {
-                    let at_float = float.filter(|_| self.forward && stop.index == 0);
-                    found = at_float
-                        .and_then(|float| float::stand_in(self.flows, float))
-                        .unwrap_or(stop);
-                }
-                if !open(next, start, end) {
-                    break;
-                }
-            }
+        if self.open(flow, start, end) {
+            found = self.continue_line(caret.flow, line, found);
         }
         let flow = self.flows.flow(found.flow)?;
         found.upstream = self.forward && flow.line(found.index) != line;
         Some(found)
     }
+
+    /// The line's end (or start) through the root's flows after `from`.
+    /// A float has no line box and is passed over, but its stop ends the
+    /// line where Chrome canonicalizes the line's end to it: when a box on
+    /// the line follows it, when content without stops (hidden text, an
+    /// empty box) follows it, or, moving forward, when the line ends right
+    /// after it, before a forced break, where its stop stands for the
+    /// content before it.
+    fn continue_line(&self, from: usize, line: u32, mut found: Caret) -> Caret {
+        let Some(root) = self.flows.flow(from).map(Flow::root) else {
+            return found;
+        };
+        let mut passed_float = None;
+        for index in self.beyond(from) {
+            let Some(next) = self.flows.flow(index) else {
+                break;
+            };
+            if next.root() != root {
+                continue;
+            }
+            if next.is_float() {
+                let stop = if self.forward {
+                    next.last_stop()
+                } else {
+                    next.first_stop()
+                };
+                passed_float = stop.map(|stop| Caret::at(index, stop));
+                if self.forward && box_follows_on(next, line) {
+                    found = passed_float.take().unwrap_or(found);
+                }
+                continue;
+            }
+            if next.is_empty() {
+                found = passed_float.take().unwrap_or(found);
+                continue;
+            }
+            let float = passed_float.take();
+            let Some((start, end)) = next.line_range(line) else {
+                break;
+            };
+            // A flow with no stop on the line (only unselectable content)
+            // keeps the previous end.
+            if let Some(stop) = self.outermost_stop(next, index, start, end) {
+                let at_float = float.filter(|_| self.forward && stop.index == 0);
+                found = at_float
+                    .and_then(|float| float::stand_in(self.flows, float))
+                    .unwrap_or(stop);
+            }
+            if !self.open(next, start, end) {
+                break;
+            }
+        }
+        found
+    }
+
+    /// Whether a line's stops `start..=end` reach the flow's edge in the
+    /// direction of movement, so the line continues in the next flow.
+    fn open(&self, flow: &Flow, start: usize, end: usize) -> bool {
+        if self.forward {
+            end == flow.len()
+        } else {
+            start == 0
+        }
+    }
 }
 
-/// Whether a float is followed by a box, whose content (if any) forms
-/// flows of its own.
-fn ends_before_a_box(flow: &Flow) -> bool {
+/// Whether a float is followed by a box on `line`, whose content (if any)
+/// forms flows of its own.
+fn box_follows_on(flow: &Flow, line: u32) -> bool {
     flow.float_stops()
-        .is_some_and(|stops| matches!(stops.after, Beside::Into(_)))
+        .is_some_and(|stops| matches!(stops.after, Beside::Into { line: on, .. } if on == line))
 }
 
 /// The stop on `line` whose caret is horizontally closest to `x`; the first

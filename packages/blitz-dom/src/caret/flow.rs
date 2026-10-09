@@ -279,6 +279,10 @@ impl Flow {
         Some((first, end))
     }
 
+    pub(super) fn ends_with_break(&self) -> bool {
+        self.units.last().is_some_and(|u| u.kind == UnitKind::Break)
+    }
+
     /// Whether the flow ends with white space at a soft wrap. Unlike
     /// [`Self::line_range`], it holds for a space that is the line's only
     /// unit: content taking no units (hidden text) may share the line.

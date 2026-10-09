@@ -14,8 +14,7 @@ use super::order::Key;
 /// The content one of a float's stops stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Beside {
-    /// Nothing on its line: another float or an embedded box before it,
-    /// or nothing after it.
+    /// Nothing on its line: another float or an embedded box beside it.
     Stays,
     /// Nothing before it on its line, which it opens after a forced break
     /// or at the root's start. It stays at line boundaries, and vertical
@@ -25,11 +24,14 @@ pub(super) enum Beside {
     Previous,
     /// The start of the following flow of the float's root.
     Next,
-    /// The start of the content of the box that follows the float, which
-    /// ends at this key, or else of the root's content after the box.
-    Into(Key),
+    /// The start of the content of the box on `line` that follows the
+    /// float and ends at `end`, or else of the root's content after it.
+    Into { end: Key, line: u32 },
+    /// Nothing after it in its root. It stays at line boundaries, and
+    /// vertical steps start below its line.
+    LineEnd,
     /// What the stop after the float stands for: the preceding content
-    /// ends in white space hanging at a soft wrap.
+    /// ends in collapsible white space hanging at a soft wrap.
     SameAsAfter,
 }
 
@@ -38,6 +40,9 @@ pub(super) enum Beside {
 pub(super) struct FloatStops {
     pub(super) before: Beside,
     pub(super) after: Beside,
+    /// A generated forced break precedes the float, which sits on the line
+    /// after the content its before stop stands for.
+    pub(super) after_break: bool,
 }
 
 impl FloatStops {
@@ -57,36 +62,56 @@ pub(super) enum Walked {
     Inline,
     /// A forced break.
     Break,
-    /// A box whose content forms flows of its own, ending at this key.
-    Box(Option<Key>),
+    /// A box on `line` whose content forms flows of its own, ending at
+    /// `end`.
+    Box { end: Option<Key>, line: u32 },
     /// A float, by the index of its flow among the root's flows.
     Float(usize),
 }
 
-/// What the stop before a float stands for. `previous` is the flow that
-/// the float closed, when it held content; `line_start` tells whether any
-/// content precedes the float on its line.
-pub(super) fn before_stop(line_start: bool, last: Walked, previous: Option<&Flow>) -> Beside {
-    if line_start {
+/// What the stop before a float stands for. `line_start` tells whether the
+/// float opens its line; `previous` is the flow it closed, when that held
+/// content, and `collapsible_end` whether the flow ends in collapsible
+/// white space.
+pub(super) fn before_stop(
+    line_start: bool,
+    last: Walked,
+    previous: Option<&Flow>,
+    collapsible_end: bool,
+) -> Beside {
+    if line_start || previous.is_some_and(Flow::ends_with_break) {
         return Beside::LineStart;
     }
+    // A forced break that leaves the float off a line start is generated
+    // content's, which Chrome passes over.
     match (last, previous) {
-        (Walked::Inline, Some(previous)) if previous.ends_with_hanging_space() => {
+        (Walked::Inline | Walked::Break, Some(previous))
+            if collapsible_end && previous.ends_with_hanging_space() =>
+        {
             Beside::SameAsAfter
         }
-        (Walked::Inline, Some(_)) => Beside::Previous,
+        (Walked::Inline | Walked::Break, Some(_)) => Beside::Previous,
         _ => Beside::Stays,
     }
 }
 
 /// What the stop after a float stands for once `next` follows it. A forced
-/// break leaves it with the content before the float.
-pub(super) fn after_stop(next: Walked, before: Beside) -> Beside {
+/// break leaves it with the content before the float, when they share a
+/// line.
+pub(super) fn after_stop(next: Walked, stops: FloatStops) -> Beside {
+    let before = if stops.after_break {
+        Beside::Stays
+    } else {
+        stops.before
+    };
     match next {
         Walked::Inline => Beside::Next,
-        Walked::Box(Some(end)) => Beside::Into(end),
+        Walked::Box {
+            end: Some(end),
+            line,
+        } => Beside::Into { end, line },
         Walked::Break if before == Beside::Previous => Beside::Previous,
-        Walked::Break | Walked::Box(None) | Walked::Float(_) => Beside::Stays,
+        Walked::Break | Walked::Box { end: None, .. } | Walked::Float(_) => Beside::Stays,
     }
 }
 
@@ -94,16 +119,17 @@ pub(super) fn after_stop(next: Walked, before: Beside) -> Beside {
 /// `None` when it stays, or for a stop that is not a float's.
 pub(super) fn stand_in(flows: &dyn Flows, caret: Caret) -> Option<Caret> {
     let flow = flows.flow(caret.flow)?;
+    // Another float's stop stands for nothing on a line.
     let next = || {
         let index = caret.flow.checked_add(1)?;
-        Some((index, flows.flow(index)?))
+        Some((index, flows.flow(index).filter(|next| !next.is_float())?))
     };
     match flow.float_stops()?.side(caret.index > 0) {
         Beside::Next => {
             let (index, next) = next().filter(|(_, next)| next.root() == flow.root())?;
             Some(Caret::at(index, next.first_stop()?))
         }
-        Beside::Into(end) => {
+        Beside::Into { end, .. } => {
             let inside = |next: &Flow| next.first_key().is_some_and(|key| key < end);
             let (index, next) =
                 next().filter(|(_, next)| next.root() == flow.root() || inside(next))?;
@@ -118,6 +144,6 @@ pub(super) fn stand_in(flows: &dyn Flows, caret: Caret) -> Option<Caret> {
                 upstream: true,
             })
         }
-        Beside::Stays | Beside::LineStart | Beside::SameAsAfter => None,
+        Beside::Stays | Beside::LineStart | Beside::LineEnd | Beside::SameAsAfter => None,
     }
 }

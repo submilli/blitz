@@ -999,7 +999,7 @@ fn line_steps_from_and_into_floats() {
 }
 
 #[test]
-fn float_stops_beside_breaks_and_content_without_stops() {
+fn lines_after_floats_end_at_breaks_and_content_without_stops() {
     let back = moves(BACKWARD, Granularity::LineBoundary, 1);
     let forward = moves(FORWARD, Granularity::LineBoundary, 1);
 
@@ -1044,4 +1044,46 @@ fn line_steps_leave_floats_that_open_the_root_or_end_a_box() {
     ));
     let (span, bb) = (q(&doc, "span"), child(&doc, "p + p", 0));
     assert_eq!(carets(&doc, at(span, 1), &down), [at(bb, 2)]);
+}
+
+#[test]
+fn generated_breaks_and_preserved_spaces_keep_float_stops_on_the_earlier_line() {
+    let back = moves(BACKWARD, Granularity::LineBoundary, 1);
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+    let generated = "<style>.x::after{content:'a\\A';white-space:pre}</style>";
+
+    // Only a forced break from the DOM opens the float's line.
+    let doc = laid_out(&format!(
+        "{generated}<p>zz<span class=x></span>{FLOAT}bb</p>"
+    ));
+    let (p, zz) = (q(&doc, "p"), child(&doc, "p", 0));
+    assert_eq!(carets(&doc, at(p, 2), &back), [at(zz, 0)]);
+    assert_eq!(carets(&doc, at(p, 2), &forward), [at(zz, 2)]);
+    let doc = laid_out(&format!(
+        "{generated}<p>zz<br><span class=x></span>{FLOAT}bb</p>"
+    ));
+    let p = q(&doc, "p");
+    assert_eq!(carets(&doc, at(p, 3), &back), [at(p, 3)]);
+
+    // A preserved space at a soft wrap does not hang.
+    let doc = laid_out(&format!(
+        "<p style='white-space:pre-wrap;width:60px'>aaa bbb {FLOAT}ccc</p>"
+    ));
+    let (p, text) = (q(&doc, "p"), child(&doc, "p", 0));
+    assert_eq!(carets(&doc, at(p, 1), &back), [at(text, 0)]);
+
+    // A stop never stands for another float's.
+    let doc = laid_out(&format!(
+        "<style>.g::before{{content:'zz'}}</style><p>aa {FLOAT}<span class=g></span>{FLOAT}bb</p>"
+    ));
+    let p = q(&doc, "p");
+    assert_eq!(carets(&doc, at(p, 2), &back), [at(p, 2)]);
+    assert_eq!(carets(&doc, at(p, 2), &forward), [at(p, 2)]);
+
+    // A box that wraps below the float leaves the line's end at the text.
+    let doc = laid_out(&format!(
+        "<p style='width:50px'>aa {FLOAT}<span style='display:inline-block'><span style='display:block'>XXXXXXXX</span></span>bb</p>"
+    ));
+    let aa = child(&doc, "p", 0);
+    assert_eq!(carets(&doc, at(aa, 0), &forward), [at(aa, 2)]);
 }

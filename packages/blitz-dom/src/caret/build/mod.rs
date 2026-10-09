@@ -156,7 +156,7 @@ impl Builder<'_> {
         };
         let style = TextStyle::of(None);
         for ch in text.chars() {
-            self.align(ch, style);
+            self.align(ch, style, true);
         }
     }
 
@@ -262,7 +262,7 @@ impl Builder<'_> {
             // Generated content takes layout text but no caret positions;
             // like any content, it keeps a preceding space from hanging.
             for ch in data.content.as_str_lossy().chars() {
-                if self.align(ch, style).is_some() && !style.collapsible(ch) {
+                if self.align(ch, style, true).is_some() && !style.collapsible(ch) {
                     self.hanging_space = false;
                 }
             }
@@ -282,7 +282,7 @@ impl Builder<'_> {
     /// Record one DOM character: a new unit when it starts a rendered
     /// grapheme, part of the last unit inside one, or a position only.
     fn character(&mut self, point: Boundary, ch: char, style: TextStyle, selectable: bool) {
-        let Some(range) = self.align(ch, style) else {
+        let Some(range) = self.align(ch, style, false) else {
             return self.entry(point, self.flow.len(), selectable);
         };
         let Some(layer) = self.layers.last() else {
@@ -355,7 +355,7 @@ impl Builder<'_> {
     /// white space ahead of it hangs. The position after it belongs to the
     /// following content.
     fn forced_break(&mut self, id: NodeId) {
-        let Some(range) = self.align('\n', TextStyle::preserved()) else {
+        let Some(range) = self.align('\n', TextStyle::preserved(), false) else {
             return;
         };
         let Some(edges) = self.layers.last().map(|l| l.edges(range.start, range.end)) else {
@@ -386,9 +386,7 @@ impl Builder<'_> {
 
     /// An unselectable run's unit, with edges from where the run started.
     fn push_opaque_unit(&mut self, edges: Edges) {
-        self.flow.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
-        self.hanging_space = false;
-        self.broke_since_unit = false;
+        self.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
     }
 
     fn extend_opaque(&mut self, edges: Edges) {
@@ -403,14 +401,22 @@ impl Builder<'_> {
         }
     }
 
-    /// Align one DOM character with the layout, tracking line starts: any
-    /// laid-out character counts, rendered or not, selectable or not.
-    fn align(&mut self, ch: char, style: TextStyle) -> Option<std::ops::Range<usize>> {
+    /// Align one DOM or `generated` character with the layout, tracking
+    /// line starts: any laid-out character counts, rendered or not,
+    /// selectable or not. A forced break opens a line for the floats after
+    /// it only from the DOM: Chrome's stop before a float after a generated
+    /// break stands for the content before the break.
+    fn align(
+        &mut self,
+        ch: char,
+        style: TextStyle,
+        generated: bool,
+    ) -> Option<std::ops::Range<usize>> {
         let layer = self.layers.last_mut()?;
         let range = layer.aligner.char(ch, style)?;
         if is_forced_break(layer.aligner.slice(range.clone())) {
             self.reach(Walked::Break);
-            self.line_start = true;
+            self.line_start |= !generated;
             self.broke_since_unit = true;
         } else {
             self.reach(Walked::Inline);
@@ -443,7 +449,8 @@ impl Builder<'_> {
         }
         let continuing = self.layers.last().map(Layer::continuing_line);
         let ends_above = |line| !self.flow.is_empty() && self.flow.line(self.flow.len()) < line;
-        if !self.broke_since_unit && continuing.is_some_and(ends_above) {
+        let at_break = self.broke_since_unit || self.flow.ends_with_break();
+        if !at_break && continuing.is_some_and(ends_above) {
             self.flow.set_wraps_after();
         }
         self.broke_since_unit = false;
