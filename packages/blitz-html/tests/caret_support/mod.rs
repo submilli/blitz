@@ -1,5 +1,5 @@
-//! Shared helpers for the caret movement tests. Expected positions were
-//! measured in Chrome 154 on macOS.
+//! Shared helpers for the caret movement tests.
+// Each test target uses a subset of the helpers.
 #![allow(dead_code)]
 
 use crate::common::{parse, q};

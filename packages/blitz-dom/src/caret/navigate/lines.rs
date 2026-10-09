@@ -78,11 +78,16 @@ impl Mover<'_> {
     }
 
     /// The stop nearest `x` on the facing line of the next flow with stops,
-    /// other than the `origin` flow a step started in. A float's stops draw
-    /// at one edge: the one facing the movement wins.
+    /// other than the `origin` flow a step started in and the floats of its
+    /// run. A float's stops draw at one edge: the one facing the movement
+    /// wins.
     fn edge_line(&self, from: usize, origin: usize, x: f32) -> Option<Caret> {
+        let (low, high) = (from.min(origin), from.max(origin));
         self.beyond(from).find_map(|index| {
-            let flow = self.flows.flow(index).filter(|_| index != origin)?;
+            let flow = self.flows.flow(index)?;
+            if (low..=high).contains(&index) && (index == origin || flow.is_float()) {
+                return None;
+            }
             flow.first_stop()?;
             if flow.is_float() {
                 let stop = if self.forward {

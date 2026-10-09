@@ -50,7 +50,7 @@ impl Builder<'_> {
                 .flows
                 .get(index)
                 .and_then(Flow::float_stops)
-                .is_some_and(|stops| stops.follows_content),
+                .is_some_and(|stops| stops.follows_content && !stops.after_break),
             _ => before == Beside::Previous,
         };
         self.flow.set_float_stops(FloatStops {

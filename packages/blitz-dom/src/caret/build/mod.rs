@@ -169,9 +169,7 @@ impl Builder<'_> {
             match step {
                 Step::Node { id, generated } => self.node(id, generated, &mut pending),
                 Step::LeaveOpaque(id) => self.leave_opaque(id),
-                Step::LeaveLayer => {
-                    self.layers.pop();
-                }
+                Step::LeaveLayer => self.leave_layer(),
             }
         }
     }
@@ -200,6 +198,16 @@ impl Builder<'_> {
                 InlineElement::Span | InlineElement::Hidden => self.span(id, generated, pending),
             },
             _ => self.inline_box(id, kind, pending),
+        }
+    }
+
+    /// Leave a nested box. A float ending its content stands for the point
+    /// after the box, which starts the next flow: what follows the box
+    /// (even a forced break) is outside it.
+    fn leave_layer(&mut self) {
+        self.layers.pop();
+        if matches!(self.last, Walked::Float(_)) {
+            self.reach(Walked::Inline);
         }
     }
 

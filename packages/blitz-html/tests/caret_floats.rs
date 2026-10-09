@@ -343,3 +343,24 @@ fn float_runs_before_breaks_stand_for_the_content_before_them() {
     // Between the floats, a stop stands for nothing.
     assert_eq!(carets(&doc, at(p, 2), &back), [at(p, 2)]);
 }
+
+#[test]
+fn float_runs_after_generated_breaks_and_at_the_end_of_boxes() {
+    let back = moves(BACKWARD, Granularity::LineBoundary, 1);
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+
+    // A run opening a line after a generated break keeps its last stop.
+    let doc = laid_out(&format!(
+        "<style>.x::after{{content:'a\\A';white-space:pre}}</style><p>aa<span class=x></span>{FLOAT}{FLOAT}<br>bb</p>"
+    ));
+    let p = q(&doc, "p");
+    assert_eq!(carets(&doc, at(p, 4), &forward), [at(p, 4)]);
+
+    // A float ending a box stands for the point after the box.
+    let doc = laid_out(&format!(
+        "<p>xx<span style='display:inline-block'>aa{FLOAT}</span><br>yy</p>"
+    ));
+    let (p, span, xx) = (q(&doc, "p"), q(&doc, "span"), child(&doc, "p", 0));
+    assert_eq!(carets(&doc, at(span, 2), &forward), [at(p, 2)]);
+    assert_eq!(carets(&doc, at(span, 2), &back), [at(xx, 0)]);
+}
