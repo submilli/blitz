@@ -62,8 +62,9 @@ pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Att
         // Chrome clamps the exponent; usvg drops the whole primitive.
         ("feSpecularLighting", "specularExponent") => match number(value) {
             Some(exponent) => Attribute::Replace(exponent.clamp(1.0, 128.0).to_string()),
-            None => Attribute::Keep(value),
+            None => Attribute::Omit,
         },
+        _ if overflows(value) => Attribute::Omit,
         _ => Attribute::Keep(value),
     }
 }
@@ -78,6 +79,14 @@ fn number_optional_number(value: &str) -> Option<[f32; 2]> {
         None => first,
     };
     numbers.next().is_none().then_some([first, second])
+}
+
+/// A list of numbers that Chrome rejects as a parse error because one exceeds the
+/// f32 range, so the element's initial value applies. usvg would read infinity;
+/// omitting the attribute gives its matching default.
+fn overflows(value: &str) -> bool {
+    let numbers: Result<Vec<f64>, _> = svgtypes::NumberListParser::from(value).collect();
+    numbers.is_ok_and(|numbers| numbers.into_iter().any(|n| finite(n).is_none()))
 }
 
 /// An SVG number within the f32 range.
@@ -171,6 +180,28 @@ mod tests {
     }
 
     #[test]
+    fn numbers_beyond_the_f32_range_take_initial_values() {
+        for (tag, name, value) in [
+            ("feDiffuseLighting", "surfaceScale", "1e39"),
+            ("fePointLight", "x", "-1e39"),
+            ("feColorMatrix", "values", "1 0 0 0 1e39"),
+            ("feSpecularLighting", "specularExponent", "1e39"),
+        ] {
+            assert_eq!(
+                chrome_attribute(tag, name, value),
+                Attribute::Omit,
+                "{name}"
+            );
+        }
+        for value in ["3e38", "1 2", "SourceGraphic", "10%"] {
+            assert_eq!(
+                chrome_attribute("feOffset", "dx", value),
+                Attribute::Keep(value)
+            );
+        }
+    }
+
+    #[test]
     fn malformed_integers_take_their_initial_values() {
         for (name, value, replaced) in [
             ("targetX", "1.5", Some("0")),
@@ -201,6 +232,7 @@ mod tests {
         let exponent = |value| chrome_attribute("feSpecularLighting", "specularExponent", value);
         assert_eq!(exponent("0.5"), Attribute::Replace("1".into()));
         assert_eq!(exponent("200"), Attribute::Replace("128".into()));
-        assert_eq!(exponent("x"), Attribute::Keep("x"));
+        // Unparsable exponents take the initial value 1, as usvg's default.
+        assert_eq!(exponent("x"), Attribute::Omit);
     }
 }

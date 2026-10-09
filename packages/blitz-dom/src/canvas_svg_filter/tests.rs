@@ -184,7 +184,12 @@ fn rewritten_attributes_produce_chrome_results_through_the_parser() {
         "feTurbulence",
         &[("numOctaves", "2.5"), ("baseFrequency", "1e39")],
     );
-    mutation.append_children(filter, &[zero, invalid, target, noise]);
+    let huge_order = svg(
+        &mut mutation,
+        "feConvolveMatrix",
+        &[("order", "2147483647 2147483647 0"), ("kernelMatrix", "1")],
+    );
+    mutation.append_children(filter, &[zero, invalid, target, noise, huge_order]);
     drop(mutation);
     document.flush_style_and_layout(0.0);
     let mut filters = document
@@ -219,6 +224,33 @@ fn rewritten_attributes_produce_chrome_results_through_the_parser() {
     };
     assert_eq!(turbulence.num_octaves(), 1);
     assert_eq!(turbulence.base_frequency_x().get(), 0.0);
+    // A malformed order never reaches the parser's unchecked product.
+    assert!(matches!(&kinds[4], usvg::filter::Kind::Flood(flood) if flood.opacity().get() == 0.0));
+}
+
+/// Bounding-box scaling of a huge radius must stay finite inside the parser.
+#[test]
+fn bounding_box_radii_cannot_overflow_the_parser() {
+    let (mut document, canvas, filter, matrix) = self::document();
+    let mut mutation = document.mutate();
+    mutation.remove_node(matrix);
+    mutation.set_attribute(filter, qual_name!("primitiveUnits"), "objectBoundingBox");
+    let morphology = svg(&mut mutation, "feMorphology", &[("radius", "3e38")]);
+    mutation.append_children(filter, &[morphology]);
+    drop(mutation);
+    document.flush_style_and_layout(0.0);
+    let mut filters = document
+        .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
+        .unwrap();
+    document
+        .resolve_canvas_svg_filters(canvas, &mut filters)
+        .unwrap();
+    let snapshot = filters.svg[0].as_ref().unwrap();
+    let resolved = snapshot.resolve([0.0, 0.0, 1e6, 1e6], [8, 8]).unwrap();
+    let usvg::filter::Kind::Morphology(morphology) = resolved.filter.primitives()[0].kind() else {
+        panic!("morphology")
+    };
+    assert!(morphology.radius_x().get().is_finite());
 }
 
 #[test]
