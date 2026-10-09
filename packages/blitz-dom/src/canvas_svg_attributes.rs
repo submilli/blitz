@@ -16,6 +16,9 @@ const ZERO_RADIUS: &str = "0.000001";
 /// An order whose kernel can never match a bounded `kernelMatrix`, so the parser
 /// produces the transparent result Chrome renders for an invalid kernel.
 const INVALID_ORDER: &str = "4096";
+/// Radii past this already cover any raster (execution caps them at 256 pixels);
+/// the bound keeps bounding-box scaling finite, where usvg would panic on infinity.
+const MAX_RADIUS: f32 = 1e6;
 
 pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Attribute<'a> {
     match (tag, name) {
@@ -24,7 +27,7 @@ pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Att
             let [x, y] = number_optional_number(value).unwrap_or([0.0, 0.0]);
             let radius = |r: f32| {
                 if r > 0.0 {
-                    r.to_string()
+                    r.min(MAX_RADIUS).to_string()
                 } else {
                     ZERO_RADIUS.to_owned()
                 }
@@ -32,15 +35,32 @@ pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Att
             Attribute::Replace(format!("{} {}", radius(x), radius(y)))
         }
         // Chrome treats a zero divisor as absent and uses the kernel sum.
-        ("feConvolveMatrix", "divisor") if number(value.trim()) == Some(0.0) => Attribute::Omit,
+        ("feConvolveMatrix", "divisor") if number(value) == Some(0.0) => Attribute::Omit,
+        // An unparsable order keeps Chrome's default of 3; usvg would read the
+        // leading numbers instead, and multiply them without overflow checks.
         ("feConvolveMatrix", "order") => match number_optional_number(value) {
             Some([x, y]) if x.trunc() < 1.0 || y.trunc() < 1.0 || x > 4096.0 || y > 4096.0 => {
                 Attribute::Replace(INVALID_ORDER.to_owned())
             }
-            _ => Attribute::Keep(value),
+            Some(_) => Attribute::Keep(value),
+            None => Attribute::Replace("3".to_owned()),
+        },
+        // Chrome parses these as integers; a malformed value is the attribute's
+        // initial value, where usvg would truncate or round it.
+        ("feConvolveMatrix", "targetX" | "targetY") if integer(value).is_none() => {
+            Attribute::Replace("0".to_owned())
+        }
+        ("feTurbulence", "numOctaves") if integer(value).is_none() => {
+            Attribute::Replace("1".to_owned())
+        }
+        // An unparsable frequency, including one beyond the f32 range that usvg
+        // would unwrap as infinity, is Chrome's default of zero.
+        ("feTurbulence", "baseFrequency") => match number_optional_number(value) {
+            Some(_) => Attribute::Keep(value),
+            None => Attribute::Replace("0".to_owned()),
         },
         // Chrome clamps the exponent; usvg drops the whole primitive.
-        ("feSpecularLighting", "specularExponent") => match number(value.trim()) {
+        ("feSpecularLighting", "specularExponent") => match number(value) {
             Some(exponent) => Attribute::Replace(exponent.clamp(1.0, 128.0).to_string()),
             None => Attribute::Keep(value),
         },
@@ -48,26 +68,40 @@ pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Att
     }
 }
 
-/// One or two numbers separated by whitespace and/or a comma.
+/// One or two numbers separated by whitespace and/or a comma, each within the
+/// f32 range the parser stores.
 fn number_optional_number(value: &str) -> Option<[f32; 2]> {
-    let mut numbers = value
-        .split(|c: char| c == ',' || c.is_ascii_whitespace())
-        .filter(|token| !token.is_empty());
-    let first = number(numbers.next()?)?;
-    let second = numbers.next().map_or(Some(first), number)?;
+    let mut numbers = svgtypes::NumberListParser::from(value);
+    let first = finite(numbers.next()?.ok()?)?;
+    let second = match numbers.next() {
+        Some(number) => finite(number.ok()?)?,
+        None => first,
+    };
     numbers.next().is_none().then_some([first, second])
 }
 
-/// An SVG number: sign, digits, fraction and exponent, but no named values.
-fn number(token: &str) -> Option<f32> {
-    if token.is_empty()
-        || !token
-            .bytes()
-            .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
-    {
+/// An SVG number within the f32 range.
+fn number(value: &str) -> Option<f32> {
+    let number: svgtypes::Number = value.trim().parse().ok()?;
+    finite(number.0)
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Out-of-range values become infinite and are rejected."
+)]
+fn finite(value: f64) -> Option<f32> {
+    Some(value as f32).filter(|n| n.is_finite())
+}
+
+/// An SVG integer: an optional sign and decimal digits.
+fn integer(value: &str) -> Option<i32> {
+    let value = value.trim();
+    let digits = value.strip_prefix(['+', '-']).unwrap_or(value);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    token.parse::<f32>().ok().filter(|n| n.is_finite())
+    value.parse().ok()
 }
 
 #[cfg(test)]
@@ -108,6 +142,58 @@ mod tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn values_that_would_overflow_the_parser_are_replaced() {
+        assert_eq!(
+            chrome_attribute("feMorphology", "radius", "3e38 1"),
+            Attribute::Replace("1000000 1".into())
+        );
+        for invalid in ["1e39", "1e39 0.1", "a", "1 2 3"] {
+            assert_eq!(
+                chrome_attribute("feTurbulence", "baseFrequency", invalid),
+                Attribute::Replace("0".into()),
+                "{invalid}"
+            );
+        }
+        assert_eq!(
+            chrome_attribute("feTurbulence", "baseFrequency", "0.1 2"),
+            Attribute::Keep("0.1 2")
+        );
+        for invalid in ["a", "3 3 3", "2147483647 2147483647 0"] {
+            assert_eq!(
+                chrome_attribute("feConvolveMatrix", "order", invalid),
+                Attribute::Replace("3".into()),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_integers_take_their_initial_values() {
+        for (name, value, replaced) in [
+            ("targetX", "1.5", Some("0")),
+            ("targetY", "1e1", Some("0")),
+            ("targetX", " 2 ", None),
+            ("targetY", "-1", None),
+        ] {
+            let expected =
+                replaced.map_or(Attribute::Keep(value), |v| Attribute::Replace(v.into()));
+            assert_eq!(
+                chrome_attribute("feConvolveMatrix", name, value),
+                expected,
+                "{value}"
+            );
+        }
+        assert_eq!(
+            chrome_attribute("feTurbulence", "numOctaves", "2.5"),
+            Attribute::Replace("1".into())
+        );
+        assert_eq!(
+            chrome_attribute("feTurbulence", "numOctaves", "3"),
+            Attribute::Keep("3")
+        );
     }
 
     #[test]

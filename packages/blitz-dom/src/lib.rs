@@ -61,9 +61,13 @@ mod canvas_filter;
 mod canvas_svg_attributes;
 #[cfg(feature = "svg")]
 mod canvas_svg_filter;
+#[cfg(feature = "svg")]
+mod canvas_svg_units;
 pub mod caret;
 #[cfg(feature = "svg")]
-pub use canvas_svg_filter::{CanvasSvgFilter, CanvasSvgLimit, CanvasSvgUnits};
+pub use canvas_svg_filter::{CanvasSvgFilter, CanvasSvgLimit, ResolvedCanvasSvgFilter};
+#[cfg(feature = "svg")]
+pub use canvas_svg_units::CanvasSvgUnits;
 #[cfg(feature = "svg")]
 pub use usvg::filter as canvas_svg_types;
 #[cfg(feature = "svg")]

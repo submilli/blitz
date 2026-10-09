@@ -1,9 +1,9 @@
 //! Live DOM filter snapshots. SVG parsing and unit resolution stay in the engine.
 
 use crate::canvas_svg_attributes::{Attribute, chrome_attribute};
+use crate::canvas_svg_units::CanvasSvgUnits;
 use crate::{BaseDocument, CanvasFilter, CanvasFilters, NodeId};
 use std::borrow::Cow;
-use std::fmt::Write;
 use std::sync::Arc;
 use style_traits::ToCss;
 
@@ -13,7 +13,7 @@ const MAX_MARKUP: usize = 16 * 1024;
 const SNAPSHOT_ID: &str = "canvas-filter";
 
 /// A draw-time snapshot contains no DOM handles and cannot retain removed nodes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CanvasSvgFilter {
     markup: String,
     /// Per filter primitive, in document order: whether its own paint depends on
@@ -24,83 +24,31 @@ pub struct CanvasSvgFilter {
     bounding_box_units: bool,
 }
 
-/// Primitive coordinates that the engine's parser leaves in primitive units.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CanvasSvgUnits {
-    /// The filtered bounds `[x, y, width, height]` for bounding-box units.
-    bounding_box: Option<[f32; 4]>,
-}
-
-impl CanvasSvgUnits {
-    /// Light positions as user-space coordinates. Bounding-box units scale x and y
-    /// by the box and z by its normalized diagonal, as Chrome resolves them.
-    /// <https://drafts.fxtf.org/filter-effects/#element-attrdef-fepointlight-z>
-    pub fn light(&self, light: usvg::filter::LightSource) -> usvg::filter::LightSource {
-        use usvg::filter::LightSource;
-        let Some([x, y, width, height]) = self.bounding_box else {
-            return light;
-        };
-        let depth = ((width * width + height * height) / 2.0).sqrt();
-        let point = |px: f32, py: f32, pz: f32| (x + px * width, y + py * height, pz * depth);
-        match light {
-            LightSource::DistantLight(light) => LightSource::DistantLight(light),
-            LightSource::PointLight(mut light) => {
-                (light.x, light.y, light.z) = point(light.x, light.y, light.z);
-                LightSource::PointLight(light)
-            }
-            LightSource::SpotLight(mut light) => {
-                (light.x, light.y, light.z) = point(light.x, light.y, light.z);
-                (light.points_at_x, light.points_at_y, light.points_at_z) =
-                    point(light.points_at_x, light.points_at_y, light.points_at_z);
-                LightSource::SpotLight(light)
-            }
-        }
-    }
-
-    /// The parser scales a bounding-box displacement by the mean box side; Chrome
-    /// uses the box width.
-    pub fn displacement_scale(&self, parsed: f32) -> f32 {
-        match self.bounding_box {
-            Some([_, _, width, height]) if width + height > 0.0 => {
-                parsed / ((width + height) / 2.0) * width
-            }
-            _ => parsed,
-        }
-    }
-}
-
 /// Page-controlled graph or serialization limits are checked before retaining data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CanvasSvgLimit;
 
+/// A parsed snapshot paired with what the parser does not carry.
+#[derive(Clone, Debug)]
+pub struct ResolvedCanvasSvgFilter {
+    pub filter: Arc<usvg::filter::Filter>,
+    pub units: CanvasSvgUnits,
+    taints: Vec<bool>,
+}
+
+impl ResolvedCanvasSvgFilter {
+    /// Whether primitive `index` (in `filter.primitives()`) paints with currentColor.
+    /// A primitive without a recorded flag counts as tainted, so a disagreement
+    /// between the snapshot and the parser can never expose pixels.
+    pub fn tainted(&self, index: usize) -> bool {
+        self.taints.get(index).copied().unwrap_or(true)
+    }
+}
+
 impl CanvasSvgFilter {
-    /// Units of primitive coordinates for `bounds` (`[x, y, right, bottom]`), the
-    /// same bounds passed to [`Self::resolve`].
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "Resolved bounds are finite and at most 1e6 in magnitude."
-    )]
-    pub fn units(&self, bounds: [f64; 4]) -> CanvasSvgUnits {
-        let [x, y, right, bottom] = bounds.map(|v| v as f32);
-        CanvasSvgUnits {
-            bounding_box: self
-                .bounding_box_units
-                .then_some([x, y, right - x, bottom - y]),
-        }
-    }
-
-    /// Whether each primitive's own paint depends on currentColor, in document order.
-    pub fn primitive_taints(&self) -> &[bool] {
-        &self.primitive_taints
-    }
-
     /// Resolve filterUnits/primitiveUnits against the geometric source bounds.
     /// The parser performs no I/O: images and resource references are disabled.
-    pub fn resolve(
-        &self,
-        bounds: [f64; 4],
-        viewport: [u16; 2],
-    ) -> Option<Arc<usvg::filter::Filter>> {
+    pub fn resolve(&self, bounds: [f64; 4], viewport: [u16; 2]) -> Option<ResolvedCanvasSvgFilter> {
         if !bounds.into_iter().all(|n| n.is_finite() && n.abs() <= 1e6)
             || bounds[2] <= bounds[0]
             || bounds[3] <= bounds[1]
@@ -126,10 +74,16 @@ impl CanvasSvgFilter {
             ..usvg::Options::default()
         };
         let tree = usvg::Tree::from_str(&svg, &options).ok()?;
-        tree.filters()
+        let filter = tree
+            .filters()
             .iter()
-            .find(|f| f.id() == SNAPSHOT_ID)
-            .cloned()
+            .find(|f| f.id() == SNAPSHOT_ID)?
+            .clone();
+        Some(ResolvedCanvasSvgFilter {
+            filter,
+            units: CanvasSvgUnits::new(bounds, self.bounding_box_units),
+            taints: self.primitive_taints.clone(),
+        })
     }
 }
 
@@ -238,14 +192,9 @@ impl BaseDocument {
         {
             return Ok(None);
         }
-        let mut snapshot = CanvasSvgFilter {
-            markup: String::new(),
-            primitive_taints: Vec::new(),
-            bounding_box_units: false,
-        };
+        let mut writer = Writer::default();
         let mut pending = vec![(filter, false)];
         let mut nodes = 0;
-        let mut attributes = 0;
         while let Some((node_id, closing)) = pending.pop() {
             let node = &self.nodes[node_id];
             let Some(element) = node.element_data() else {
@@ -258,10 +207,7 @@ impl BaseDocument {
                 continue;
             }
             if closing {
-                write!(&mut snapshot.markup, "</{tag}>").map_err(|_| CanvasSvgLimit)?;
-                if snapshot.markup.len() > MAX_MARKUP {
-                    return Err(CanvasSvgLimit);
-                }
+                writer.push(&format!("</{tag}>"))?;
                 continue;
             }
             nodes += 1;
@@ -273,28 +219,76 @@ impl BaseDocument {
             if !allowed_tag(tag) {
                 return Ok(None);
             }
-            let primitive = node.parent == Some(filter) && is_primitive(tag);
-            if primitive {
-                snapshot.primitive_taints.push(false);
-            }
-            write!(&mut snapshot.markup, "<{tag}").map_err(|_| CanvasSvgLimit)?;
+            writer.push(&format!("<{tag}"))?;
             if node_id == filter {
-                write!(&mut snapshot.markup, " id=\"{SNAPSHOT_ID}\"")
-                    .map_err(|_| CanvasSvgLimit)?;
+                writer.push(&format!(" id=\"{SNAPSHOT_ID}\""))?;
             }
-            for attr in element.attrs() {
-                attributes += 1;
-                if attributes > MAX_VISITS {
-                    return Err(CanvasSvgLimit);
-                }
-                let name = attr.name.local.as_ref();
-                if node_id == filter && name == "id" {
-                    continue;
-                }
-                if !attr.name.ns.as_ref().is_empty() || name == "xmlns" || name.starts_with("on") {
-                    continue;
-                }
-                if matches!(
+            if !writer.attributes(element, tag, node_id == filter)? {
+                return Ok(None);
+            }
+            let tainted = match node
+                .primary_styles()
+                .map(|s| s.clone())
+                .or_else(|| self.resolve_undisplayed_style(node_id))
+            {
+                Some(style) => writer.computed_style(&style, tag)?,
+                None => false,
+            };
+            if node.parent == Some(filter) && is_primitive(tag) {
+                writer.snapshot.primitive_taints.push(tainted);
+            }
+            writer.push(">")?;
+            pending.push((node_id, true));
+            pending.extend(node.children.iter().rev().map(|child| (*child, false)));
+        }
+        Ok(Some(writer.snapshot))
+    }
+}
+
+/// Serializes one snapshot within its markup and attribute budgets.
+#[derive(Default)]
+struct Writer {
+    snapshot: CanvasSvgFilter,
+    attributes: usize,
+}
+
+impl Writer {
+    fn push(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
+        if self.snapshot.markup.len() + text.len() > MAX_MARKUP {
+            return Err(CanvasSvgLimit);
+        }
+        self.snapshot.markup.push_str(text);
+        Ok(())
+    }
+
+    fn push_escaped(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
+        if self.snapshot.markup.len() + text.len() * 6 > MAX_MARKUP {
+            return Err(CanvasSvgLimit);
+        }
+        escape(&mut self.snapshot.markup, text);
+        Ok(())
+    }
+
+    /// Write the element's own attributes as Chrome reads them. Presentation
+    /// colors come from computed style instead. Returns false for a resource
+    /// reference, which leaves the whole graph unresolved.
+    fn attributes(
+        &mut self,
+        element: &crate::node::ElementData,
+        tag: &str,
+        is_filter: bool,
+    ) -> Result<bool, CanvasSvgLimit> {
+        for attr in element.attrs() {
+            self.attributes += 1;
+            if self.attributes > MAX_VISITS {
+                return Err(CanvasSvgLimit);
+            }
+            let name = attr.name.local.as_ref();
+            if (is_filter && name == "id")
+                || !attr.name.ns.as_ref().is_empty()
+                || name == "xmlns"
+                || name.starts_with("on")
+                || matches!(
                     name,
                     "color"
                         | "style"
@@ -302,79 +296,69 @@ impl BaseDocument {
                         | "flood-opacity"
                         | "lighting-color"
                         | "color-interpolation-filters"
-                ) {
-                    continue;
-                }
-                if name == "href" {
-                    return Ok(None);
-                }
-                if attr.value.utf16_len_bound() > 4096 {
-                    return Err(CanvasSvgLimit);
-                }
-                let value = attr.value.as_str_lossy();
-                if value.len() > 4096 {
-                    return Err(CanvasSvgLimit);
-                }
-                if node_id == filter && name == "primitiveUnits" {
-                    snapshot.bounding_box_units = value == "objectBoundingBox";
-                }
-                let value: Cow<'_, str> = match chrome_attribute(tag, name, value) {
-                    Attribute::Keep(value) => Cow::Borrowed(value),
-                    Attribute::Replace(value) => Cow::Owned(value),
-                    Attribute::Omit => continue,
-                };
-                if snapshot.markup.len() + value.len() * 6 + name.len() + 4 > MAX_MARKUP {
-                    return Err(CanvasSvgLimit);
-                }
-                write!(&mut snapshot.markup, " {name}=\"").map_err(|_| CanvasSvgLimit)?;
-                escape(&mut snapshot.markup, &value);
-                snapshot.markup.push('"');
-            }
-            if let Some(style) = node
-                .primary_styles()
-                .map(|s| s.clone())
-                .or_else(|| self.resolve_undisplayed_style(node_id))
-            {
-                let color = style.clone_color();
-                let flood = style.clone_flood_color();
-                let lighting = style.clone_lighting_color();
-                let tainted = match tag {
-                    "feFlood" | "feDropShadow" => !flood.is_absolute(),
-                    "feDiffuseLighting" | "feSpecularLighting" => !lighting.is_absolute(),
-                    _ => false,
-                };
-                if primitive && let Some(last) = snapshot.primitive_taints.last_mut() {
-                    *last = tainted;
-                }
-                let flood = svg_color(&flood.resolve_to_absolute(&color));
-                let lighting = svg_color(&lighting.resolve_to_absolute(&color));
-                let interpolation = style.clone_color_interpolation_filters().to_css_string();
-                let interpolation = if interpolation.eq_ignore_ascii_case("srgb") {
-                    "sRGB"
-                } else {
-                    "linearRGB"
-                };
-                snapshot.markup.push_str(" style=\"color:");
-                escape(&mut snapshot.markup, &svg_color(&color));
-                snapshot.markup.push_str(";flood-color:");
-                escape(&mut snapshot.markup, &flood);
-                snapshot.markup.push_str(";lighting-color:");
-                escape(&mut snapshot.markup, &lighting);
-                write!(
-                    &mut snapshot.markup,
-                    ";flood-opacity:{};color-interpolation-filters:{interpolation}\"",
-                    style.clone_flood_opacity()
                 )
-                .map_err(|_| CanvasSvgLimit)?;
+            {
+                continue;
             }
-            snapshot.markup.push('>');
-            if snapshot.markup.len() > MAX_MARKUP {
+            if name == "href" {
+                return Ok(false);
+            }
+            if attr.value.utf16_len_bound() > 4096 {
                 return Err(CanvasSvgLimit);
             }
-            pending.push((node_id, true));
-            pending.extend(node.children.iter().rev().map(|child| (*child, false)));
+            let value = attr.value.as_str_lossy();
+            if value.len() > 4096 {
+                return Err(CanvasSvgLimit);
+            }
+            if is_filter && name == "primitiveUnits" {
+                self.snapshot.bounding_box_units = value == "objectBoundingBox";
+            }
+            let value: Cow<'_, str> = match chrome_attribute(tag, name, value) {
+                Attribute::Keep(value) => Cow::Borrowed(value),
+                Attribute::Replace(value) => Cow::Owned(value),
+                Attribute::Omit => continue,
+            };
+            self.push(&format!(" {name}=\""))?;
+            self.push_escaped(&value)?;
+            self.push("\"")?;
         }
-        Ok(Some(snapshot))
+        Ok(true)
+    }
+
+    /// Write computed colors and interpolation as a style attribute. Returns
+    /// whether the element's own paint depends on currentColor.
+    fn computed_style(
+        &mut self,
+        style: &style::properties::ComputedValues,
+        tag: &str,
+    ) -> Result<bool, CanvasSvgLimit> {
+        let color = style.clone_color();
+        let flood = style.clone_flood_color();
+        let lighting = style.clone_lighting_color();
+        let tainted = match tag {
+            "feFlood" | "feDropShadow" => !flood.is_absolute(),
+            "feDiffuseLighting" | "feSpecularLighting" => !lighting.is_absolute(),
+            _ => false,
+        };
+        let flood = svg_color(&flood.resolve_to_absolute(&color));
+        let lighting = svg_color(&lighting.resolve_to_absolute(&color));
+        let interpolation = style.clone_color_interpolation_filters().to_css_string();
+        let interpolation = if interpolation.eq_ignore_ascii_case("srgb") {
+            "sRGB"
+        } else {
+            "linearRGB"
+        };
+        self.push(" style=\"color:")?;
+        self.push_escaped(&svg_color(&color))?;
+        self.push(";flood-color:")?;
+        self.push_escaped(&flood)?;
+        self.push(";lighting-color:")?;
+        self.push_escaped(&lighting)?;
+        self.push(&format!(
+            ";flood-opacity:{};color-interpolation-filters:{interpolation}\"",
+            style.clone_flood_opacity()
+        ))?;
+        Ok(tainted)
     }
 }
 
@@ -454,283 +438,4 @@ fn escape(output: &mut String, text: &str) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{CanvasFont, DocumentConfig, QualName, qual_name};
-
-    fn document() -> (BaseDocument, NodeId, NodeId, NodeId) {
-        let mut document = BaseDocument::new(DocumentConfig {
-            base_url: Some("https://example.test/page".into()),
-            ..Default::default()
-        });
-        let root = document.root_node_id;
-        let mut mutation = document.mutate();
-        let html = mutation.create_element(qual_name!("html", html), vec![]);
-        mutation.append_children(root, &[html]);
-        let canvas = mutation.create_element(qual_name!("canvas", html), vec![]);
-        let svg_name = |name: &str| QualName {
-            prefix: None,
-            ns: crate::Namespace::from("http://www.w3.org/2000/svg"),
-            local: name.into(),
-        };
-        let filter = mutation.create_element(svg_name("filter"), vec![]);
-        let matrix = mutation.create_element(svg_name("feColorMatrix"), vec![]);
-        mutation.set_attribute(filter, qual_name!("id"), "effect");
-        mutation.set_attribute(
-            matrix,
-            qual_name!("values"),
-            "0.5 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0",
-        );
-        mutation.append_children(html, &[filter]);
-        mutation.append_children(filter, &[matrix]);
-        drop(mutation);
-        document.flush_style_and_layout(0.0);
-        (document, canvas, filter, matrix)
-    }
-
-    #[test]
-    fn references_refresh_detached_canvas_graphs_and_resolve_object_bounds() {
-        let (mut document, canvas, filter, matrix) = self::document();
-        assert_eq!(
-            document.query_selector("feColorMatrix").unwrap(),
-            Some(matrix)
-        );
-        assert_eq!(document.query_selector("fecolormatrix").unwrap(), None);
-        let mut filters = document
-            .canvas_filters(canvas, "url(#effect) opacity(.5)", &CanvasFont::default())
-            .unwrap();
-        document
-            .resolve_canvas_svg_filters(canvas, &mut filters)
-            .unwrap();
-        let saved = filters.clone();
-        let parsed = filters.svg[0]
-            .as_ref()
-            .unwrap()
-            .resolve([10.0, 20.0, 30.0, 40.0], [100, 100])
-            .unwrap();
-        assert_eq!(
-            (
-                parsed.rect().x(),
-                parsed.rect().y(),
-                parsed.rect().width(),
-                parsed.rect().height()
-            ),
-            (8.0, 18.0, 24.0, 24.0)
-        );
-        document.mutate().set_attribute(
-            matrix,
-            qual_name!("values"),
-            "1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0",
-        );
-        document.flush_style_and_layout(0.0);
-        document
-            .resolve_canvas_svg_filters(canvas, &mut filters)
-            .unwrap();
-        assert_ne!(
-            filters.svg[0].as_ref().unwrap().markup,
-            saved.svg[0].as_ref().unwrap().markup
-        );
-        document.mutate().remove_node(filter);
-        document
-            .resolve_canvas_svg_filters(canvas, &mut filters)
-            .unwrap();
-        assert!(filters.svg[0].is_none());
-    }
-
-    fn svg(
-        mutation: &mut crate::DocumentMutator<'_>,
-        name: &str,
-        attrs: &[(&str, &str)],
-    ) -> NodeId {
-        let node = mutation.create_element(
-            QualName {
-                prefix: None,
-                ns: crate::Namespace::from("http://www.w3.org/2000/svg"),
-                local: name.into(),
-            },
-            vec![],
-        );
-        for (attr, value) in attrs {
-            mutation.set_attribute(
-                node,
-                QualName {
-                    prefix: None,
-                    ns: crate::Namespace::from(""),
-                    local: (*attr).into(),
-                },
-                *value,
-            );
-        }
-        node
-    }
-
-    #[test]
-    fn primitive_families_resolve_with_lighting_color_and_aligned_taints() {
-        let (mut document, canvas, filter, matrix) = self::document();
-        let mut mutation = document.mutate();
-        mutation.remove_node(matrix);
-        let morphology = svg(&mut mutation, "feMorphology", &[("radius", "0 2")]);
-        let lighting = svg(
-            &mut mutation,
-            "feDiffuseLighting",
-            &[("lighting-color", "currentColor")],
-        );
-        let light = svg(&mut mutation, "feDistantLight", &[("elevation", "45")]);
-        let flood = svg(&mut mutation, "feFlood", &[("flood-color", "red")]);
-        let turbulence = svg(&mut mutation, "feTurbulence", &[("baseFrequency", "0.1")]);
-        let specular = svg(
-            &mut mutation,
-            "feSpecularLighting",
-            &[
-                ("lighting-color", "rgb(0, 255, 0)"),
-                ("specularExponent", "500"),
-            ],
-        );
-        let point = svg(&mut mutation, "fePointLight", &[("z", "3")]);
-        mutation.set_attribute(filter, qual_name!("color"), "blue");
-        mutation.append_children(lighting, &[light]);
-        mutation.append_children(specular, &[point]);
-        mutation.append_children(filter, &[morphology, lighting, flood, turbulence, specular]);
-        drop(mutation);
-        document.flush_style_and_layout(0.0);
-        let mut filters = document
-            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
-            .unwrap();
-        document
-            .resolve_canvas_svg_filters(canvas, &mut filters)
-            .unwrap();
-        let snapshot = filters.svg[0].as_ref().unwrap();
-        // Light sources are not primitives, so taints stay aligned with the parser.
-        assert_eq!(
-            snapshot.primitive_taints(),
-            [false, true, false, false, false]
-        );
-        let parsed = snapshot.resolve([0.0, 0.0, 8.0, 8.0], [8, 8]).unwrap();
-        let primitives = parsed.primitives();
-        assert_eq!(primitives.len(), 5);
-        let usvg::filter::Kind::Morphology(morphology) = primitives[0].kind() else {
-            panic!("morphology")
-        };
-        // A zero axis rounds to zero instead of the parser's default of one.
-        assert!(morphology.radius_x().get() < 0.5);
-        let usvg::filter::Kind::DiffuseLighting(diffuse) = primitives[1].kind() else {
-            panic!("diffuse lighting")
-        };
-        assert_eq!(diffuse.lighting_color(), usvg::Color::new_rgb(0, 0, 255));
-        let usvg::filter::Kind::SpecularLighting(specular) = primitives[4].kind() else {
-            panic!("specular lighting: out-of-range exponents clamp instead of dropping")
-        };
-        assert_eq!(specular.lighting_color(), usvg::Color::new_rgb(0, 255, 0));
-        assert_eq!(specular.specular_exponent(), 128.0);
-    }
-
-    #[test]
-    fn image_inputs_remain_unresolved() {
-        let (mut document, canvas, filter, _) = self::document();
-        let mut mutation = document.mutate();
-        let image = svg(
-            &mut mutation,
-            "feImage",
-            &[("href", "data:image/png;base64,AA==")],
-        );
-        mutation.append_children(filter, &[image]);
-        drop(mutation);
-        let mut filters = document
-            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
-            .unwrap();
-        document
-            .resolve_canvas_svg_filters(canvas, &mut filters)
-            .unwrap();
-        assert!(filters.svg[0].is_none());
-    }
-
-    #[test]
-    fn external_and_missing_references_do_not_acquire_local_graphs() {
-        let (document, canvas, _, _) = self::document();
-        for text in [
-            "url(#missing)",
-            "url(https://other.test/page#effect)",
-            "url(https://example.test/other#effect)",
-        ] {
-            let mut filters = document
-                .canvas_filters(canvas, text, &CanvasFont::default())
-                .unwrap();
-            document
-                .resolve_canvas_svg_filters(canvas, &mut filters)
-                .unwrap();
-            assert!(filters.svg[0].is_none(), "{text}");
-        }
-    }
-
-    #[test]
-    fn graph_snapshots_bound_attribute_bytes_and_child_count() {
-        let (mut document, canvas, filter, matrix) = self::document();
-        let mut filters = document
-            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
-            .unwrap();
-        document
-            .mutate()
-            .set_attribute(matrix, qual_name!("values"), "0 ".repeat(8192));
-        assert_eq!(
-            document.resolve_canvas_svg_filters(canvas, &mut filters),
-            Err(CanvasSvgLimit)
-        );
-        document
-            .mutate()
-            .set_attribute(matrix, qual_name!("values"), "");
-        for _ in 0..65 {
-            let mut mutation = document.mutate();
-            let child = mutation.create_element(
-                QualName {
-                    prefix: None,
-                    ns: crate::Namespace::from("http://www.w3.org/2000/svg"),
-                    local: "feOffset".into(),
-                },
-                vec![],
-            );
-            mutation.append_children(filter, &[child]);
-        }
-        assert_eq!(
-            document.resolve_canvas_svg_filters(canvas, &mut filters),
-            Err(CanvasSvgLimit)
-        );
-    }
-    #[test]
-    fn graph_lookup_charges_owner_ancestry_and_inspected_attributes() {
-        let (mut document, canvas, _, _) = self::document();
-        let mut filters = document
-            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
-            .unwrap();
-        let mut parent = canvas;
-        for _ in 0..MAX_VISITS + 1 {
-            let mut mutation = document.mutate();
-            let ancestor = mutation.create_element(qual_name!("div", html), vec![]);
-            mutation.append_children(ancestor, &[parent]);
-            parent = ancestor;
-        }
-        assert_eq!(
-            document.resolve_canvas_svg_filters(canvas, &mut filters),
-            Err(CanvasSvgLimit)
-        );
-        let (mut document, canvas, _, _) = self::document();
-        let html = document.root_node().children[0];
-        for index in 0..MAX_VISITS + 1 {
-            document.mutate().set_attribute(
-                html,
-                QualName {
-                    prefix: None,
-                    ns: crate::Namespace::from(""),
-                    local: format!("data-{index}").into(),
-                },
-                "",
-            );
-        }
-        let mut filters = document
-            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
-            .unwrap();
-        assert_eq!(
-            document.resolve_canvas_svg_filters(canvas, &mut filters),
-            Err(CanvasSvgLimit)
-        );
-    }
-}
+mod tests;
