@@ -11,6 +11,7 @@ mod align;
 mod build;
 mod control;
 mod document;
+mod float;
 mod flow;
 mod geometry;
 mod navigate;

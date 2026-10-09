@@ -6,6 +6,7 @@
 //! DOM position renders there. Collapsed white space, hidden text and
 //! generated content take no units, so positions around them coincide.
 
+use super::float::{Beside, FloatStops};
 use super::geometry::Edges;
 use super::order::Key;
 use crate::{NodeId, ranges::Boundary};
@@ -48,9 +49,9 @@ pub(super) struct Flow {
     entries: Vec<Entry>,
     /// The representative DOM point of every unit boundary that is a stop.
     stops: Vec<Option<Boundary>>,
-    /// A floated or positioned replaced element's one-atom flow. Chrome
-    /// puts no float in a line box, so line steps pass over it.
-    floating: bool,
+    /// What the stops of a floated or positioned replaced element's
+    /// one-atom flow stand for (see [`super::float`]).
+    float_stops: Option<FloatStops>,
     /// The content after this flow continues on a later line, so the flow
     /// ends at a soft wrap.
     wraps_after: bool,
@@ -67,21 +68,32 @@ impl Flow {
             units: Vec::new(),
             entries: Vec::new(),
             stops: Vec::new(),
-            floating: false,
+            float_stops: None,
             wraps_after: false,
         }
     }
 
-    pub(super) fn set_floating(&mut self) {
-        self.floating = true;
+    pub(super) fn set_float_stops(&mut self, stops: FloatStops) {
+        self.float_stops = Some(stops);
+    }
+
+    /// Record what follows a float once the builder reaches it.
+    pub(super) fn set_float_after(&mut self, after: Beside) {
+        if let Some(stops) = &mut self.float_stops {
+            stops.after = after;
+        }
     }
 
     pub(super) fn set_wraps_after(&mut self) {
         self.wraps_after = true;
     }
 
-    pub(super) fn is_floating(&self) -> bool {
-        self.floating
+    pub(super) fn float_stops(&self) -> Option<FloatStops> {
+        self.float_stops
+    }
+
+    pub(super) fn is_float(&self) -> bool {
+        self.float_stops.is_some()
     }
 
     pub(super) fn push_unit(&mut self, kind: UnitKind, edges: Edges, text: &str) {
@@ -265,11 +277,6 @@ impl Flow {
             last + 1
         };
         Some((first, end))
-    }
-
-    /// Whether the flow ends with a forced break.
-    pub(super) fn ends_with_break(&self) -> bool {
-        self.units.last().is_some_and(|u| u.kind == UnitKind::Break)
     }
 
     /// Whether the flow ends with white space hanging at a soft wrap.
