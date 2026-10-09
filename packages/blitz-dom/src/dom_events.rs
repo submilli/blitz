@@ -100,7 +100,9 @@ impl EventListeners {
         Some(listener.callback)
     }
 
-    fn remove_entry(&mut self, target: EventTargetId, listener: &Rc<Listener>) {
+    /// Remove one listener, as a dispatch removes a `once` listener before
+    /// invoking it.
+    pub fn remove_entry(&mut self, target: EventTargetId, listener: &Rc<Listener>) {
         if let Some(list) = self.map.get_mut(&target) {
             list.retain(|l| !Rc::ptr_eq(l, listener));
             if list.is_empty() {
@@ -216,6 +218,22 @@ pub trait DispatchHost {
     /// listener has already been removed when this is called, so the
     /// embedder can release its callback handle afterwards.
     fn invoke(&mut self, listener: &Listener);
+    /// A snapshot of `target`'s listeners for `event_type` now. A listener
+    /// can move a later path node into another document's arena, and the
+    /// node keeps its listeners there, so an embedder with several arenas
+    /// looks them up where the node lives.
+    fn listeners(&self, target: EventTargetId, event_type: &str) -> Vec<Rc<Listener>> {
+        self.document()
+            .event_listeners
+            .listeners(target, event_type)
+    }
+    /// Remove a `once` listener of `target` before it runs, from wherever
+    /// [`Self::listeners`] found it.
+    fn remove_listener(&mut self, target: EventTargetId, listener: &Rc<Listener>) {
+        self.document_mut()
+            .event_listeners
+            .remove_entry(target, listener);
+    }
 }
 
 impl BaseDocument {
@@ -503,9 +521,7 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
 }
 
 fn has_listeners(host: &dyn DispatchHost, target: EventTargetId, capture: bool) -> bool {
-    host.document()
-        .event_listeners
-        .listeners(target, &host.event_type())
+    host.listeners(target, &host.event_type())
         .iter()
         .any(|listener| listener.capture == capture)
 }
@@ -514,10 +530,7 @@ fn has_listeners(host: &dyn DispatchHost, target: EventTargetId, capture: bool) 
 /// given capture flag), in order, against a snapshot of the list.
 fn invoke_listeners(host: &mut dyn DispatchHost, target: EventTargetId, capture: Option<bool>) {
     let event_type = host.event_type();
-    let listeners = host
-        .document()
-        .event_listeners
-        .listeners(target, &event_type);
+    let listeners = host.listeners(target, &event_type);
     for listener in listeners {
         if listener.removed.get() {
             continue;
@@ -526,9 +539,7 @@ fn invoke_listeners(host: &mut dyn DispatchHost, target: EventTargetId, capture:
             continue;
         }
         if listener.once {
-            host.document_mut()
-                .event_listeners
-                .remove_entry(target, &listener);
+            host.remove_listener(target, &listener);
         }
         host.set_in_passive_listener(listener.passive);
         host.invoke(&listener);
@@ -570,5 +581,118 @@ mod lifetime_tests {
         listeners.remove_target(target);
         assert!(snapshot.iter().all(|listener| listener.removed.get()));
         assert!(listeners.map.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod host_listener_tests {
+    use super::*;
+    use crate::{DocumentConfig, QualName, ns};
+    use std::cell::RefCell;
+
+    /// A host whose `outer` node moves to another arena (here, a separate
+    /// listener store) when the target's listener runs.
+    struct MovingHost {
+        document: RefCell<BaseDocument>,
+        elsewhere: RefCell<EventListeners>,
+        outer: NodeId,
+        moved: Cell<bool>,
+        invoked: Vec<u64>,
+    }
+
+    const MOVED: EventTargetId = EventTargetId::Other(99);
+
+    impl DispatchHost for MovingHost {
+        fn document(&self) -> std::cell::Ref<'_, BaseDocument> {
+            self.document.borrow()
+        }
+        fn document_mut(&self) -> std::cell::RefMut<'_, BaseDocument> {
+            self.document.borrow_mut()
+        }
+        fn event_type(&self) -> String {
+            "ping".into()
+        }
+        fn bubbles(&self) -> bool {
+            true
+        }
+        fn set_phase(&mut self, _: EventPhase, _: Option<EventTargetId>) {}
+        fn set_target(&mut self, _: Option<EventTargetId>) {}
+        fn set_in_passive_listener(&mut self, _: bool) {}
+        fn propagation_stopped(&self) -> bool {
+            false
+        }
+        fn immediate_propagation_stopped(&self) -> bool {
+            false
+        }
+        fn canceled(&self) -> bool {
+            false
+        }
+        fn clear_propagation_flags(&mut self) {}
+        fn invoke(&mut self, listener: &Listener) {
+            self.invoked.push(listener.callback);
+            if listener.callback == 1 {
+                let outer = EventTargetId::Node(self.outer);
+                let taken = self
+                    .document
+                    .borrow_mut()
+                    .event_listeners
+                    .take_target(outer);
+                self.elsewhere.borrow_mut().restore_target(MOVED, taken);
+                self.moved.set(true);
+            }
+        }
+        fn listeners(&self, target: EventTargetId, event_type: &str) -> Vec<Rc<Listener>> {
+            if self.moved.get() && target == EventTargetId::Node(self.outer) {
+                return self.elsewhere.borrow().listeners(MOVED, event_type);
+            }
+            self.document()
+                .event_listeners
+                .listeners(target, event_type)
+        }
+        fn remove_listener(&mut self, target: EventTargetId, listener: &Rc<Listener>) {
+            if self.moved.get() && target == EventTargetId::Node(self.outer) {
+                self.elsewhere.borrow_mut().remove_entry(MOVED, listener);
+                return;
+            }
+            self.document_mut()
+                .event_listeners
+                .remove_entry(target, listener);
+        }
+    }
+
+    #[test]
+    fn a_path_node_moved_by_a_listener_keeps_its_listeners() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        let (outer, inner) = {
+            let mut mutator = document.mutate();
+            let outer =
+                mutator.create_element(QualName::new(None, ns!(html), "div".into()), vec![]);
+            let inner = mutator.create_element(QualName::new(None, ns!(html), "p".into()), vec![]);
+            mutator.append_children(outer, &[inner]);
+            (outer, inner)
+        };
+        let once = ListenerOptions {
+            once: true,
+            ..ListenerOptions::default()
+        };
+        let listeners = &mut document.event_listeners;
+        listeners.add(
+            EventTargetId::Node(inner),
+            "ping",
+            1,
+            ListenerOptions::default(),
+        );
+        listeners.add(EventTargetId::Node(outer), "ping", 2, once);
+        let mut host = MovingHost {
+            document: RefCell::new(document),
+            elsewhere: RefCell::default(),
+            outer,
+            moved: Cell::new(false),
+            invoked: Vec::new(),
+        };
+        dispatch(&mut host, EventTargetId::Node(inner));
+        assert_eq!(host.invoked, [1, 2]);
+        // The `once` listener was removed where the node lives now.
+        assert!(host.elsewhere.borrow().listeners(MOVED, "ping").is_empty());
     }
 }
