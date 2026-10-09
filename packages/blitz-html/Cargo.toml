@@ -27,9 +27,10 @@ xml5ever = { workspace = true }
 tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
-# SVG images (with WOFF2 test fonts) for tests/svg_fonts.rs, and the
-# accessibility tree for tests/accessibility.rs
-blitz-dom = { workspace = true, features = ["svg", "woff", "accessibility"] }
+# SVG images (with WOFF2 test fonts) for tests/svg_fonts.rs, the
+# accessibility tree for tests/accessibility.rs, and float layout for the
+# caret tests, as embedders that lay out pages enable it
+blitz-dom = { workspace = true, features = ["svg", "woff", "accessibility", "floats"] }
 keyboard-types = { workspace = true }
 accesskit = { workspace = true }
 

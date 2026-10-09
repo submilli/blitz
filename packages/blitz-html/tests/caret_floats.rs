@@ -180,7 +180,7 @@ fn line_steps_reach_the_root_line_past_a_float() {
     let (aaa, bb) = (child(&doc, "p", 0), child(&doc, "p", 3));
     assert_eq!(
         carets(&doc, at(bb, 0), &moves(BACKWARD, Granularity::Line, 1)),
-        [at(aaa, 0)]
+        [at(aaa, 1)]
     );
     assert_eq!(
         carets(&doc, at(aaa, 0), &moves(FORWARD, Granularity::Line, 1)),
