@@ -27,6 +27,7 @@ impl Node {
             "color",
             "flood-color",
             "flood-opacity",
+            "lighting-color",
             "color-interpolation-filters",
         ] {
             let Some(value) = element.attr_dom(markup5ever::LocalName::from(property)) else {

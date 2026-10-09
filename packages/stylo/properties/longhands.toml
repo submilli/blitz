@@ -1240,7 +1240,6 @@ affects = "layout"
 type = "Color"
 initial = "computed::Color::WHITE"
 struct = "svg"
-engine = "gecko"
 spec = "https://drafts.fxtf.org/filter-effects-1#LightingColorProperty"
 affects = "paint"
 

@@ -58,10 +58,12 @@ pub mod shadow;
 mod calendar_editor;
 mod canvas_filter;
 #[cfg(feature = "svg")]
+mod canvas_svg_attributes;
+#[cfg(feature = "svg")]
 mod canvas_svg_filter;
 pub mod caret;
 #[cfg(feature = "svg")]
-pub use canvas_svg_filter::{CanvasSvgFilter, CanvasSvgLimit};
+pub use canvas_svg_filter::{CanvasSvgFilter, CanvasSvgLimit, CanvasSvgUnits};
 #[cfg(feature = "svg")]
 pub use usvg::filter as canvas_svg_types;
 #[cfg(feature = "svg")]

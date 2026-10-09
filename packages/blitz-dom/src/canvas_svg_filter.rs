@@ -1,6 +1,8 @@
 //! Live DOM filter snapshots. SVG parsing and unit resolution stay in the engine.
 
+use crate::canvas_svg_attributes::{Attribute, chrome_attribute};
 use crate::{BaseDocument, CanvasFilter, CanvasFilters, NodeId};
+use std::borrow::Cow;
 use std::fmt::Write;
 use std::sync::Arc;
 use style_traits::ToCss;
@@ -14,7 +16,57 @@ const SNAPSHOT_ID: &str = "canvas-filter";
 #[derive(Clone, Debug)]
 pub struct CanvasSvgFilter {
     markup: String,
-    pub origin_clean: bool,
+    /// Per filter primitive, in document order: whether its own paint depends on
+    /// currentColor. Chrome taints a canvas only when such paint reaches the
+    /// filter output, and passes displacement through when its map is tainted.
+    primitive_taints: Vec<bool>,
+    /// `primitiveUnits="objectBoundingBox"` on the filter element.
+    bounding_box_units: bool,
+}
+
+/// Primitive coordinates that the engine's parser leaves in primitive units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CanvasSvgUnits {
+    /// The filtered bounds `[x, y, width, height]` for bounding-box units.
+    bounding_box: Option<[f32; 4]>,
+}
+
+impl CanvasSvgUnits {
+    /// Light positions as user-space coordinates. Bounding-box units scale x and y
+    /// by the box and z by its normalized diagonal, as Chrome resolves them.
+    /// <https://drafts.fxtf.org/filter-effects/#element-attrdef-fepointlight-z>
+    pub fn light(&self, light: usvg::filter::LightSource) -> usvg::filter::LightSource {
+        use usvg::filter::LightSource;
+        let Some([x, y, width, height]) = self.bounding_box else {
+            return light;
+        };
+        let depth = ((width * width + height * height) / 2.0).sqrt();
+        let point = |px: f32, py: f32, pz: f32| (x + px * width, y + py * height, pz * depth);
+        match light {
+            LightSource::DistantLight(light) => LightSource::DistantLight(light),
+            LightSource::PointLight(mut light) => {
+                (light.x, light.y, light.z) = point(light.x, light.y, light.z);
+                LightSource::PointLight(light)
+            }
+            LightSource::SpotLight(mut light) => {
+                (light.x, light.y, light.z) = point(light.x, light.y, light.z);
+                (light.points_at_x, light.points_at_y, light.points_at_z) =
+                    point(light.points_at_x, light.points_at_y, light.points_at_z);
+                LightSource::SpotLight(light)
+            }
+        }
+    }
+
+    /// The parser scales a bounding-box displacement by the mean box side; Chrome
+    /// uses the box width.
+    pub fn displacement_scale(&self, parsed: f32) -> f32 {
+        match self.bounding_box {
+            Some([_, _, width, height]) if width + height > 0.0 => {
+                parsed / ((width + height) / 2.0) * width
+            }
+            _ => parsed,
+        }
+    }
 }
 
 /// Page-controlled graph or serialization limits are checked before retaining data.
@@ -22,6 +74,26 @@ pub struct CanvasSvgFilter {
 pub struct CanvasSvgLimit;
 
 impl CanvasSvgFilter {
+    /// Units of primitive coordinates for `bounds` (`[x, y, right, bottom]`), the
+    /// same bounds passed to [`Self::resolve`].
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Resolved bounds are finite and at most 1e6 in magnitude."
+    )]
+    pub fn units(&self, bounds: [f64; 4]) -> CanvasSvgUnits {
+        let [x, y, right, bottom] = bounds.map(|v| v as f32);
+        CanvasSvgUnits {
+            bounding_box: self
+                .bounding_box_units
+                .then_some([x, y, right - x, bottom - y]),
+        }
+    }
+
+    /// Whether each primitive's own paint depends on currentColor, in document order.
+    pub fn primitive_taints(&self) -> &[bool] {
+        &self.primitive_taints
+    }
+
     /// Resolve filterUnits/primitiveUnits against the geometric source bounds.
     /// The parser performs no I/O: images and resource references are disabled.
     pub fn resolve(
@@ -168,7 +240,8 @@ impl BaseDocument {
         }
         let mut snapshot = CanvasSvgFilter {
             markup: String::new(),
-            origin_clean: true,
+            primitive_taints: Vec::new(),
+            bounding_box_units: false,
         };
         let mut pending = vec![(filter, false)];
         let mut nodes = 0;
@@ -200,6 +273,10 @@ impl BaseDocument {
             if !allowed_tag(tag) {
                 return Ok(None);
             }
+            let primitive = node.parent == Some(filter) && is_primitive(tag);
+            if primitive {
+                snapshot.primitive_taints.push(false);
+            }
             write!(&mut snapshot.markup, "<{tag}").map_err(|_| CanvasSvgLimit)?;
             if node_id == filter {
                 write!(&mut snapshot.markup, " id=\"{SNAPSHOT_ID}\"")
@@ -223,6 +300,7 @@ impl BaseDocument {
                         | "style"
                         | "flood-color"
                         | "flood-opacity"
+                        | "lighting-color"
                         | "color-interpolation-filters"
                 ) {
                     continue;
@@ -234,13 +312,22 @@ impl BaseDocument {
                     return Err(CanvasSvgLimit);
                 }
                 let value = attr.value.as_str_lossy();
-                if value.len() > 4096
-                    || snapshot.markup.len() + value.len() * 6 + name.len() + 4 > MAX_MARKUP
-                {
+                if value.len() > 4096 {
+                    return Err(CanvasSvgLimit);
+                }
+                if node_id == filter && name == "primitiveUnits" {
+                    snapshot.bounding_box_units = value == "objectBoundingBox";
+                }
+                let value: Cow<'_, str> = match chrome_attribute(tag, name, value) {
+                    Attribute::Keep(value) => Cow::Borrowed(value),
+                    Attribute::Replace(value) => Cow::Owned(value),
+                    Attribute::Omit => continue,
+                };
+                if snapshot.markup.len() + value.len() * 6 + name.len() + 4 > MAX_MARKUP {
                     return Err(CanvasSvgLimit);
                 }
                 write!(&mut snapshot.markup, " {name}=\"").map_err(|_| CanvasSvgLimit)?;
-                escape(&mut snapshot.markup, value);
+                escape(&mut snapshot.markup, &value);
                 snapshot.markup.push('"');
             }
             if let Some(style) = node
@@ -250,10 +337,17 @@ impl BaseDocument {
             {
                 let color = style.clone_color();
                 let flood = style.clone_flood_color();
-                if matches!(tag, "feFlood" | "feDropShadow") {
-                    snapshot.origin_clean &= flood.is_absolute();
+                let lighting = style.clone_lighting_color();
+                let tainted = match tag {
+                    "feFlood" | "feDropShadow" => !flood.is_absolute(),
+                    "feDiffuseLighting" | "feSpecularLighting" => !lighting.is_absolute(),
+                    _ => false,
+                };
+                if primitive && let Some(last) = snapshot.primitive_taints.last_mut() {
+                    *last = tainted;
                 }
                 let flood = svg_color(&flood.resolve_to_absolute(&color));
+                let lighting = svg_color(&lighting.resolve_to_absolute(&color));
                 let interpolation = style.clone_color_interpolation_filters().to_css_string();
                 let interpolation = if interpolation.eq_ignore_ascii_case("srgb") {
                     "sRGB"
@@ -264,6 +358,8 @@ impl BaseDocument {
                 escape(&mut snapshot.markup, &svg_color(&color));
                 snapshot.markup.push_str(";flood-color:");
                 escape(&mut snapshot.markup, &flood);
+                snapshot.markup.push_str(";lighting-color:");
+                escape(&mut snapshot.markup, &lighting);
                 write!(
                     &mut snapshot.markup,
                     ";flood-opacity:{};color-interpolation-filters:{interpolation}\"",
@@ -313,7 +409,33 @@ fn allowed_tag(tag: &str) -> bool {
             | "feMerge"
             | "feMergeNode"
             | "feDropShadow"
+            | "feMorphology"
+            | "feConvolveMatrix"
+            | "feDisplacementMap"
+            | "feTurbulence"
+            | "feTile"
+            | "feDiffuseLighting"
+            | "feSpecularLighting"
+            | "feDistantLight"
+            | "fePointLight"
+            | "feSpotLight"
     )
+}
+
+/// Filter children that the parser turns into graph primitives, in document order.
+fn is_primitive(tag: &str) -> bool {
+    tag.starts_with("fe")
+        && !matches!(
+            tag,
+            "feFuncR"
+                | "feFuncG"
+                | "feFuncB"
+                | "feFuncA"
+                | "feMergeNode"
+                | "feDistantLight"
+                | "fePointLight"
+                | "feSpotLight"
+        )
 }
 
 fn escape(output: &mut String, text: &str) {
@@ -409,6 +531,113 @@ mod tests {
             saved.svg[0].as_ref().unwrap().markup
         );
         document.mutate().remove_node(filter);
+        document
+            .resolve_canvas_svg_filters(canvas, &mut filters)
+            .unwrap();
+        assert!(filters.svg[0].is_none());
+    }
+
+    fn svg(
+        mutation: &mut crate::DocumentMutator<'_>,
+        name: &str,
+        attrs: &[(&str, &str)],
+    ) -> NodeId {
+        let node = mutation.create_element(
+            QualName {
+                prefix: None,
+                ns: crate::Namespace::from("http://www.w3.org/2000/svg"),
+                local: name.into(),
+            },
+            vec![],
+        );
+        for (attr, value) in attrs {
+            mutation.set_attribute(
+                node,
+                QualName {
+                    prefix: None,
+                    ns: crate::Namespace::from(""),
+                    local: (*attr).into(),
+                },
+                *value,
+            );
+        }
+        node
+    }
+
+    #[test]
+    fn primitive_families_resolve_with_lighting_color_and_aligned_taints() {
+        let (mut document, canvas, filter, matrix) = self::document();
+        let mut mutation = document.mutate();
+        mutation.remove_node(matrix);
+        let morphology = svg(&mut mutation, "feMorphology", &[("radius", "0 2")]);
+        let lighting = svg(
+            &mut mutation,
+            "feDiffuseLighting",
+            &[("lighting-color", "currentColor")],
+        );
+        let light = svg(&mut mutation, "feDistantLight", &[("elevation", "45")]);
+        let flood = svg(&mut mutation, "feFlood", &[("flood-color", "red")]);
+        let turbulence = svg(&mut mutation, "feTurbulence", &[("baseFrequency", "0.1")]);
+        let specular = svg(
+            &mut mutation,
+            "feSpecularLighting",
+            &[
+                ("lighting-color", "rgb(0, 255, 0)"),
+                ("specularExponent", "500"),
+            ],
+        );
+        let point = svg(&mut mutation, "fePointLight", &[("z", "3")]);
+        mutation.set_attribute(filter, qual_name!("color"), "blue");
+        mutation.append_children(lighting, &[light]);
+        mutation.append_children(specular, &[point]);
+        mutation.append_children(filter, &[morphology, lighting, flood, turbulence, specular]);
+        drop(mutation);
+        document.flush_style_and_layout(0.0);
+        let mut filters = document
+            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
+            .unwrap();
+        document
+            .resolve_canvas_svg_filters(canvas, &mut filters)
+            .unwrap();
+        let snapshot = filters.svg[0].as_ref().unwrap();
+        // Light sources are not primitives, so taints stay aligned with the parser.
+        assert_eq!(
+            snapshot.primitive_taints(),
+            [false, true, false, false, false]
+        );
+        let parsed = snapshot.resolve([0.0, 0.0, 8.0, 8.0], [8, 8]).unwrap();
+        let primitives = parsed.primitives();
+        assert_eq!(primitives.len(), 5);
+        let usvg::filter::Kind::Morphology(morphology) = primitives[0].kind() else {
+            panic!("morphology")
+        };
+        // A zero axis rounds to zero instead of the parser's default of one.
+        assert!(morphology.radius_x().get() < 0.5);
+        let usvg::filter::Kind::DiffuseLighting(diffuse) = primitives[1].kind() else {
+            panic!("diffuse lighting")
+        };
+        assert_eq!(diffuse.lighting_color(), usvg::Color::new_rgb(0, 0, 255));
+        let usvg::filter::Kind::SpecularLighting(specular) = primitives[4].kind() else {
+            panic!("specular lighting: out-of-range exponents clamp instead of dropping")
+        };
+        assert_eq!(specular.lighting_color(), usvg::Color::new_rgb(0, 255, 0));
+        assert_eq!(specular.specular_exponent(), 128.0);
+    }
+
+    #[test]
+    fn image_inputs_remain_unresolved() {
+        let (mut document, canvas, filter, _) = self::document();
+        let mut mutation = document.mutate();
+        let image = svg(
+            &mut mutation,
+            "feImage",
+            &[("href", "data:image/png;base64,AA==")],
+        );
+        mutation.append_children(filter, &[image]);
+        drop(mutation);
+        let mut filters = document
+            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
+            .unwrap();
         document
             .resolve_canvas_svg_filters(canvas, &mut filters)
             .unwrap();
