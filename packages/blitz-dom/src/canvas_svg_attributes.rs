@@ -109,7 +109,8 @@ fn overflows(value: &str) -> bool {
 
 /// A filter or primitive region length. Chrome reads huge values as effectively
 /// infinite: a distant finite stand-in keeps the region out of reach without
-/// overflowing usvg, whose bounding-box transform unwraps a finite product.
+/// overflowing usvg, whose bounding-box transform unwraps a finite product. The
+/// stand-in is unitless: any unit on such a length leaves it out of reach too.
 fn region<'a>(name: &str, value: &'a str) -> Attribute<'a> {
     let Ok(length) = value.trim().parse::<svgtypes::Length>() else {
         return Attribute::Keep(value);
