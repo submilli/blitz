@@ -661,6 +661,26 @@ mod host_listener_tests {
     }
 
     #[test]
+    fn a_related_target_that_names_no_node_retargets_to_itself() {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        let (host, gone) = {
+            let mut mutator = document.mutate();
+            let name = |local: &str| QualName::new(None, ns!(html), local.into());
+            let host = mutator.create_element(name("div"), vec![]);
+            let gone = mutator.create_element(name("p"), vec![]);
+            mutator.remove_and_drop_node(gone);
+            (host, gone)
+        };
+        let related = EventTargetId::Node(gone);
+        assert_eq!(
+            document.retarget(related, EventTargetId::Node(host)),
+            related
+        );
+        assert_eq!(document.tree_root(gone), gone);
+        assert_eq!(document.containing_shadow_root(gone), None);
+    }
+
+    #[test]
     fn a_path_node_moved_by_a_listener_keeps_its_listeners() {
         let mut document = BaseDocument::new(DocumentConfig::default());
         let (outer, inner) = {

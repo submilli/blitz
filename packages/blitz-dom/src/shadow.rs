@@ -180,7 +180,10 @@ impl BaseDocument {
     /// The root of `node`'s tree, if it is a shadow root.
     pub fn containing_shadow_root(&self, node: NodeId) -> Option<NodeId> {
         let root = self.tree_root(node);
-        self.nodes[root].is_shadow_root().then_some(root)
+        self.nodes
+            .get(root)
+            .is_some_and(crate::Node::is_shadow_root)
+            .then_some(root)
     }
 
     /// The slot name a host child would be assigned by: an element's `slot`

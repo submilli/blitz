@@ -219,9 +219,10 @@ impl BaseDocument {
     }
 
     /// The root of `node`'s tree (the document, or the top of a detached subtree).
+    /// An ID that names no node (an embedder's stale ID) is its own root.
     pub fn tree_root(&self, node: NodeId) -> NodeId {
         let mut id = node;
-        while let Some(parent) = self.nodes[id].parent {
+        while let Some(parent) = self.nodes.get(id).and_then(|node| node.parent) {
             id = parent;
         }
         id
