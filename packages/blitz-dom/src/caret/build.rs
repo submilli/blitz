@@ -31,7 +31,6 @@ pub(super) fn document_flows(doc: &BaseDocument, order: &TreeOrder, root: NodeId
         layers: vec![Layer::new(&doc.nodes[root], text, None)],
         hanging_space: false,
         opaque: None,
-        line: 0,
     };
     builder.marker(root);
     if order.is_unselectable(root) {
@@ -78,6 +77,26 @@ impl<'a> Layer<'a> {
         }
         edges
     }
+
+    /// The line content continues on: the line of the next layout byte,
+    /// past everything aligned so far, whether or not it took caret units
+    /// (generated text, hidden or unselectable text, breaks). A boundary
+    /// at a soft wrap is downstream, on the following line.
+    fn continuing_line(&self) -> u32 {
+        self.line
+            .unwrap_or_else(|| self.geometry.line(self.aligner.position()))
+    }
+
+    /// The line an inline box draws on. A box layout did not position
+    /// stays where content continues, so its nested lines never leak into
+    /// this layout's numbering.
+    fn box_line(&self, id: NodeId) -> u32 {
+        self.line.unwrap_or_else(|| {
+            self.geometry
+                .inline_box(id.as_u64())
+                .map_or_else(|| self.continuing_line(), |edge| edge.line)
+        })
+    }
 }
 
 /// Content of a `user-select: none` element is one opaque unit.
@@ -103,8 +122,6 @@ struct Builder<'a> {
     /// caret position when the line ends after it.
     hanging_space: bool,
     opaque: Option<Opaque>,
-    /// The line content continues on, where a float splitting the flow sits.
-    line: u32,
 }
 
 impl Builder<'_> {
@@ -212,10 +229,7 @@ impl Builder<'_> {
             return self.split();
         };
         self.enter_opaque(id, pending);
-        let line = self.layers.last().and_then(|layer| {
-            let edge = layer.geometry.inline_box(id.as_u64())?;
-            Some(layer.line.unwrap_or(edge.line))
-        });
+        let line = self.layers.last().map(|layer| layer.box_line(id));
         self.layers
             .push(Layer::new(&self.doc.nodes[inner], text, line));
         pending.push(Step::LeaveLayer);
@@ -275,9 +289,6 @@ impl Builder<'_> {
             if style.visible {
                 self.extend_opaque(edges);
             }
-            if breaks {
-                self.advance_line(UnitKind::Break, edges);
-            }
             return;
         }
         if continues && !self.flow.is_empty() {
@@ -335,10 +346,13 @@ impl Builder<'_> {
             return;
         }
         let x = self.doc.nodes[id].unrounded_absolute_position(0.0, 0.0).x;
+        let Some(line) = self.layers.last().map(Layer::continuing_line) else {
+            return;
+        };
         let edges = Edges {
             leading: x,
             trailing: x,
-            line: self.layers.last().and_then(|l| l.line).unwrap_or(self.line),
+            line,
         };
         let around = sibling_points(self.doc, id);
         if let Some((before, _)) = around {
@@ -362,8 +376,7 @@ impl Builder<'_> {
             return;
         };
         if self.opaque.is_some() {
-            self.extend_opaque(edges);
-            return self.advance_line(UnitKind::Break, edges);
+            return self.extend_opaque(edges);
         }
         self.drop_hanging_space();
         let around = sibling_points(self.doc, id);
@@ -385,28 +398,13 @@ impl Builder<'_> {
         }
     }
 
-    /// An unselectable run's unit. Its edges start where the run started,
-    /// so the line content continues on, tracked as the run was walked,
-    /// stays as it is.
+    /// An unselectable run's unit, with edges from where the run started.
     fn push_opaque_unit(&mut self, edges: Edges) {
         self.flow.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
         self.hanging_space = false;
     }
 
-    /// Track the line content continues on: the next one after a forced
-    /// break, except inside a nested box, whose lines all draw on one line
-    /// of the root.
-    fn advance_line(&mut self, kind: UnitKind, edges: Edges) {
-        let nested = self.layers.last().is_some_and(|layer| layer.line.is_some());
-        self.line = if kind == UnitKind::Break && !nested {
-            edges.line.saturating_add(1)
-        } else {
-            edges.line
-        };
-    }
-
     fn extend_opaque(&mut self, edges: Edges) {
-        self.line = edges.line;
         if let Some(opaque) = &mut self.opaque {
             opaque.edges = Some(match opaque.edges {
                 Some(first) => Edges {
@@ -423,7 +421,6 @@ impl Builder<'_> {
     }
 
     fn push_unit(&mut self, kind: UnitKind, edges: Edges, text: &str) {
-        self.advance_line(kind, edges);
         self.flow.push_unit(kind, edges, text);
         self.hanging_space = false;
     }

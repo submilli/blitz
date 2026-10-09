@@ -97,6 +97,10 @@ impl<'a> Aligner<'a> {
         Some(start..self.position)
     }
 
+    pub(super) fn position(&self) -> usize {
+        self.position
+    }
+
     pub(super) fn starts_grapheme(&self, byte: usize) -> bool {
         self.graphemes.binary_search(&byte).is_ok()
     }

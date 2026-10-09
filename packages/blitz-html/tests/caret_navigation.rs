@@ -838,3 +838,39 @@ fn breaks_in_nested_boxes_and_unselectable_runs_place_later_floats() {
     let (p, cc) = (q(&doc, "p"), child(&doc, "p", 3));
     assert_eq!(carets(&doc, at(p, 3), &forward), [at(cc, 2)]);
 }
+
+#[test]
+fn floats_after_content_without_stops_sit_where_content_continues() {
+    let float = "<img style='float:left;width:10px;height:10px'>";
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+    let cases = [
+        // Generated content ending in a preserved newline.
+        format!(
+            "<style>.x::after{{content:'a\\A';white-space:pre}}</style><p>zz<span class=x></span>{float}bb</p>"
+        ),
+        // A soft wrap after hidden text and after visible text: a boundary
+        // at the wrap belongs to the following line.
+        format!(
+            "<p style='width:1px'>zz <span style='visibility:hidden'>hidden words</span> {float}bb</p>"
+        ),
+        format!("<p style='width:1px'>zz <span>visible words</span> {float}bb</p>"),
+        // A preserved newline inside unselectable text.
+        format!("<p>zz<span style='user-select:none;white-space:pre'>a\n</span>{float}bb</p>"),
+        // An unselectable inline-block ending in a forced break.
+        format!(
+            "<p>zz<span style='display:inline-block;user-select:none'>a<br></span>{float}bb</p>"
+        ),
+    ];
+    for html in cases {
+        let doc = laid_out(&html);
+        let p = q(&doc, "p");
+        let children = &doc.get_node(p).unwrap().children;
+        let img = children
+            .iter()
+            .position(|&id| id == q(&doc, "img"))
+            .unwrap();
+        let bb = *children.last().unwrap();
+        let moved = carets(&doc, at(p, img + 1), &forward);
+        assert_eq!(moved, [at(bb, 2)], "{html}");
+    }
+}

@@ -111,7 +111,7 @@ impl LayoutGeometry {
     }
 
     /// The line holding a layout byte; the end of the text is on the last.
-    fn line(&self, byte: usize) -> u32 {
+    pub(super) fn line(&self, byte: usize) -> u32 {
         let index = self
             .lines
             .partition_point(|(range, _)| range.end <= byte)
