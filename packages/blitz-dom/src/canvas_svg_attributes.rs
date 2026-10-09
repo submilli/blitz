@@ -34,8 +34,13 @@ pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Att
             };
             Attribute::Replace(format!("{} {}", radius(x), radius(y)))
         }
-        // Chrome treats a zero divisor as absent and uses the kernel sum.
-        ("feConvolveMatrix", "divisor") if number(value) == Some(0.0) => Attribute::Omit,
+        // Chrome treats a zero divisor as absent and uses the kernel sum; a
+        // malformed one is present with its initial value of 1.
+        ("feConvolveMatrix", "divisor") => match number(value) {
+            Some(0.0) => Attribute::Omit,
+            Some(_) => Attribute::Keep(value),
+            None => Attribute::Replace("1".to_owned()),
+        },
         // An unparsable order keeps Chrome's default of 3; usvg would read the
         // leading numbers instead, and multiply them without overflow checks.
         ("feConvolveMatrix", "order") => match number_optional_number(value) {
@@ -64,6 +69,15 @@ pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Att
             Some(exponent) => Attribute::Replace(exponent.clamp(1.0, 128.0).to_string()),
             None => Attribute::Omit,
         },
+        // Result names are strings, even when they look like numbers.
+        (_, "in" | "in2" | "result") => Attribute::Keep(value),
+        // Chrome reads an overflowing subregion coordinate as infinite; a distant
+        // finite stand-in keeps that region out of reach without parser infinity.
+        (tag, "x" | "y" | "width" | "height")
+            if !matches!(tag, "fePointLight" | "feSpotLight") && overflows(value) =>
+        {
+            Attribute::Replace(saturated(value))
+        }
         _ if overflows(value) => Attribute::Omit,
         _ => Attribute::Keep(value),
     }
@@ -87,6 +101,13 @@ fn number_optional_number(value: &str) -> Option<[f32; 2]> {
 fn overflows(value: &str) -> bool {
     let numbers: Result<Vec<f64>, _> = svgtypes::NumberListParser::from(value).collect();
     numbers.is_ok_and(|numbers| numbers.into_iter().any(|n| finite(n).is_none()))
+}
+
+/// A single overflowing number as a distant finite value of the same sign. It lies
+/// beyond every admitted filter region (1e6) while `x + width` stays distinct in f32.
+fn saturated(value: &str) -> String {
+    let negative = value.trim_start().starts_with('-');
+    if negative { "-1e7" } else { "1e7" }.to_owned()
 }
 
 /// An SVG number within the f32 range.
@@ -143,6 +164,12 @@ mod tests {
         let convolve = |name, value| chrome_attribute("feConvolveMatrix", name, value);
         assert_eq!(convolve("divisor", " 0 "), Attribute::Omit);
         assert_eq!(convolve("divisor", "2"), Attribute::Keep("2"));
+        for malformed in ["abc", "1e39"] {
+            assert_eq!(
+                convolve("divisor", malformed),
+                Attribute::Replace("1".into())
+            );
+        }
         assert_eq!(convolve("order", "3 2"), Attribute::Keep("3 2"));
         for invalid in ["-3", "0 3", "0.5", "5000 1"] {
             assert_eq!(
@@ -193,6 +220,18 @@ mod tests {
                 "{name}"
             );
         }
+        assert_eq!(
+            chrome_attribute("feFlood", "x", "1e39"),
+            Attribute::Replace("1e7".into())
+        );
+        assert_eq!(
+            chrome_attribute("feFlood", "width", "-1e39"),
+            Attribute::Replace("-1e7".into())
+        );
+        assert_eq!(
+            chrome_attribute("feFlood", "result", "1e39"),
+            Attribute::Keep("1e39")
+        );
         for value in ["3e38", "1 2", "SourceGraphic", "10%"] {
             assert_eq!(
                 chrome_attribute("feOffset", "dx", value),
