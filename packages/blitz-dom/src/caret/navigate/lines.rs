@@ -32,11 +32,7 @@ impl Mover<'_> {
         let Some(stops) = flow.float_stops() else {
             return Some((caret.flow, Some(line_of(flow, caret))));
         };
-        // Content inside a following box draws on its own lines.
-        let beside = float::stand_in(self.flows, caret)
-            .and_then(|beside| Some((beside, self.flows.flow(beside.flow)?)))
-            .filter(|(_, beside)| beside.root() == flow.root());
-        if let Some((beside, beside_flow)) = beside {
+        if let Some((beside, beside_flow)) = self.stand_in_on_root(caret) {
             return Some((beside.flow, Some(line_of(beside_flow, beside))));
         }
         let line = flow.line(0);
@@ -138,12 +134,12 @@ impl Mover<'_> {
     }
 
     /// The line's end (or start) through the root's flows after `from`.
-    /// A float has no line box and is passed over, but its stop ends the
-    /// line where Chrome canonicalizes the line's end to it: when a box on
-    /// the line follows it, when content without stops (hidden text, an
-    /// empty box) follows it, or, moving forward, when the line ends right
-    /// after it, before a forced break, where its stop stands for the
-    /// content before it.
+    /// A float has no line box and is passed over, but the line ends at
+    /// it where Chrome canonicalizes the line's end there: at its stop when
+    /// a box on the line comes next (moving forward) or content without
+    /// stops comes next (hidden text, an empty box), and, moving forward,
+    /// at the content its stop stands for when the line ends right after
+    /// it, before a forced break.
     fn continue_line(&self, from: usize, line: u32, mut found: Caret) -> Caret {
         let Some(root) = self.flows.flow(from).map(Flow::root) else {
             return found;

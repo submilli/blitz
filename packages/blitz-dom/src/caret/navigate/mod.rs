@@ -208,14 +208,24 @@ impl Mover<'_> {
     /// otherwise draws at the float's start edge.
     fn x(&self, caret: Caret) -> Option<f32> {
         let flow = self.flows.flow(caret.flow)?;
-        let beside = float::stand_in(self.flows, caret).filter(|beside| {
-            self.flows.flow(beside.flow).is_some_and(|beside_flow| {
-                beside_flow.root() == flow.root() && line_of(beside_flow, *beside) == flow.line(0)
-            })
-        });
-        let caret = beside.unwrap_or(caret);
-        let flow = self.flows.flow(caret.flow)?;
+        let beside = self
+            .stand_in_on_root(caret)
+            .filter(|(beside, beside_flow)| line_of(beside_flow, *beside) == flow.line(0));
+        let (caret, flow) = beside.unwrap_or((caret, flow));
         Some(flow.x(caret.index, line_of(flow, caret)))
+    }
+
+    /// The inline caret a float's stop stands for (see [`float::stand_in`])
+    /// and its flow, when that is in the float's own root: content inside a
+    /// following box draws on lines of its own.
+    fn stand_in_on_root(&self, caret: Caret) -> Option<(Caret, &Flow)> {
+        let root = self.flows.flow(caret.flow)?.root();
+        let beside = float::stand_in(self.flows, caret)?;
+        let flow = self
+            .flows
+            .flow(beside.flow)
+            .filter(|flow| flow.root() == root)?;
+        Some((beside, flow))
     }
 
     fn character(&self, caret: Caret) -> Option<Caret> {

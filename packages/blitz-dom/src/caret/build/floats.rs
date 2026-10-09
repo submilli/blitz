@@ -4,7 +4,7 @@
 use super::{Builder, Layer, sibling_points};
 use crate::NodeId;
 use crate::caret::float::{self, Beside, FloatStops, Walked};
-use crate::caret::flow::UnitKind;
+use crate::caret::flow::{Flow, UnitKind};
 use crate::caret::geometry::Edges;
 use crate::caret::order::is_out_of_flow;
 use style::values::specified::box_::DisplayOutside;
@@ -45,10 +45,19 @@ impl Builder<'_> {
         if let Some((_, after)) = around {
             self.entry(after, self.flow.len(), true);
         }
+        let follows_content = match self.last {
+            Walked::Float(index) => self
+                .flows
+                .get(index)
+                .and_then(Flow::float_stops)
+                .is_some_and(|stops| stops.follows_content),
+            _ => before == Beside::Previous,
+        };
         self.flow.set_float_stops(FloatStops {
             before,
             after: Beside::LineEnd,
             after_break: matches!(self.last, Walked::Break),
+            follows_content,
         });
         let index = self.flows.len();
         self.split();

@@ -40,9 +40,13 @@ pub(super) enum Beside {
 pub(super) struct FloatStops {
     pub(super) before: Beside,
     pub(super) after: Beside,
-    /// A generated forced break precedes the float, which sits on the line
-    /// after the content its before stop stands for.
+    /// A forced break precedes the float. After a generated one, the float
+    /// sits on the line after the content its before stop stands for; a
+    /// DOM break opens the line anyway.
     pub(super) after_break: bool,
+    /// The float, or the run of floats it ends, directly follows the
+    /// content of the preceding flow on its line.
+    pub(super) follows_content: bool,
 }
 
 impl FloatStops {
@@ -96,21 +100,16 @@ pub(super) fn before_stop(
 }
 
 /// What the stop after a float stands for once `next` follows it. A forced
-/// break leaves it with the content before the float, when they share a
-/// line.
+/// break leaves it with the content before the float, or before the run of
+/// floats it ends, when they share a line.
 pub(super) fn after_stop(next: Walked, stops: FloatStops) -> Beside {
-    let before = if stops.after_break {
-        Beside::Stays
-    } else {
-        stops.before
-    };
     match next {
         Walked::Inline => Beside::Next,
         Walked::Box {
             end: Some(end),
             line,
         } => Beside::Into { end, line },
-        Walked::Break if before == Beside::Previous => Beside::Previous,
+        Walked::Break if stops.follows_content && !stops.after_break => Beside::Previous,
         Walked::Break | Walked::Box { end: None, .. } | Walked::Float(_) => Beside::Stays,
     }
 }
@@ -136,9 +135,12 @@ pub(super) fn stand_in(flows: &dyn Flows, caret: Caret) -> Option<Caret> {
             Some(Caret::at(index, next.first_stop()?))
         }
         Beside::Previous => {
-            let index = caret.flow.checked_sub(1)?;
-            let previous = flows.flow(index).filter(|p| p.root() == flow.root())?;
-            Some(Caret {
+            // Back over the run of floats the stop's float ends.
+            let (index, previous) = (0..caret.flow)
+                .rev()
+                .map_while(|index| Some((index, flows.flow(index)?)))
+                .find(|(_, previous)| !previous.is_float())?;
+            (previous.root() == flow.root()).then_some(Caret {
                 flow: index,
                 index: previous.len(),
                 upstream: true,

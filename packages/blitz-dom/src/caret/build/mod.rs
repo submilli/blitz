@@ -128,8 +128,9 @@ struct Builder<'a> {
     /// caret position when the line ends after it.
     hanging_space: bool,
     opaque: Option<Opaque>,
-    /// No inline content precedes on the current line: the root's start,
-    /// or after a forced break.
+    /// Nothing precedes on the current line but floats: the root's start,
+    /// or after a forced break from the DOM. Inline content and boxes that
+    /// sit beside floats clear it.
     line_start: bool,
     /// The last content walked, which decides what a float's stops stand for.
     last: Walked,
@@ -385,8 +386,11 @@ impl Builder<'_> {
     }
 
     /// An unselectable run's unit, with edges from where the run started.
+    /// A forced break inside the run still precedes the next unit.
     fn push_opaque_unit(&mut self, edges: Edges) {
+        let broke = self.broke_since_unit;
         self.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
+        self.broke_since_unit = broke;
     }
 
     fn extend_opaque(&mut self, edges: Edges) {
