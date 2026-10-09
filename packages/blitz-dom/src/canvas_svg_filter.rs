@@ -11,6 +11,8 @@ const MAX_VISITS: usize = 4096;
 const MAX_NODES: usize = 64;
 const MAX_MARKUP: usize = 16 * 1024;
 const SNAPSHOT_ID: &str = "canvas-filter";
+/// Blink's largest font size, in pixels.
+const MAX_FONT_SIZE: f32 = 10_000.0;
 
 /// A draw-time snapshot contains no DOM handles and cannot retain removed nodes.
 #[derive(Clone, Debug, Default)]
@@ -332,6 +334,7 @@ impl Writer {
                         | "flood-color"
                         | "flood-opacity"
                         | "lighting-color"
+                        | "font-size"
                         | "color-interpolation-filters"
                 )
             {
@@ -397,8 +400,15 @@ impl Writer {
         self.push_escaped(&flood)?;
         self.push(";lighting-color:")?;
         self.push_escaped(&lighting)?;
+        // Em and ex lengths resolve against this size in the parser, which
+        // multiplies them by bounding boxes; Chrome caps font sizes the same way.
+        let font_size = style
+            .clone_font_size()
+            .computed_size()
+            .px()
+            .clamp(0.0, MAX_FONT_SIZE);
         self.push(&format!(
-            ";flood-opacity:{};color-interpolation-filters:{interpolation}\"",
+            ";font-size:{font_size}px;flood-opacity:{};color-interpolation-filters:{interpolation}\"",
             style.clone_flood_opacity()
         ))?;
         Ok(tainted)

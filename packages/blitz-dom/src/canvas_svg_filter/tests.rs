@@ -373,6 +373,12 @@ fn huge_regions_cannot_overflow_bounding_box_transforms() {
             &[("primitiveUnits", "objectBoundingBox")][..],
             &[("width", "3e38")][..],
         ),
+        // Em lengths resolve against the font size inside the parser.
+        (&[("font-size", "1e37"), ("width", "1em")][..], &[][..]),
+        (
+            &[("primitiveUnits", "objectBoundingBox")][..],
+            &[("font-size", "1e37"), ("width", "1e6em")][..],
+        ),
     ] {
         let (mut document, canvas, filter, matrix) = self::document();
         let mut mutation = document.mutate();
