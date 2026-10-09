@@ -143,10 +143,11 @@ fn a_changed_cors_setting_reloads_and_ignores_the_superseded_completion() {
         "a stale no-CORS response cannot replace the current image"
     );
     assert!(doc.pending_images.is_empty());
-    // Removing the attribute returns to the cached no-CORS image.
+    // The superseded request was aborted, so its response was not kept:
+    // removing the attribute fetches the no-CORS image again.
     doc.mutate().clear_attribute(img, qual_name!("crossorigin"));
-    assert!(provider.modes().is_empty());
-    assert_eq!(origin_clean(&doc, img), Some(false));
+    assert_eq!(provider.modes(), [Some(CorsSettings::NoCors)]);
+    assert_eq!(origin_clean(&doc, img), None);
 }
 
 #[test]

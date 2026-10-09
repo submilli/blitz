@@ -107,6 +107,7 @@ mod html;
 mod iframe;
 mod image_input;
 mod image_request;
+pub mod image_state;
 mod inner_text;
 /// Integration of taffy and the DOM.
 mod layout;

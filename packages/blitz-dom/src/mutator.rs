@@ -6,10 +6,9 @@ use std::ops::{Deref, DerefMut};
 use crate::custom_elements::{CustomElementReaction, CustomElementState};
 use crate::layout::damage::ALL_DAMAGE;
 use crate::mutations::MutationRecord;
-use crate::net::{ImageHandler, ResourceHandler, StylesheetHandler};
+use crate::net::{ResourceHandler, StylesheetHandler};
 use crate::node::{CanvasData, NodeFlags, SpecialElementData};
 use crate::stylo_device::DeviceChanges;
-use crate::util::ImageType;
 use crate::{Attribute, BaseDocument, Document, ElementData, Node, NodeData, QualName, local_name};
 // The tests import this macro within their own module.
 #[cfg(feature = "file-input")]
@@ -35,7 +34,7 @@ pub enum AppendTextErr {
 /// Operations that happen almost immediately, but are deferred within a
 /// function for borrow-checker reasons.
 enum SpecialOp {
-    LoadImage(NodeId),
+    LoadImageInput(NodeId),
     LoadIframe(NodeId),
     LoadStylesheet(NodeId),
     UnloadStylesheet(NodeId),
@@ -227,6 +226,7 @@ impl DocumentMutator<'_> {
             damage: ALL_DAMAGE,
             ..Default::default()
         };
+        self.queue_image_update_if_sourced(id);
 
         id
     }
@@ -389,9 +389,11 @@ impl DocumentMutator<'_> {
         let sanitize = self.input_sanitization_needed(node_id, &name, Some(value.as_str_lossy()));
         let current_value = self.value_before_sanitizer_change(node_id, &name);
         let cors_before = self.img_cors_setting(node_id, &name);
+        let policy_before = self.img_referrer_policy(node_id, &name);
         self.img_source_changed(node_id, &name);
         self.set_attribute_inner(node_id, name.clone(), &value);
         self.img_cors_setting_changed(node_id, cors_before);
+        self.img_referrer_policy_changed(node_id, policy_before);
         self.doc.base_href_changed(node_id, &name);
         self.canvas_dimension_changed(node_id, &name);
         if sanitize {
@@ -577,9 +579,7 @@ impl DocumentMutator<'_> {
             return;
         }
 
-        if (tag, attr) == tag_and_attr!("img", "src") {
-            self.load_image(node_id);
-        } else if (tag, attr) == tag_and_attr!("canvas", "src") {
+        if (tag, attr) == tag_and_attr!("canvas", "src") {
             self.load_custom_paint_src(node_id);
         } else if (tag, attr) == tag_and_attr!("link", "href")
             || (tag, attr) == tag_and_attr!("link", "rel")
@@ -602,9 +602,13 @@ impl DocumentMutator<'_> {
         let sanitize = self.input_sanitization_needed(node_id, &name, None);
         let current_value = self.value_before_sanitizer_change(node_id, &name);
         let cors_before = self.img_cors_setting(node_id, &name);
-        self.img_source_changed(node_id, &name);
+        let policy_before = self.img_referrer_policy(node_id, &name);
+        if existed {
+            self.img_source_changed(node_id, &name);
+        }
         self.clear_attribute_inner(node_id, name.clone());
         self.img_cors_setting_changed(node_id, cors_before);
+        self.img_referrer_policy_changed(node_id, policy_before);
         if existed {
             self.doc.base_href_changed(node_id, &name);
         }
@@ -1305,6 +1309,8 @@ impl<'doc> DocumentMutator<'doc> {
                 self.doc.set_focus_to(node_id);
             }
         }
+
+        self.run_image_updates_unembedded();
     }
 
     pub fn set_inner_html(&mut self, node_id: NodeId, html: &str) {
@@ -1319,16 +1325,7 @@ impl<'doc> DocumentMutator<'doc> {
         let mut ops = mem::take(&mut self.eager_op_queue);
         for op in ops.drain(0..) {
             match op {
-                SpecialOp::LoadImage(node_id) => {
-                    if self.doc.nodes[node_id]
-                        .element_data()
-                        .is_some_and(|e| e.is_image_input())
-                    {
-                        self.update_image_input(node_id, false);
-                    } else {
-                        self.load_image(node_id);
-                    }
-                }
+                SpecialOp::LoadImageInput(node_id) => self.update_image_input(node_id, false),
                 SpecialOp::LoadIframe(node_id) => self.load_iframe(node_id),
                 SpecialOp::LoadStylesheet(node_id) => self.load_linked_stylesheet(node_id),
                 SpecialOp::UnloadStylesheet(node_id) => self.unload_stylesheet(node_id),
@@ -1384,9 +1381,8 @@ impl<'doc> DocumentMutator<'doc> {
                 match tag {
                     "title" => self.title_node = Some(node_id),
                     "link" => self.eager_op_queue.push(SpecialOp::LoadStylesheet(node_id)),
-                    "img" => self.eager_op_queue.push(SpecialOp::LoadImage(node_id)),
                     "input" if element.is_image_input() => {
-                        self.eager_op_queue.push(SpecialOp::LoadImage(node_id));
+                        self.eager_op_queue.push(SpecialOp::LoadImageInput(node_id));
                     }
                     "iframe" => self.eager_op_queue.push(SpecialOp::LoadIframe(node_id)),
                     "canvas" => self
@@ -1640,7 +1636,8 @@ impl<'doc> DocumentMutator<'doc> {
         self.doc.stylesheet_generation += 1;
     }
 
-    pub(crate) fn load_image(&mut self, target_id: NodeId) {
+    /// Load an image button's source, from the cache when it has it.
+    pub(crate) fn load_image_input_source(&mut self, target_id: NodeId) {
         // Any new load supersedes the one in flight, even when the new `src`
         // cannot be requested.
         let Some((key, url)) = self.doc.image_request(target_id) else {
@@ -1650,67 +1647,17 @@ impl<'doc> DocumentMutator<'doc> {
 
         if let Some(cached_image) = self.doc.image_cache.get(&key) {
             self.doc.current_image_requests.remove(&target_id);
-            #[cfg(feature = "tracing")]
-            tracing::info!("Loading image {} from cache", key.url);
             let node = &mut self.doc.nodes[target_id];
             let element = node
                 .element_data_mut()
                 .expect("image request is an element");
-            if element.is_image_input() {
-                element.form_state.image_input_image = Some(Box::new(cached_image.clone()));
-            }
+            element.form_state.image_input_image = Some(Box::new(cached_image.clone()));
             element.special_data = SpecialElementData::Image(Box::new(cached_image.clone()));
             node.clear_layout_cache();
             node.insert_damage(ALL_DAMAGE);
             return;
         }
-
-        self.doc
-            .current_image_requests
-            .insert(target_id, key.clone());
-        if let Some(waiting_list) = self.doc.pending_images.get_mut(&key) {
-            #[cfg(feature = "tracing")]
-            tracing::info!(
-                "Image {} already pending, queueing node {target_id}",
-                key.url
-            );
-            waiting_list.waiters.insert((target_id, ImageType::Image));
-            return;
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::info!("Fetching image {}", key.url);
-        let handler = ResourceHandler::new(
-            self.doc.tx.clone(),
-            self.doc.id(),
-            None,
-            self.doc.shell_provider.clone(),
-            ImageHandler::new(ImageType::Image, &key.url, self.doc.svg_fonts.clone()),
-        );
-        let initiator = if self.doc.nodes[target_id]
-            .element_data()
-            .is_some_and(|e| e.is_image_input())
-        {
-            blitz_traits::net::ResourceInitiator::Input
-        } else {
-            blitz_traits::net::ResourceInitiator::Img
-        };
-        let request = self
-            .doc
-            .build_request(url)
-            .image(key.mode)
-            .initiator(initiator);
-        self.doc.pending_images.insert(
-            key,
-            crate::image_request::PendingImage::new(
-                handler.request_id(),
-                target_id,
-                ImageType::Image,
-            ),
-        );
-        self.doc
-            .net_provider
-            .fetch(self.doc.id(), request, Box::new(handler));
+        self.doc.start_image_fetch(target_id, key, url);
     }
 
     fn load_iframe(&mut self, target_id: NodeId) {

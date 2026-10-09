@@ -50,12 +50,15 @@ impl DocumentMutator<'_> {
                     node.set_restyle_hint(style::invalidation::element::restyle_hints::RestyleHint::RESTYLE_STYLE_ATTRIBUTE);
                 }
             }
-            if old_document != document
-                && matches!(
-                    self.doc.custom_element_state(id),
-                    crate::custom_elements::CustomElementState::Custom
-                )
-            {
+            if old_document == document {
+                continue;
+            }
+            // Adoption is a relevant mutation of an `<img>`.
+            self.queue_image_update_if_sourced(id);
+            if matches!(
+                self.doc.custom_element_state(id),
+                crate::custom_elements::CustomElementState::Custom
+            ) {
                 self.doc.record_custom_element_reaction(
                     crate::custom_elements::CustomElementReaction::Adopted {
                         element: id,

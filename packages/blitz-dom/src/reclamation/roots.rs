@@ -14,10 +14,11 @@ pub(super) fn native_work(doc: &BaseDocument) -> Vec<NodeId> {
     roots.extend(
         doc.pending_images
             .values()
-            .flat_map(|pending| &pending.waiters)
+            .flat_map(|pending| pending.waiters.iter())
             .map(|&(id, _)| id),
     );
     roots.extend(doc.failed_image_inputs.keys());
+    roots.extend(doc.images.referenced_nodes());
     roots.extend(&doc.pending_style_image_nodes);
     roots.extend(doc.iframe_loads.keys());
     roots.extend(&doc.sub_document_nodes);

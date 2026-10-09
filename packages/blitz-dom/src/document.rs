@@ -339,6 +339,11 @@ pub struct BaseDocument {
     /// The embedder loads `<iframe>` documents itself (and runs their
     /// scripts); Blitz does not fetch them.
     pub embedder_loads_iframes: bool,
+    /// The embedder runs `<img>` updates itself, at the times HTML gives
+    /// (see [`crate::image_state`]); mutators do not.
+    pub embedder_updates_images: bool,
+    /// `<img>` request states, queued updates and events.
+    pub(crate) images: crate::image_state::ImageElements,
     /// Synchronous, script-free embedder topology bookkeeping.
     pub(crate) tree_observer: Option<Rc<dyn crate::tree_notifications::TreeObserver>>,
     /// Mutation records, while recording is on (see `mutations`).
@@ -556,6 +561,8 @@ impl BaseDocument {
             dirty_slot_roots: Vec::new(),
             removed_slots: Vec::new(),
             embedder_loads_iframes: false,
+            embedder_updates_images: false,
+            images: Default::default(),
             tree_observer: None,
             mutation_log: None,
             mutation_log_bytes: 0,
@@ -1006,6 +1013,7 @@ impl BaseDocument {
     /// it so that stale NodeIds are never dereferenced after the slot is freed.
     pub(crate) fn remove_node_from_tree(&mut self, node_id: NodeId) -> Option<Node> {
         self.forget_image_input(node_id);
+        self.forget_image_element(node_id);
         self.clear_interaction_state_for_removed_node(node_id);
         self.changed_nodes.remove(&node_id);
         if let Some(node) = self.nodes.get(node_id) {
@@ -1567,6 +1575,7 @@ impl BaseDocument {
                     // Clear layout cache
                     node.clear_layout_cache();
                     node.insert_damage(ALL_DAMAGE);
+                    self.image_loaded(node_id, &key);
                 }
                 ImageType::Background(idx) | ImageType::Mask(idx) => {
                     let layer_image = node.element_data_mut().and_then(|el| {

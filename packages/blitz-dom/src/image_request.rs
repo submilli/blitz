@@ -1,10 +1,12 @@
-//! Image fetch identity. A pending fetch owns indexed waiters and a unique
+//! Image fetch identity. A pending fetch owns ordered waiters and a unique
 //! completion identity; decoded images are shared per URL and CORS setting.
+use crate::image_state::is_html_img;
+use crate::net::{ImageHandler, ResourceHandler};
 use crate::node::{ImageData, SpecialElementData};
 use crate::{BaseDocument, DocumentMutator, NodeId, util::ImageType};
-use blitz_traits::net::CorsSettings;
+use blitz_traits::net::{CorsSettings, ResourceInitiator};
 use markup5ever::{QualName, local_name, ns};
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// The key of the [list of available images]: the same URL fetched with
 /// another CORS setting is a different image with different authority.
@@ -37,14 +39,59 @@ const MAX_CACHED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) struct PendingImage {
     pub request_id: usize,
-    pub waiters: HashSet<(NodeId, ImageType)>,
+    pub waiters: Waiters,
 }
 impl PendingImage {
     pub fn new(request_id: usize, node: NodeId, kind: ImageType) -> Self {
+        let mut waiters = Waiters::default();
+        waiters.insert((node, kind));
         Self {
             request_id,
-            waiters: HashSet::from([(node, kind)]),
+            waiters,
         }
+    }
+}
+
+/// The nodes waiting for one fetch. A page can attach many elements to one
+/// URL and detach them again, so removal is constant time; completion
+/// takes them in the order they started waiting, so their events are
+/// deterministic.
+#[derive(Default)]
+pub(crate) struct Waiters {
+    next: u64,
+    entries: HashMap<(NodeId, ImageType), u64>,
+}
+impl Waiters {
+    pub fn insert(&mut self, waiter: (NodeId, ImageType)) {
+        let next = &mut self.next;
+        self.entries.entry(waiter).or_insert_with(|| {
+            *next += 1;
+            *next
+        });
+    }
+
+    pub fn remove(&mut self, waiter: &(NodeId, ImageType)) {
+        self.entries.remove(waiter);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(NodeId, ImageType)> {
+        self.entries.keys()
+    }
+
+    /// The waiters, oldest first.
+    pub fn into_ordered(self) -> Vec<(NodeId, ImageType)> {
+        let mut waiters: Vec<_> = self.entries.into_iter().collect();
+        waiters.sort_unstable_by_key(|&(_, order)| order);
+        waiters.into_iter().map(|(waiter, _)| waiter).collect()
     }
 }
 impl BaseDocument {
@@ -110,7 +157,7 @@ impl BaseDocument {
         &mut self,
         url: &str,
         request_id: usize,
-    ) -> Option<(ImageKey, HashSet<(NodeId, ImageType)>)> {
+    ) -> Option<(ImageKey, Vec<(NodeId, ImageType)>)> {
         let key = CorsSettings::ALL
             .into_iter()
             .map(|mode| ImageKey::new(url, mode))
@@ -119,7 +166,7 @@ impl BaseDocument {
                     .get(key)
                     .is_some_and(|pending| pending.request_id == request_id)
             })?;
-        let waiters = self.pending_images.remove(&key)?.waiters;
+        let waiters = self.pending_images.remove(&key)?.waiters.into_ordered();
         Some((key, waiters))
     }
 
@@ -132,16 +179,54 @@ impl BaseDocument {
         &mut self,
         url: &str,
         request_id: usize,
-    ) -> HashSet<(NodeId, ImageType)> {
+    ) -> Vec<(NodeId, ImageType)> {
         let Some((key, waiters)) = self.take_image_waiters(url, request_id) else {
-            return HashSet::new();
+            return Vec::new();
         };
         for &(id, kind) in &waiters {
             if matches!(kind, ImageType::Image) && self.take_current_request(id, &key) {
                 self.break_image(id);
+                self.image_failed(id, &key);
             }
         }
         waiters
+    }
+
+    /// Fetch `key` for the `<img>` or image button `node`, joining a fetch
+    /// already in flight for the same key. Returns the request's id.
+    pub(crate) fn start_image_fetch(
+        &mut self,
+        node: NodeId,
+        key: ImageKey,
+        url: url::Url,
+    ) -> usize {
+        self.current_image_requests.insert(node, key.clone());
+        if let Some(pending) = self.pending_images.get_mut(&key) {
+            pending.waiters.insert((node, ImageType::Image));
+            return pending.request_id;
+        }
+        let handler = ResourceHandler::new(
+            self.tx.clone(),
+            self.id(),
+            None,
+            self.shell_provider.clone(),
+            ImageHandler::new(ImageType::Image, &key.url, self.svg_fonts.clone()),
+        );
+        let request_id = handler.request_id();
+        let initiator = if self.nodes[node]
+            .element_data()
+            .is_some_and(crate::ElementData::is_image_input)
+        {
+            ResourceInitiator::Input
+        } else {
+            ResourceInitiator::Img
+        };
+        let request = self.build_request(url).image(key.mode).initiator(initiator);
+        self.pending_images
+            .insert(key, PendingImage::new(request_id, node, ImageType::Image));
+        self.net_provider
+            .fetch(self.id(), request, Box::new(handler));
+        request_id
     }
 
     /// Drop an image element's decoded image, including an image button's
@@ -176,34 +261,17 @@ impl BaseDocument {
 }
 
 impl DocumentMutator<'_> {
-    /// Any change to an `<img>`'s `src` supersedes its request in flight,
-    /// including a removal or a change while disconnected, which start no
-    /// new request. A connected `<img>` then loads its new source.
-    pub(crate) fn img_source_changed(&mut self, node: NodeId, name: &QualName) {
-        if name.ns != ns!() || name.local != local_name!("src") {
-            return;
-        }
-        if self
-            .doc
-            .get_node(node)
-            .and_then(|n| n.element_data())
-            .is_some_and(is_html_img)
-        {
-            self.doc.current_image_requests.remove(&node);
-        }
-    }
-
-    /// The CORS setting of a connected `<img>` before `name` changes, when
+    /// The CORS setting of an HTML `<img>` before `name` changes, when
     /// `name` is its `crossorigin` attribute.
     pub(crate) fn img_cors_setting(&self, node: NodeId, name: &QualName) -> Option<CorsSettings> {
         if name.ns != ns!() || name.local != local_name!("crossorigin") {
             return None;
         }
-        let node = self.doc.get_node(node)?;
-        let element = node.element_data().filter(|e| is_html_img(e))?;
-        if !node.flags.is_in_document() {
-            return None;
-        }
+        let element = self
+            .doc
+            .get_node(node)?
+            .element_data()
+            .filter(|e| is_html_img(e))?;
         Some(CorsSettings::from_attribute(
             element.attr(local_name!("crossorigin")),
         ))
@@ -223,7 +291,7 @@ impl DocumentMutator<'_> {
             .and_then(|n| n.element_data())
             .map(|e| CorsSettings::from_attribute(e.attr(local_name!("crossorigin"))));
         if after.is_some_and(|after| after != before) {
-            self.load_image(node);
+            self.queue_image_update(node);
         }
     }
 }
@@ -237,10 +305,6 @@ fn decoded_bytes(image: &ImageData) -> usize {
         ImageData::Svg(_) => 0,
         ImageData::None => 0,
     }
-}
-
-fn is_html_img(element: &crate::ElementData) -> bool {
-    element.name.ns == ns!(html) && element.name.local == local_name!("img")
 }
 
 #[cfg(test)]
