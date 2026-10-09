@@ -48,6 +48,12 @@ pub(super) struct Flow {
     entries: Vec<Entry>,
     /// The representative DOM point of every unit boundary that is a stop.
     stops: Vec<Option<Boundary>>,
+    /// A floated or positioned replaced element's one-atom flow. Chrome
+    /// puts no float in a line box, so line steps pass over it.
+    floating: bool,
+    /// The content after this flow continues on a later line, so the flow
+    /// ends at a soft wrap.
+    wraps_after: bool,
 }
 
 impl Flow {
@@ -61,7 +67,21 @@ impl Flow {
             units: Vec::new(),
             entries: Vec::new(),
             stops: Vec::new(),
+            floating: false,
+            wraps_after: false,
         }
+    }
+
+    pub(super) fn set_floating(&mut self) {
+        self.floating = true;
+    }
+
+    pub(super) fn set_wraps_after(&mut self) {
+        self.wraps_after = true;
+    }
+
+    pub(super) fn is_floating(&self) -> bool {
+        self.floating
     }
 
     pub(super) fn push_unit(&mut self, kind: UnitKind, edges: Edges, text: &str) {
@@ -237,7 +257,7 @@ impl Flow {
     pub(super) fn line_range(&self, line: u32) -> Option<(usize, usize)> {
         let first = self.units.iter().position(|u| u.edges.line == line)?;
         let last = self.units.iter().rposition(|u| u.edges.line == line)?;
-        let wraps = self.units.get(last + 1).is_some();
+        let wraps = self.units.get(last + 1).is_some() || self.wraps_after;
         let hangs = wraps && last > first && is_collapsed_space(self.unit_text(last));
         let end = if self.units[last].kind == UnitKind::Break || hangs {
             last
@@ -247,12 +267,17 @@ impl Flow {
         Some((first, end))
     }
 
-    pub(super) fn line_count(&self) -> u32 {
-        self.units
-            .iter()
-            .map(|u| u.edges.line + 1)
-            .max()
-            .unwrap_or(0)
+    /// Whether the flow ends with a forced break.
+    pub(super) fn ends_with_break(&self) -> bool {
+        self.units.last().is_some_and(|u| u.kind == UnitKind::Break)
+    }
+
+    /// Whether the flow ends with white space hanging at a soft wrap.
+    pub(super) fn ends_with_hanging_space(&self) -> bool {
+        let Some(last) = self.units.len().checked_sub(1) else {
+            return false;
+        };
+        self.wraps_after && is_collapsed_space(self.unit_text(last))
     }
 
     /// Whether `index` both ends a line and starts the next one.

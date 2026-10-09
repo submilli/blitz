@@ -87,15 +87,15 @@ impl<'a> Layer<'a> {
             .unwrap_or_else(|| self.geometry.line(self.aligner.position()))
     }
 
-    /// The line an inline box draws on. A box layout did not position
-    /// stays where content continues, so its nested lines never leak into
+    /// The line an inline box draws on. A box that layout did not position
+    /// draws where content continues, so its nested lines never leak into
     /// this layout's numbering.
     fn box_line(&self, id: NodeId) -> u32 {
-        self.line.unwrap_or_else(|| {
-            self.geometry
-                .inline_box(id.as_u64())
-                .map_or_else(|| self.continuing_line(), |edge| edge.line)
-        })
+        match (self.line, self.geometry.inline_box(id.as_u64())) {
+            (Some(line), _) => line,
+            (None, Some(edge)) => edge.line,
+            (None, None) => self.continuing_line(),
+        }
     }
 }
 
@@ -323,7 +323,7 @@ impl Builder<'_> {
         let edges = Edges {
             leading,
             trailing,
-            line: layer.line.unwrap_or(edge.line),
+            line: layer.box_line(id),
         };
         if self.opaque.is_some() {
             return self.extend_opaque(edges);
@@ -362,6 +362,7 @@ impl Builder<'_> {
         if let Some((_, after)) = around {
             self.entry(after, self.flow.len(), true);
         }
+        self.flow.set_floating();
         self.split();
     }
 
@@ -432,12 +433,18 @@ impl Builder<'_> {
         }
     }
 
-    /// End the current flow at an embedded box; a space before it is kept.
+    /// End the current flow at an embedded box; a space before it is kept,
+    /// and hangs when the content after the box wraps to a later line.
     fn split(&mut self) {
         self.hanging_space = false;
         // An unselectable run continuing past the box is a unit on each side.
         if let Some(edges) = self.opaque.as_mut().and_then(|o| o.edges.take()) {
             self.push_opaque_unit(edges);
+        }
+        let continuing = self.layers.last().map(Layer::continuing_line);
+        let ends_above = |line| !self.flow.is_empty() && self.flow.line(self.flow.len()) < line;
+        if continuing.is_some_and(ends_above) {
+            self.flow.set_wraps_after();
         }
         let rtl = self.flow.rtl();
         let flow = std::mem::replace(&mut self.flow, Flow::new(self.root, rtl));

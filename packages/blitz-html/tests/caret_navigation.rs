@@ -9,6 +9,7 @@ use common::{parse, q};
 
 const FORWARD: Direction = Direction::Forward;
 const BACKWARD: Direction = Direction::Backward;
+const FLOAT: &str = "<img style='float:left;width:10px;height:10px'>";
 
 fn laid_out(html: &str) -> BaseDocument {
     let mut doc = parse(html);
@@ -817,50 +818,49 @@ fn floats_opening_a_line_belong_to_it_and_locate_back() {
 
 #[test]
 fn breaks_in_nested_boxes_and_unselectable_runs_place_later_floats() {
-    let float = "<img style='float:left;width:10px;height:10px'>";
     let forward = moves(FORWARD, Granularity::LineBoundary, 1);
 
     let doc = laid_out(&format!(
-        "<p>aaa <span style='display:inline-block'>x<br></span>{float}bbb</p>"
+        "<p>aaa <span style='display:inline-block'>x<br></span>{FLOAT}bbb</p>"
     ));
     let (p, bbb) = (q(&doc, "p"), child(&doc, "p", 3));
     assert_eq!(carets(&doc, at(p, 3), &forward), [at(bbb, 3)]);
 
     let doc = laid_out(&format!(
-        "<p>q <span style='display:inline-block'>{float}yy</span> zz</p>"
+        "<p>q <span style='display:inline-block'>{FLOAT}yy</span> zz</p>"
     ));
     let (first, zz) = (child(&doc, "p", 0), child(&doc, "p", 2));
     assert_eq!(carets(&doc, at(first, 0), &forward), [at(zz, 3)]);
 
     let doc = laid_out(&format!(
-        "<p>aaa<span style='user-select:none'>b<br></span>{float}cc</p>"
+        "<p>aaa<span style='user-select:none'>b<br></span>{FLOAT}cc</p>"
     ));
     let (p, cc) = (q(&doc, "p"), child(&doc, "p", 3));
     assert_eq!(carets(&doc, at(p, 3), &forward), [at(cc, 2)]);
 }
 
 #[test]
-fn floats_after_content_without_stops_sit_where_content_continues() {
-    let float = "<img style='float:left;width:10px;height:10px'>";
+fn floats_sit_on_the_line_content_continues_on() {
     let forward = moves(FORWARD, Granularity::LineBoundary, 1);
     let cases = [
         // Generated content ending in a preserved newline.
         format!(
-            "<style>.x::after{{content:'a\\A';white-space:pre}}</style><p>zz<span class=x></span>{float}bb</p>"
+            "<style>.x::after{{content:'a\\A';white-space:pre}}</style><p>zz<span class=x></span>{FLOAT}bb</p>"
         ),
         // A soft wrap after hidden text and after visible text: a boundary
         // at the wrap belongs to the following line.
         format!(
-            "<p style='width:1px'>zz <span style='visibility:hidden'>hidden words</span> {float}bb</p>"
+            "<p style='width:1px'>zz <span style='visibility:hidden'>hidden words</span> {FLOAT}bb</p>"
         ),
-        format!("<p style='width:1px'>zz <span>visible words</span> {float}bb</p>"),
+        format!("<p style='width:1px'>zz <span>visible words</span> {FLOAT}bb</p>"),
         // A preserved newline inside unselectable text.
-        format!("<p>zz<span style='user-select:none;white-space:pre'>a\n</span>{float}bb</p>"),
+        format!("<p>zz<span style='user-select:none;white-space:pre'>a\n</span>{FLOAT}bb</p>"),
         // An unselectable inline-block ending in a forced break.
         format!(
-            "<p>zz<span style='display:inline-block;user-select:none'>a<br></span>{float}bb</p>"
+            "<p>zz<span style='display:inline-block;user-select:none'>a<br></span>{FLOAT}bb</p>"
         ),
     ];
+    // Each case has the float and a final "bb" Text as children of the `p`.
     for html in cases {
         let doc = laid_out(&html);
         let p = q(&doc, "p");
@@ -873,4 +873,76 @@ fn floats_after_content_without_stops_sit_where_content_continues() {
         let moved = carets(&doc, at(p, img + 1), &forward);
         assert_eq!(moved, [at(bb, 2)], "{html}");
     }
+}
+
+#[test]
+fn float_stops_stand_for_the_inline_content_beside_them() {
+    let back = moves(BACKWARD, Granularity::LineBoundary, 1);
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+
+    // After a float, the content following it on its line; before it, the
+    // end of the content preceding it.
+    let doc = laid_out(&format!("<p>aa{FLOAT}</p>"));
+    let (p, aa) = (q(&doc, "p"), child(&doc, "p", 0));
+    assert_eq!(carets(&doc, at(p, 1), &back), [at(aa, 0)]);
+    assert_eq!(carets(&doc, at(p, 2), &back), [at(p, 2)]);
+    assert_eq!(carets(&doc, at(aa, 1), &forward), [at(aa, 2)]);
+
+    // A float opening a line has no line box: its stops stay.
+    let doc = laid_out(&format!("<p>{FLOAT}aa</p>"));
+    let (p, aa) = (q(&doc, "p"), child(&doc, "p", 1));
+    assert_eq!(carets(&doc, at(p, 0), &forward), [at(p, 0)]);
+    assert_eq!(carets(&doc, at(p, 1), &back), [at(aa, 0)]);
+    assert_eq!(carets(&doc, at(aa, 1), &back), [at(aa, 0)]);
+
+    let doc = laid_out(&format!("<p>aaa<br>{FLOAT}bb</p>"));
+    let (p, bb) = (q(&doc, "p"), child(&doc, "p", 3));
+    assert_eq!(carets(&doc, at(p, 2), &forward), [at(p, 2)]);
+    assert_eq!(carets(&doc, at(p, 3), &back), [at(bb, 0)]);
+    assert_eq!(carets(&doc, at(bb, 1), &back), [at(bb, 0)]);
+}
+
+#[test]
+fn spaces_before_floats_hang_at_soft_wraps() {
+    let doc = laid_out(
+        "<p style='width:1px'>zz <img style='float:left;width:10px;height:10px'>bb cc</p>",
+    );
+    let (zz, p, bb) = (child(&doc, "p", 0), q(&doc, "p"), child(&doc, "p", 2));
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+    assert_eq!(carets(&doc, at(zz, 0), &forward), [at(zz, 2)]);
+    // The stop before the float follows the wrap onto the next line.
+    let back = moves(BACKWARD, Granularity::LineBoundary, 1);
+    assert_eq!(carets(&doc, at(p, 1), &back), [at(bb, 0)]);
+    assert_eq!(carets(&doc, at(p, 1), &forward), [at(bb, 2)]);
+}
+
+#[test]
+fn lines_holding_only_boxes_keep_their_place() {
+    let back = moves(BACKWARD, Granularity::LineBoundary, 1);
+
+    let doc = laid_out(&format!("<p>aaa<br>{FLOAT}</p>"));
+    let p = q(&doc, "p");
+    assert_eq!(carets(&doc, at(p, 2), &back), [at(p, 2)]);
+    assert_eq!(carets(&doc, at(p, 3), &back), [at(p, 3)]);
+
+    let doc = laid_out(&format!(
+        "<p style='width:1px'>aa<span style='display:inline-block'>x</span>{FLOAT}bbbb</p>"
+    ));
+    let (p, aa, bbbb) = (q(&doc, "p"), child(&doc, "p", 0), child(&doc, "p", 3));
+    assert_eq!(carets(&doc, at(bbbb, 1), &back), [at(bbbb, 0)]);
+    assert_eq!(carets(&doc, at(p, 2), &back), [at(aa, 2)]);
+}
+
+#[test]
+fn line_steps_reach_the_root_line_past_a_float() {
+    let doc = laid_out("<p>aaa<br><img style='float:left;width:10px;height:10px'>bb</p>");
+    let (aaa, bb) = (child(&doc, "p", 0), child(&doc, "p", 3));
+    assert_eq!(
+        carets(&doc, at(bb, 0), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(aaa, 0)]
+    );
+    assert_eq!(
+        carets(&doc, at(aaa, 0), &moves(FORWARD, Granularity::Line, 1)),
+        [at(bb, 0)]
+    );
 }

@@ -282,15 +282,33 @@ impl Mover<'_> {
         let flow = self.flows.flow(caret.flow)?;
         let line = line_of(flow, caret);
         let within = if self.forward {
-            line.checked_add(1).filter(|&l| l < flow.line_count())
+            line.checked_add(1)
         } else {
             line.checked_sub(1)
         };
-        if let Some(found) = within.and_then(|target| nearest(flow, caret.flow, target, x)) {
+        if let Some(found) = within.and_then(|target| self.root_line(caret.flow, target, x)) {
             return Some(found);
         }
-        self.edge_line(caret.flow, x)
+        self.edge_line(caret.flow, line, x)
             .or_else(|| self.document_boundary())
+    }
+
+    /// The stop nearest `x` on `line` of the caret's inline root: in its own
+    /// flow, else in the next of the root's inline flows that holds it.
+    /// Floats hold no line.
+    fn root_line(&self, from: usize, line: u32, x: f32) -> Option<Caret> {
+        let flow = self.flows.flow(from)?;
+        if let Some(found) = nearest(flow, from, line, x) {
+            return Some(found);
+        }
+        let root = flow.root();
+        self.beyond(from).find_map(|index| {
+            let next = self.flows.flow(index)?;
+            if next.root() != root || next.is_floating() {
+                return None;
+            }
+            nearest(next, index, line, x)
+        })
     }
 
     /// The stop nearest `x` on the first line of the next paragraph, or the
@@ -306,27 +324,101 @@ impl Mover<'_> {
         if let Some(found) = target.and_then(|line| nearest(flow, caret.flow, line, x)) {
             return Some(found);
         }
-        Some(self.edge_line(caret.flow, x).unwrap_or(caret))
+        let line = line_of(flow, caret);
+        Some(self.edge_line(caret.flow, line, x).unwrap_or(caret))
     }
 
     /// The stop nearest `x` on the facing line of the next flow with stops.
-    fn edge_line(&self, from: usize, x: f32) -> Option<Caret> {
+    /// A float on another line than `from`'s, sharing it with the inline
+    /// content after it, is passed over for that content; Chrome still
+    /// reaches a float on the caret's own line.
+    fn edge_line(&self, from: usize, from_line: u32, x: f32) -> Option<Caret> {
         self.beyond(from).find_map(|index| {
             let flow = self.flows.flow(index)?;
             flow.first_stop()?;
-            let line = if self.forward {
-                flow.line(0)
-            } else {
-                flow.line(flow.len())
+            let facing = |flow: &Flow| {
+                if self.forward {
+                    flow.line(0)
+                } else {
+                    flow.line(flow.len())
+                }
             };
+            let line = facing(flow);
+            if flow.is_floating() && line != from_line {
+                let shared = self.inline_neighbour(index, self.forward);
+                if shared
+                    .is_some_and(|(_, next)| next.first_stop().is_some() && facing(next) == line)
+                {
+                    return None;
+                }
+            }
             nearest(flow, index, line, x)
         })
     }
 
-    /// The end (or start) of the caret's visual line. A line continues
-    /// through the root's other flows on it, around floats and boxes that
-    /// split the root.
+    /// The end (or start) of the caret's visual line. A float's stops have
+    /// no line box of their own: they move with the content beside the
+    /// float, or stay where there is none.
     fn line_boundary(&self, caret: Caret) -> Option<Caret> {
+        let flow = self.flows.flow(caret.flow)?;
+        if !flow.is_floating() {
+            return self.line_boundary_from(caret);
+        }
+        match self.beside_float(caret) {
+            Some(beside) => self.line_boundary_from(beside),
+            None => Some(caret),
+        }
+    }
+
+    /// The inline caret a float's stop stands for, as Chrome canonicalizes
+    /// it: after the float, the start of the content following it on its
+    /// line; before it, the end of the content preceding it, or the
+    /// following content when that ends in white space hanging at a soft
+    /// wrap. A float opening a line (after a forced break or at the root's
+    /// start) or ending one has none.
+    fn beside_float(&self, caret: Caret) -> Option<Caret> {
+        let line = self.flows.flow(caret.flow)?.line(0);
+        let following = || {
+            let (index, next) = self.inline_neighbour(caret.flow, true)?;
+            let start = next.first_stop()?;
+            (next.line(start) == line).then(|| Caret::at(index, start))
+        };
+        if caret.index > 0 {
+            return following();
+        }
+        let (index, previous) = self.inline_neighbour(caret.flow, false)?;
+        if previous.ends_with_break() {
+            return None;
+        }
+        if previous.ends_with_hanging_space() {
+            return following();
+        }
+        Some(Caret {
+            flow: index,
+            index: previous.len(),
+            upstream: true,
+        })
+    }
+
+    /// The nearest flow of the same inline root that is not a float, in
+    /// either direction; `None` past the root's content.
+    fn inline_neighbour(&self, from: usize, forward: bool) -> Option<(usize, &Flow)> {
+        let root = self.flows.flow(from)?.root();
+        let mover = Mover {
+            flows: self.flows,
+            forward,
+        };
+        let mut flows = mover
+            .beyond(from)
+            .filter_map(|index| Some((index, self.flows.flow(index)?)));
+        let (index, flow) = flows.find(|(_, flow)| !flow.is_floating())?;
+        (flow.root() == root).then_some((index, flow))
+    }
+
+    /// The end (or start) of the line of an inline caret. A line continues
+    /// through the root's other flows on it, around boxes that split the
+    /// root, and passes over floats.
+    fn line_boundary_from(&self, caret: Caret) -> Option<Caret> {
         let flow = self.flows.flow(caret.flow)?;
         let line = line_of(flow, caret);
         let (start, end) = flow.line_range(line)?;
@@ -345,7 +437,7 @@ impl Mover<'_> {
                 let Some(next) = self.flows.flow(index) else {
                     break;
                 };
-                if next.root() != flow.root() {
+                if next.root() != flow.root() || next.is_floating() {
                     continue;
                 }
                 let Some((start, end)) = next.line_range(line) else {

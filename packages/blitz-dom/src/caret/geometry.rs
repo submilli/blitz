@@ -54,9 +54,19 @@ impl LayoutGeometry {
         let mut clusters = Vec::new();
         let mut boxes = HashMap::new();
         let mut lines = Vec::new();
+        let mut text_end = 0;
         for (index, line) in layout.lines().enumerate() {
             let line_index = u32::try_from(index).unwrap_or(u32::MAX);
-            lines.push((line.text_range(), x(line.metrics().offset)));
+            // Parley reports `usize::MAX..0` for a line holding only inline
+            // boxes; such a line holds no text, at the previous line's end.
+            let range = line.text_range();
+            let range = if range.start > range.end {
+                text_end..text_end
+            } else {
+                range
+            };
+            text_end = range.end;
+            lines.push((range, x(line.metrics().offset)));
             for item in line.items() {
                 match item {
                     PositionedLayoutItem::GlyphRun(glyphs) => {
