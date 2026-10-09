@@ -362,3 +362,80 @@ fn graph_lookup_charges_owner_ancestry_and_inspected_attributes() {
         Err(CanvasSvgLimit)
     );
 }
+
+/// Bounding-box units multiply region lengths in the parser, which unwraps the
+/// product; huge finite lengths must not reach it.
+#[test]
+fn huge_regions_cannot_overflow_bounding_box_transforms() {
+    for (filter_attrs, primitive_attrs) in [
+        (&[("width", "1e37")][..], &[][..]),
+        (
+            &[("primitiveUnits", "objectBoundingBox")][..],
+            &[("width", "3e38")][..],
+        ),
+    ] {
+        let (mut document, canvas, filter, matrix) = self::document();
+        let mut mutation = document.mutate();
+        mutation.remove_node(matrix);
+        for (name, value) in filter_attrs {
+            mutation.set_attribute(
+                filter,
+                QualName {
+                    prefix: None,
+                    ns: crate::Namespace::from(""),
+                    local: (*name).into(),
+                },
+                *value,
+            );
+        }
+        let blur = svg(&mut mutation, "feGaussianBlur", primitive_attrs);
+        mutation.append_children(filter, &[blur]);
+        drop(mutation);
+        document.flush_style_and_layout(0.0);
+        let mut filters = document
+            .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
+            .unwrap();
+        document
+            .resolve_canvas_svg_filters(canvas, &mut filters)
+            .unwrap();
+        let snapshot = filters.svg[0].as_ref().unwrap();
+        assert!(
+            snapshot
+                .resolve([0.0, 0.0, 300.0, 150.0], [300, 150])
+                .is_some()
+        );
+    }
+}
+
+/// A primitive without area renders nothing; a filter without area is ignored.
+#[test]
+fn empty_sizes_empty_primitives_and_ignore_filters() {
+    let (mut document, canvas, filter, matrix) = self::document();
+    let mut mutation = document.mutate();
+    mutation.remove_node(matrix);
+    let flood = svg(&mut mutation, "feFlood", &[("width", "0")]);
+    let offset = svg(&mut mutation, "feOffset", &[]);
+    mutation.append_children(filter, &[flood, offset]);
+    drop(mutation);
+    document.flush_style_and_layout(0.0);
+    let mut filters = document
+        .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
+        .unwrap();
+    document
+        .resolve_canvas_svg_filters(canvas, &mut filters)
+        .unwrap();
+    let resolved = filters.svg[0]
+        .as_ref()
+        .unwrap()
+        .resolve([0.0, 0.0, 8.0, 8.0], [8, 8])
+        .unwrap();
+    assert_eq!(resolved.filter.primitives().len(), 2);
+    assert!(resolved.empty_region(0) && !resolved.empty_region(1));
+    document
+        .mutate()
+        .set_attribute(filter, qual_name!("height"), "-1");
+    document
+        .resolve_canvas_svg_filters(canvas, &mut filters)
+        .unwrap();
+    assert!(filters.svg[0].is_none());
+}

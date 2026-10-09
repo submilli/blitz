@@ -8,7 +8,15 @@ pub(crate) enum Attribute<'a> {
     Keep(&'a str),
     Replace(String),
     Omit,
+    /// A nonpositive width or height, which usvg rejects: Chrome ignores such a
+    /// filter and gives such a primitive an empty subregion.
+    EmptySize,
 }
+
+/// Region coordinates past this magnitude lie beyond every admitted filter region
+/// (1e6); clamping keeps usvg's bounding-box products finite and `x + width`
+/// distinct in f32.
+const MAX_COORDINATE: f64 = 1e7;
 
 /// A radius that rounds to zero: Chrome passes that axis through unchanged, while
 /// usvg replaces zero radii with one.
@@ -71,12 +79,8 @@ pub(crate) fn chrome_attribute<'a>(tag: &str, name: &str, value: &'a str) -> Att
         },
         // Result names are strings, even when they look like numbers.
         (_, "in" | "in2" | "result") => Attribute::Keep(value),
-        // Chrome reads an overflowing subregion coordinate as infinite; a distant
-        // finite stand-in keeps that region out of reach without parser infinity.
-        (tag, "x" | "y" | "width" | "height")
-            if !matches!(tag, "fePointLight" | "feSpotLight") && overflows(value) =>
-        {
-            Attribute::Replace(saturated(value))
+        (tag, "x" | "y" | "width" | "height") if !matches!(tag, "fePointLight" | "feSpotLight") => {
+            region(name, value)
         }
         _ if overflows(value) => Attribute::Omit,
         _ => Attribute::Keep(value),
@@ -103,11 +107,21 @@ fn overflows(value: &str) -> bool {
     numbers.is_ok_and(|numbers| numbers.into_iter().any(|n| finite(n).is_none()))
 }
 
-/// A single overflowing number as a distant finite value of the same sign. It lies
-/// beyond every admitted filter region (1e6) while `x + width` stays distinct in f32.
-fn saturated(value: &str) -> String {
-    let negative = value.trim_start().starts_with('-');
-    if negative { "-1e7" } else { "1e7" }.to_owned()
+/// A filter or primitive region length. Chrome reads huge values as effectively
+/// infinite: a distant finite stand-in keeps the region out of reach without
+/// overflowing usvg, whose bounding-box transform unwraps a finite product.
+fn region<'a>(name: &str, value: &'a str) -> Attribute<'a> {
+    let Ok(length) = value.trim().parse::<svgtypes::Length>() else {
+        return Attribute::Keep(value);
+    };
+    let size = matches!(name, "width" | "height");
+    if size && length.number <= 0.0 {
+        return Attribute::EmptySize;
+    }
+    if length.number.abs() > MAX_COORDINATE {
+        return Attribute::Replace(MAX_COORDINATE.copysign(length.number).to_string());
+    }
+    Attribute::Keep(value)
 }
 
 /// An SVG number within the f32 range.
@@ -222,11 +236,30 @@ mod tests {
         }
         assert_eq!(
             chrome_attribute("feFlood", "x", "1e39"),
-            Attribute::Replace("1e7".into())
+            Attribute::Replace("10000000".into())
         );
         assert_eq!(
-            chrome_attribute("feFlood", "width", "-1e39"),
-            Attribute::Replace("-1e7".into())
+            chrome_attribute("filter", "y", "-1e37px"),
+            Attribute::Replace("-10000000".into())
+        );
+        assert_eq!(
+            chrome_attribute("filter", "width", "1e37"),
+            Attribute::Replace("10000000".into())
+        );
+        for size in ["-1e39", "0", "-2%"] {
+            assert_eq!(
+                chrome_attribute("feFlood", "width", size),
+                Attribute::EmptySize,
+                "{size}"
+            );
+        }
+        assert_eq!(
+            chrome_attribute("feFlood", "x", "-3"),
+            Attribute::Keep("-3")
+        );
+        assert_eq!(
+            chrome_attribute("feFlood", "width", "120%"),
+            Attribute::Keep("120%")
         );
         assert_eq!(
             chrome_attribute("feFlood", "result", "1e39"),

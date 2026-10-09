@@ -16,10 +16,8 @@ const SNAPSHOT_ID: &str = "canvas-filter";
 #[derive(Clone, Debug, Default)]
 pub struct CanvasSvgFilter {
     markup: String,
-    /// Per filter primitive, in document order: whether its own paint depends on
-    /// currentColor. Chrome taints a canvas only when such paint reaches the
-    /// filter output, and passes displacement through when its map is tainted.
-    primitive_taints: Vec<bool>,
+    /// What the parser does not carry, per filter primitive in document order.
+    primitives: Vec<Primitive>,
     /// `primitiveUnits="objectBoundingBox"` on the filter element.
     bounding_box_units: bool,
 }
@@ -28,12 +26,23 @@ pub struct CanvasSvgFilter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CanvasSvgLimit;
 
+/// Facts about one primitive that the parsed filter does not record.
+#[derive(Clone, Copy, Debug, Default)]
+struct Primitive {
+    /// Its own paint depends on currentColor. Chrome taints a canvas only when
+    /// such paint reaches the filter output, and passes displacement through
+    /// when its map is tainted.
+    tainted: bool,
+    /// A nonpositive width or height made its subregion empty.
+    empty_region: bool,
+}
+
 /// A parsed snapshot paired with what the parser does not carry.
 #[derive(Clone, Debug)]
 pub struct ResolvedCanvasSvgFilter {
     pub filter: Arc<usvg::filter::Filter>,
     pub units: CanvasSvgUnits,
-    taints: Vec<bool>,
+    primitives: Vec<Primitive>,
 }
 
 impl ResolvedCanvasSvgFilter {
@@ -41,7 +50,17 @@ impl ResolvedCanvasSvgFilter {
     /// A primitive without a recorded flag counts as tainted, so a disagreement
     /// between the snapshot and the parser can never expose pixels.
     pub fn tainted(&self, index: usize) -> bool {
-        self.taints.get(index).copied().unwrap_or(true)
+        self.primitives
+            .get(index)
+            .is_none_or(|primitive| primitive.tainted)
+    }
+
+    /// Whether primitive `index` has an empty subregion, which Chrome renders as
+    /// transparent black.
+    pub fn empty_region(&self, index: usize) -> bool {
+        self.primitives
+            .get(index)
+            .is_some_and(|primitive| primitive.empty_region)
     }
 }
 
@@ -82,7 +101,7 @@ impl CanvasSvgFilter {
         Some(ResolvedCanvasSvgFilter {
             filter,
             units: CanvasSvgUnits::new(bounds, self.bounding_box_units),
-            taints: self.primitive_taints.clone(),
+            primitives: self.primitives.clone(),
         })
     }
 }
@@ -223,9 +242,11 @@ impl BaseDocument {
             if node_id == filter {
                 writer.push(&format!(" id=\"{SNAPSHOT_ID}\""))?;
             }
-            if !writer.attributes(element, tag, node_id == filter)? {
-                return Ok(None);
-            }
+            let Written { empty_region } =
+                match writer.attributes(element, tag, node_id == filter)? {
+                    Element::Written(written) => written,
+                    Element::Unresolvable => return Ok(None),
+                };
             let tainted = match node
                 .primary_styles()
                 .map(|s| s.clone())
@@ -235,7 +256,10 @@ impl BaseDocument {
                 None => false,
             };
             if node.parent == Some(filter) && is_primitive(tag) {
-                writer.snapshot.primitive_taints.push(tainted);
+                writer.snapshot.primitives.push(Primitive {
+                    tainted,
+                    empty_region,
+                });
             }
             writer.push(">")?;
             pending.push((node_id, true));
@@ -243,6 +267,17 @@ impl BaseDocument {
         }
         Ok(Some(writer.snapshot))
     }
+}
+
+/// How an element's attributes entered the snapshot.
+enum Element {
+    Written(Written),
+    /// A resource reference or an empty filter region leaves the graph unresolved.
+    Unresolvable,
+}
+
+struct Written {
+    empty_region: bool,
 }
 
 /// Serializes one snapshot within its markup and attribute budgets.
@@ -270,14 +305,16 @@ impl Writer {
     }
 
     /// Write the element's own attributes as Chrome reads them. Presentation
-    /// colors come from computed style instead. Returns false for a resource
-    /// reference, which leaves the whole graph unresolved.
+    /// colors come from computed style instead.
     fn attributes(
         &mut self,
         element: &crate::node::ElementData,
         tag: &str,
         is_filter: bool,
-    ) -> Result<bool, CanvasSvgLimit> {
+    ) -> Result<Element, CanvasSvgLimit> {
+        let mut written = Written {
+            empty_region: false,
+        };
         for attr in element.attrs() {
             self.attributes += 1;
             if self.attributes > MAX_VISITS {
@@ -301,7 +338,7 @@ impl Writer {
                 continue;
             }
             if name == "href" {
-                return Ok(false);
+                return Ok(Element::Unresolvable);
             }
             if attr.value.utf16_len_bound() > 4096 {
                 return Err(CanvasSvgLimit);
@@ -317,12 +354,18 @@ impl Writer {
                 Attribute::Keep(value) => Cow::Borrowed(value),
                 Attribute::Replace(value) => Cow::Owned(value),
                 Attribute::Omit => continue,
+                // Chrome ignores a filter without area, like a missing reference.
+                Attribute::EmptySize if is_filter => return Ok(Element::Unresolvable),
+                Attribute::EmptySize => {
+                    written.empty_region = true;
+                    continue;
+                }
             };
             self.push(&format!(" {name}=\""))?;
             self.push_escaped(&value)?;
             self.push("\"")?;
         }
-        Ok(true)
+        Ok(Element::Written(written))
     }
 
     /// Write computed colors and interpolation as a style attribute. Returns
