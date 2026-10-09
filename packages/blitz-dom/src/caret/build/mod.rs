@@ -7,7 +7,7 @@
 //! order, and entering or leaving it is a step.
 
 use super::align::{Aligner, TextStyle};
-use super::float::{Beside, FloatStops};
+use super::float::Walked;
 use super::flow::{Entry, Flow, UnitKind};
 use super::geometry::{Edges, LayoutGeometry};
 use super::order::{TreeOrder, flattened_root, is_out_of_flow};
@@ -16,6 +16,8 @@ use crate::node::{ListItemLayoutPosition, Marker, NodeData, TextLayout};
 use crate::{BaseDocument, NodeId, ranges::Boundary};
 use style::values::computed::Display;
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
+
+mod floats;
 
 /// The flows of a laid-out inline root, empty without a current layout.
 pub(super) fn document_flows(doc: &BaseDocument, order: &TreeOrder, root: NodeId) -> Vec<Flow> {
@@ -33,7 +35,8 @@ pub(super) fn document_flows(doc: &BaseDocument, order: &TreeOrder, root: NodeId
         hanging_space: false,
         opaque: None,
         line_start: true,
-        last: Last::Inline,
+        last: Walked::Inline,
+        broke_since_unit: false,
     };
     builder.marker(root);
     if order.is_unselectable(root) {
@@ -108,16 +111,6 @@ struct Opaque {
     edges: Option<Edges>,
 }
 
-/// The last content walked, which decides what a float's stops stand for.
-#[derive(Clone, Copy)]
-enum Last {
-    Inline,
-    /// A box whose content forms flows of its own.
-    Box,
-    /// A float, by the index of its flow in `Builder::flows`.
-    Float(usize),
-}
-
 enum Step {
     Node { id: NodeId, generated: bool },
     LeaveOpaque(NodeId),
@@ -138,7 +131,11 @@ struct Builder<'a> {
     /// No inline content precedes on the current line: the root's start,
     /// or after a forced break.
     line_start: bool,
-    last: Last,
+    /// The last content walked, which decides what a float's stops stand for.
+    last: Walked,
+    /// A forced break was aligned after the flow's last unit, so the flow
+    /// does not end at a soft wrap.
+    broke_since_unit: bool,
 }
 
 impl Builder<'_> {
@@ -233,16 +230,16 @@ impl Builder<'_> {
             if kind == InlineElement::Atom {
                 return self.floated_atom(id);
             }
-            return self.embedded_box();
+            return self.end_at_embedded_box(id);
         }
         if kind == InlineElement::Atom {
             return self.atom(id);
         }
         let Some(inner) = flattened_root(self.doc, id) else {
-            return self.embedded_box();
+            return self.end_at_embedded_box(id);
         };
         let Some(text) = inline_layout(self.doc, inner) else {
-            return self.embedded_box();
+            return self.end_at_embedded_box(id);
         };
         self.enter_opaque(id, pending);
         let line = self.layers.last().map(|layer| layer.box_line(id));
@@ -293,9 +290,7 @@ impl Builder<'_> {
         };
         let edges = layer.edges(range.start, range.end);
         let text = layer.aligner.slice(range.clone());
-        // Chrome steps over a CR and an LF separately, though they form one
-        // grapheme cluster.
-        let breaks = text == "\n" || text == "\r";
+        let breaks = is_forced_break(text);
         let continues = !layer.aligner.starts_grapheme(range.start) && !breaks;
         if !style.collapsible(ch) {
             self.hanging_space = false;
@@ -341,7 +336,7 @@ impl Builder<'_> {
             trailing,
             line: layer.box_line(id),
         };
-        self.reach(Last::Inline);
+        self.reach(Walked::Inline);
         self.line_start = false;
         if self.opaque.is_some() {
             return self.extend_opaque(edges);
@@ -354,78 +349,6 @@ impl Builder<'_> {
         if let Some((_, after)) = around {
             self.entry(after, self.flow.len(), true);
         }
-    }
-
-    /// A floated or positioned replaced element is a flow of one atom on the
-    /// line it splits. It takes no inline space, so both its sides draw at
-    /// its start edge.
-    fn floated_atom(&mut self, id: NodeId) {
-        let closed = self.flows.len();
-        self.split();
-        if self.opaque.is_some() || self.order.is_unselectable(id) {
-            return;
-        }
-        let before = self.float_before(self.flows.len() > closed);
-        let x = self.doc.nodes[id].unrounded_absolute_position(0.0, 0.0).x;
-        let Some(line) = self.layers.last().map(Layer::continuing_line) else {
-            return;
-        };
-        let edges = Edges {
-            leading: x,
-            trailing: x,
-            line,
-        };
-        let around = sibling_points(self.doc, id);
-        if let Some((before, _)) = around {
-            self.entry(before, self.flow.len(), true);
-        }
-        self.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
-        if let Some((_, after)) = around {
-            self.entry(after, self.flow.len(), true);
-        }
-        self.flow.set_float_stops(FloatStops {
-            before,
-            after: Beside::Stays,
-        });
-        let index = self.flows.len();
-        self.split();
-        if self.flows.len() > index {
-            self.reach(Last::Float(index));
-        }
-    }
-
-    /// What the stop before a float stands for; `closed` tells whether
-    /// the flow before it held content.
-    fn float_before(&self, closed: bool) -> Beside {
-        if self.line_start {
-            return Beside::LineStart;
-        }
-        if !closed || !matches!(self.last, Last::Inline) {
-            return Beside::Stays;
-        }
-        if self.flows.last().is_some_and(Flow::ends_with_hanging_space) {
-            Beside::AsAfter
-        } else {
-            Beside::Previous
-        }
-    }
-
-    /// A box whose content forms flows of its own ends this flow.
-    fn embedded_box(&mut self) {
-        self.split();
-        self.reach(Last::Box);
-        self.line_start = false;
-    }
-
-    /// Move past `next`. Content other than a float, after a float, is what
-    /// the stop after that float stands for.
-    fn reach(&mut self, next: Last) {
-        if let (Last::Float(index), Last::Inline | Last::Box) = (self.last, next)
-            && let Some(flow) = self.flows.get_mut(index)
-        {
-            flow.set_float_after(Beside::Next);
-        }
-        self.last = next;
     }
 
     /// A `<br>` is a unit of its own; the line ends before it, so collapsible
@@ -465,6 +388,7 @@ impl Builder<'_> {
     fn push_opaque_unit(&mut self, edges: Edges) {
         self.flow.push_unit(UnitKind::Atom, edges, "\u{FFFC}");
         self.hanging_space = false;
+        self.broke_since_unit = false;
     }
 
     fn extend_opaque(&mut self, edges: Edges) {
@@ -484,12 +408,12 @@ impl Builder<'_> {
     fn align(&mut self, ch: char, style: TextStyle) -> Option<std::ops::Range<usize>> {
         let layer = self.layers.last_mut()?;
         let range = layer.aligner.char(ch, style)?;
-        if matches!(layer.aligner.slice(range.clone()), "\n" | "\r") {
-            // A forced break ends the line; no float stop stands for it.
-            self.last = Last::Inline;
+        if is_forced_break(layer.aligner.slice(range.clone())) {
+            self.reach(Walked::Break);
             self.line_start = true;
+            self.broke_since_unit = true;
         } else {
-            self.reach(Last::Inline);
+            self.reach(Walked::Inline);
             self.line_start &= style.collapsible(ch);
         }
         Some(range)
@@ -498,6 +422,7 @@ impl Builder<'_> {
     fn push_unit(&mut self, kind: UnitKind, edges: Edges, text: &str) {
         self.flow.push_unit(kind, edges, text);
         self.hanging_space = false;
+        self.broke_since_unit = false;
     }
 
     /// Remove a final collapsible space before a line end.
@@ -508,7 +433,8 @@ impl Builder<'_> {
     }
 
     /// End the current flow at an embedded box; a space before it is kept,
-    /// and hangs when the content after the box wraps to a later line.
+    /// and hangs when the content after the box continues on a later line
+    /// with no forced break between: at a soft wrap.
     fn split(&mut self) {
         self.hanging_space = false;
         // An unselectable run continuing past the box is a unit on each side.
@@ -517,9 +443,10 @@ impl Builder<'_> {
         }
         let continuing = self.layers.last().map(Layer::continuing_line);
         let ends_above = |line| !self.flow.is_empty() && self.flow.line(self.flow.len()) < line;
-        if continuing.is_some_and(ends_above) {
+        if !self.broke_since_unit && continuing.is_some_and(ends_above) {
             self.flow.set_wraps_after();
         }
+        self.broke_since_unit = false;
         let rtl = self.flow.rtl();
         let flow = std::mem::replace(&mut self.flow, Flow::new(self.root, rtl));
         if flow.first_key().is_some() {
@@ -577,4 +504,10 @@ fn sibling_points(doc: &BaseDocument, id: NodeId) -> Option<(Boundary, Boundary)
             offset: index + 1,
         },
     ))
+}
+
+/// Whether laid-out text is a forced break. Chrome steps over a CR and an
+/// LF separately, though they form one grapheme cluster.
+fn is_forced_break(text: &str) -> bool {
+    matches!(text, "\n" | "\r")
 }

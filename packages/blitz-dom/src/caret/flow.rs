@@ -52,8 +52,8 @@ pub(super) struct Flow {
     /// What the stops of a floated or positioned replaced element's
     /// one-atom flow stand for (see [`super::float`]).
     float_stops: Option<FloatStops>,
-    /// The content after this flow continues on a later line, so the flow
-    /// ends at a soft wrap.
+    /// The content after this flow continues on a later line with no
+    /// forced break between: the flow ends at a soft wrap.
     wraps_after: bool,
 }
 
@@ -279,7 +279,9 @@ impl Flow {
         Some((first, end))
     }
 
-    /// Whether the flow ends with white space hanging at a soft wrap.
+    /// Whether the flow ends with white space at a soft wrap. Unlike
+    /// [`Self::line_range`], it holds for a space that is the line's only
+    /// unit: content taking no units (hidden text) may share the line.
     pub(super) fn ends_with_hanging_space(&self) -> bool {
         let Some(last) = self.units.len().checked_sub(1) else {
             return false;

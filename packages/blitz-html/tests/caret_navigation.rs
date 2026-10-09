@@ -997,3 +997,51 @@ fn line_steps_from_and_into_floats() {
     let up = moves(BACKWARD, Granularity::Line, 1);
     assert_eq!(carets(&doc, at(aaaa, 2), &up), [at(first, 4)]);
 }
+
+#[test]
+fn float_stops_beside_breaks_and_content_without_stops() {
+    let back = moves(BACKWARD, Granularity::LineBoundary, 1);
+    let forward = moves(FORWARD, Granularity::LineBoundary, 1);
+
+    // A forced break after a float leaves both stops with the content
+    // before it.
+    let doc = laid_out(&format!("<p>aa{FLOAT}<br>bb</p>"));
+    let (p, aa) = (q(&doc, "p"), child(&doc, "p", 0));
+    assert_eq!(carets(&doc, at(p, 2), &back), [at(aa, 0)]);
+    assert_eq!(carets(&doc, at(p, 2), &forward), [at(aa, 2)]);
+
+    // Content without stops after a float ends the line at its stop; a
+    // block-level box after it does not.
+    let doc = laid_out(&format!(
+        "<p>aa{FLOAT}<span style='visibility:hidden'>hh</span></p>"
+    ));
+    let (p, aa) = (q(&doc, "p"), child(&doc, "p", 0));
+    assert_eq!(carets(&doc, at(aa, 1), &forward), [at(p, 2)]);
+    let doc = laid_out(&format!(
+        "<style>.cf::after{{content:'';display:table;clear:both}}</style><p class=cf>aa{FLOAT}</p><p>bb</p>"
+    ));
+    let (p, aa) = (q(&doc, "p"), child(&doc, "p", 0));
+    assert_eq!(carets(&doc, at(p, 1), &forward), [at(aa, 2)]);
+    assert_eq!(carets(&doc, at(p, 2), &forward), [at(p, 2)]);
+
+    // A space before a forced break in generated content does not hang.
+    let doc = laid_out(&format!(
+        "<style>.x::after{{content:'a\\A';white-space:pre}}</style><p>zz <span class=x></span>{FLOAT}bb</p>"
+    ));
+    let zz = child(&doc, "p", 0);
+    assert_eq!(carets(&doc, at(zz, 0), &forward), [at(zz, 3)]);
+}
+
+#[test]
+fn line_steps_leave_floats_that_open_the_root_or_end_a_box() {
+    let down = moves(FORWARD, Granularity::Line, 1);
+    let doc = laid_out(&format!("<p>{FLOAT}aa<br>bb</p>"));
+    let (p, aa) = (q(&doc, "p"), child(&doc, "p", 1));
+    assert_eq!(carets(&doc, at(p, 0), &down), [at(aa, 0)]);
+
+    let doc = laid_out(&format!(
+        "<p>q <span style='display:inline-block'>yy{FLOAT}</span></p><p>bb</p>"
+    ));
+    let (span, bb) = (q(&doc, "span"), child(&doc, "p + p", 0));
+    assert_eq!(carets(&doc, at(span, 1), &down), [at(bb, 2)]);
+}

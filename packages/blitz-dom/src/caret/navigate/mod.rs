@@ -8,12 +8,14 @@
 //! the anchor's tree (a selection does not cross a shadow boundary). Line
 //! and paragraph steps keep a horizontal position across consecutive moves.
 
-use super::float::{self, Beside};
+use super::float;
 use super::flow::Flow;
 use super::segments;
 use super::{Alter, Direction, Granularity, ModifyRequest};
 use crate::NodeId;
 use std::cmp::Ordering;
+
+mod lines;
 
 /// A caret stop: a unit boundary in one flow, ordered by flow then boundary.
 /// At a soft wrap one boundary ends a line and starts the next; `upstream`
@@ -279,154 +281,6 @@ impl Mover<'_> {
         advances.then(|| Caret::at(caret.flow, index))
     }
 
-    /// The stop on the next line nearest `x`. Past the last line, the caret
-    /// goes to the document's end (or start, moving backward).
-    fn line(&self, caret: Caret, x: f32) -> Option<Caret> {
-        let (from, line) = self.vertical_origin(caret)?;
-        let within = if self.forward {
-            line.checked_add(1)
-        } else {
-            line.checked_sub(1)
-        };
-        if let Some(found) = within.and_then(|target| self.root_line(from, target, x)) {
-            return Some(found);
-        }
-        self.edge_line(from, x).or_else(|| self.document_boundary())
-    }
-
-    /// The flow and line a vertical step starts from. A float's stop starts
-    /// from the content it stands for; one opening a line, from the line
-    /// before.
-    fn vertical_origin(&self, caret: Caret) -> Option<(usize, u32)> {
-        let flow = self.flows.flow(caret.flow)?;
-        let Some(stops) = flow.float_stops() else {
-            return Some((caret.flow, line_of(flow, caret)));
-        };
-        if let Some(beside) = float::stand_in(self.flows, caret) {
-            let beside_flow = self.flows.flow(beside.flow)?;
-            return Some((beside.flow, line_of(beside_flow, beside)));
-        }
-        let line = flow.line(0);
-        Some(match stops.side(caret.index > 0) {
-            Beside::LineStart => (caret.flow, line.saturating_sub(1)),
-            _ => (caret.flow, line),
-        })
-    }
-
-    /// The stop nearest `x` on `line` of an inline root, from one of its
-    /// flows: in that flow, else in the next of the root's flows that holds
-    /// the line. Floats hold no line.
-    fn root_line(&self, from: usize, line: u32, x: f32) -> Option<Caret> {
-        let flow = self.flows.flow(from)?;
-        if let Some(found) = nearest(flow, from, line, x).filter(|_| !flow.is_float()) {
-            return Some(found);
-        }
-        let root = flow.root();
-        self.beyond(from).find_map(|index| {
-            let next = self.flows.flow(index)?;
-            if next.root() != root || next.is_float() {
-                return None;
-            }
-            nearest(next, index, line, x)
-        })
-    }
-
-    /// The stop nearest `x` on the first line of the next paragraph, or the
-    /// last line of the previous one.
-    fn paragraph(&self, caret: Caret, x: f32) -> Option<Caret> {
-        let flow = self.flows.flow(caret.flow)?;
-        let (start, end) = flow.paragraph_range(caret.index);
-        let target = if self.forward {
-            (end + 1 < flow.len()).then(|| flow.line(end + 1))
-        } else {
-            start.checked_sub(1).map(|i| flow.line(i))
-        };
-        if let Some(found) = target.and_then(|line| nearest(flow, caret.flow, line, x)) {
-            return Some(found);
-        }
-        Some(self.edge_line(caret.flow, x).unwrap_or(caret))
-    }
-
-    /// The stop nearest `x` on the facing line of the next flow with stops.
-    /// A float's stops draw at one edge: the one facing the movement wins.
-    fn edge_line(&self, from: usize, x: f32) -> Option<Caret> {
-        self.beyond(from).find_map(|index| {
-            let flow = self.flows.flow(index)?;
-            flow.first_stop()?;
-            if flow.is_float() {
-                let stop = if self.forward {
-                    flow.first_stop()
-                } else {
-                    flow.last_stop()
-                };
-                return Some(Caret::at(index, stop?));
-            }
-            let line = if self.forward {
-                flow.line(0)
-            } else {
-                flow.line(flow.len())
-            };
-            nearest(flow, index, line, x)
-        })
-    }
-
-    /// The end (or start) of the caret's visual line. A float's stops have
-    /// no line box of their own: they move from the content they stand for,
-    /// or stay where there is none.
-    fn line_boundary(&self, caret: Caret) -> Option<Caret> {
-        let flow = self.flows.flow(caret.flow)?;
-        if !flow.is_float() {
-            return self.line_boundary_from(caret);
-        }
-        match float::stand_in(self.flows, caret) {
-            Some(beside) => self.line_boundary_from(beside),
-            None => Some(caret),
-        }
-    }
-
-    /// The end (or start) of the line of an inline caret. A line continues
-    /// through the root's other flows on it, around boxes that split the
-    /// root, and passes over floats.
-    fn line_boundary_from(&self, caret: Caret) -> Option<Caret> {
-        let flow = self.flows.flow(caret.flow)?;
-        let line = line_of(flow, caret);
-        let (start, end) = flow.line_range(line)?;
-        let mut found = self
-            .outermost_stop(flow, caret.flow, start, end)
-            .unwrap_or(caret);
-        let open = |flow: &Flow, start: usize, end: usize| {
-            if self.forward {
-                end == flow.len()
-            } else {
-                start == 0
-            }
-        };
-        if open(flow, start, end) {
-            for index in self.beyond(caret.flow) {
-                let Some(next) = self.flows.flow(index) else {
-                    break;
-                };
-                if next.root() != flow.root() || next.is_float() {
-                    continue;
-                }
-                let Some((start, end)) = next.line_range(line) else {
-                    break;
-                };
-                // A flow with no stop on the line (only unselectable content)
-                // keeps the previous end.
-                if let Some(stop) = self.outermost_stop(next, index, start, end) {
-                    found = stop;
-                }
-                if !open(next, start, end) {
-                    break;
-                }
-            }
-        }
-        let flow = self.flows.flow(found.flow)?;
-        found.upstream = self.forward && flow.line(found.index) != line;
-        Some(found)
-    }
-
     fn paragraph_boundary(&self, caret: Caret) -> Option<Caret> {
         let flow = self.flows.flow(caret.flow)?;
         let (start, end) = flow.paragraph_range(caret.index);
@@ -497,22 +351,4 @@ fn line_of(flow: &Flow, caret: Caret) -> u32 {
         Some(before) if caret.upstream => flow.line(before),
         _ => flow.line(caret.index),
     }
-}
-
-/// The stop on `line` whose caret is horizontally closest to `x`; the first
-/// one wins a tie. A stop past the line's last unit draws upstream.
-fn nearest(flow: &Flow, index: usize, line: u32, x: f32) -> Option<Caret> {
-    let (start, end) = flow.line_range(line)?;
-    let stop = (start..=end)
-        .filter(|&i| flow.point(i).is_some())
-        .min_by(|&a, &b| {
-            let da = (flow.x(a, line) - x).abs();
-            let db = (flow.x(b, line) - x).abs();
-            da.total_cmp(&db)
-        })?;
-    Some(Caret {
-        flow: index,
-        index: stop,
-        upstream: flow.line(stop) != line,
-    })
 }
