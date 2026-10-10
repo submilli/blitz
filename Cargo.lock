@@ -908,6 +908,7 @@ dependencies = [
  "data-url",
  "debug_timer 0.1.3",
  "euclid",
+ "flate2",
  "html-escape",
  "icu_casemap",
  "icu_locale_core",

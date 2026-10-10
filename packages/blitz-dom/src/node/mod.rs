@@ -28,6 +28,10 @@ pub(crate) use element::{FormControlState, ScriptState};
 pub use node::*;
 pub use scrollbar::{ScrollbarColor, ScrollbarRef, ScrollbarWidth};
 pub use stylo_data::ComputedStyleRef;
+#[cfg(all(test, feature = "svg"))]
+pub(crate) use svg::MAX_SVG_SOURCE_BYTES;
 #[cfg(feature = "svg")]
 pub use svg::{SvgImageData, SvgIntrinsicDimensions};
+#[cfg(feature = "svg")]
+pub(crate) use svg::{inflate_svgz, is_svgz};
 pub use text::{GeneratedTextInputEvent, TextBrush, TextInputData, TextLayout};

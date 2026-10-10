@@ -327,7 +327,7 @@ fn images_declaring_huge_bitmaps_are_broken_before_decoding() {
     let img = image(&mut doc);
     set_src(&mut doc, img, "/bomb.png");
     stable(&mut doc);
-    provider.answer(&mut doc, Some(crate::net::declared_png(100_000)));
+    provider.answer(&mut doc, Some(crate::image_decode::declared_png(100_000)));
     let status = doc.image_status(img).unwrap();
     assert_eq!(status.state, ImageRequestState::Broken);
     assert_eq!(events(&mut doc), [(img, ImageEventKind::Error)]);

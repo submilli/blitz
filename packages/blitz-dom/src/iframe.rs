@@ -187,3 +187,21 @@ impl BaseDocument {
         self.attach_iframe_document(node_id, html, resolved_url, signal);
     }
 }
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn iframe_documents_share_their_parents_image_budget() {
+        let budget = crate::DecodedImageBudget::with_limit(100);
+        let doc = BaseDocument::new(DocumentConfig {
+            decoded_image_budget: Some(budget.clone()),
+            ..Default::default()
+        });
+        let config =
+            doc.iframe_document_config(doc.root_node().id, None, AbortController::default().signal);
+        let _held = config.decoded_image_budget.unwrap().reserve(80).unwrap();
+        assert!(budget.reserve(80).is_none());
+    }
+}

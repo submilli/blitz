@@ -38,12 +38,13 @@ const MAX_CACHED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Default)]
 pub(crate) struct ImageCache {
-    entries: HashMap<ImageKey, Entry>,
+    /// Each entry with its [`decoded_bytes`], computed once.
+    entries: HashMap<ImageKey, (Entry, usize)>,
 }
 impl ImageCache {
     /// The decoded image for `key`, if it is still available.
     pub fn get(&self, key: &ImageKey) -> Option<ImageData> {
-        self.entries.get(key)?.upgrade()
+        self.entries.get(key)?.0.upgrade()
     }
 
     #[cfg(test)]
@@ -55,15 +56,16 @@ impl ImageCache {
     /// let go are dropped first; live entries count toward both bounds.
     pub fn insert(&mut self, key: ImageKey, image: &ImageData, retention: ImageRetention) {
         let mut cached = 0usize;
-        self.entries.retain(|_, entry| {
-            let Some(live) = entry.upgrade() else {
-                return false;
-            };
-            cached = cached.saturating_add(decoded_bytes(&live));
-            true
+        self.entries.retain(|_, (entry, bytes)| {
+            let live = entry.upgrade().is_some();
+            if live {
+                cached = cached.saturating_add(*bytes);
+            }
+            live
         });
+        let bytes = decoded_bytes(image);
         if self.entries.len() >= MAX_CACHED_IMAGES
-            || cached.saturating_add(decoded_bytes(image)) > MAX_CACHED_IMAGE_BYTES
+            || cached.saturating_add(bytes) > MAX_CACHED_IMAGE_BYTES
         {
             return;
         }
@@ -75,7 +77,7 @@ impl ImageCache {
                 None => return,
             },
         };
-        self.entries.insert(key, entry);
+        self.entries.insert(key, (entry, bytes));
     }
 
     #[cfg(test)]
@@ -168,13 +170,13 @@ impl HeldImage {
     }
 }
 
-pub(crate) fn decoded_bytes(image: &ImageData) -> usize {
+/// What a cached image retains, as the decoded image budget charges it, so
+/// stored entries can pin at most [`MAX_CACHED_IMAGE_BYTES`] of that budget.
+fn decoded_bytes(image: &ImageData) -> usize {
     match image {
         ImageData::Raster(raster) => raster.data.data().len(),
-        // Parsed SVG trees are bounded by the SVG parser and count toward
-        // the entry limit only.
         #[cfg(feature = "svg")]
-        ImageData::Svg(_) => 0,
+        ImageData::Svg(svg) => crate::image_budget::svg_retained_bytes(&svg.tree),
         ImageData::None => 0,
     }
 }

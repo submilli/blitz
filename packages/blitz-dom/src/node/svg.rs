@@ -89,12 +89,11 @@ impl SvgImageData {
     /// parse.
     ///
     /// Like [`usvg::Tree::from_data`], gzip-compressed data (SVGZ) is
-    /// decompressed first.
+    /// decompressed first, here within [`MAX_SVG_SOURCE_BYTES`].
     pub fn from_data(data: &[u8], options: &usvg::Options) -> Result<Self, usvg::Error> {
-        // Gzip magic bytes, matching the SVGZ detection in `usvg::Tree::from_data`.
         let decompressed;
-        let data = if data.starts_with(&[0x1f, 0x8b]) {
-            decompressed = usvg::decompress_svgz(data)?;
+        let data = if is_svgz(data) {
+            decompressed = inflate_svgz(data)?;
             decompressed.as_slice()
         } else {
             data
@@ -232,4 +231,30 @@ impl SvgImageData {
             }
         }
     }
+}
+
+/// The SVG source an SVGZ image may inflate to. A few hundred kilobytes of
+/// gzip inflate a thousandfold; usvg's own `decompress_svgz` has no bound.
+/// Uncompressed responses are bounded by the host's response limit, which
+/// this matches.
+pub(crate) const MAX_SVG_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Whether `data` starts with the gzip magic bytes, as usvg detects SVGZ.
+pub(crate) fn is_svgz(data: &[u8]) -> bool {
+    data.starts_with(&[0x1f, 0x8b])
+}
+
+/// Inflate SVGZ `data`, failing past [`MAX_SVG_SOURCE_BYTES`] before
+/// allocating more.
+pub(crate) fn inflate_svgz(data: &[u8]) -> Result<Vec<u8>, usvg::Error> {
+    use std::io::Read;
+    let mut inflated = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .take(MAX_SVG_SOURCE_BYTES + 1)
+        .read_to_end(&mut inflated)
+        .map_err(|_| usvg::Error::MalformedGZip)?;
+    if inflated.len() as u64 > MAX_SVG_SOURCE_BYTES {
+        return Err(usvg::Error::ElementsLimitReached);
+    }
+    Ok(inflated)
 }

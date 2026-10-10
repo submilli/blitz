@@ -1,6 +1,6 @@
-use super::{DecodedImageBudget, MIN_PRUNE_ENTRIES};
+use super::{DecodedImageBudget, MIN_CHARGE, MIN_PRUNE_ENTRIES};
 use crate::image_state::{ImageEventKind, ImageRequestState};
-use crate::node::RasterImageData;
+use crate::node::{RasterImageData, Status};
 use crate::{BaseDocument, DocumentConfig, NodeId, qual_name};
 use blitz_traits::net::{Bytes, NetHandler, NetProvider, Request, ResponseMetadata};
 use std::io::Cursor;
@@ -50,7 +50,11 @@ fn dropped_images_do_not_accumulate_entries() {
         ledger.entries.len()
     );
     drop(ledger);
-    assert_eq!(budget.retained_bytes(), 4);
+    assert_eq!(
+        budget.retained_bytes(),
+        MIN_CHARGE,
+        "tiny images cost the least charge"
+    );
 }
 
 #[cfg(feature = "svg")]
@@ -171,4 +175,106 @@ fn documents_sharing_a_budget_share_its_limit() {
     let refused = img(&mut frame, "bb.png");
     assert_eq!(state(&page, loaded), ImageRequestState::CompletelyAvailable);
     assert_eq!(state(&frame, refused), ImageRequestState::Broken);
+}
+
+fn background(doc: &mut BaseDocument, parent: NodeId, src: &str) -> NodeId {
+    let mut mutation = doc.mutate();
+    let node = mutation.create_element(qual_name!("div", html), vec![]);
+    mutation.set_attribute(
+        node,
+        qual_name!("style"),
+        format!("background-image:url({src})"),
+    );
+    mutation.append_children(parent, &[node]);
+    drop(mutation);
+    doc.resolve(0.0);
+    doc.handle_messages();
+    node
+}
+
+fn layer_loaded(doc: &BaseDocument, node: NodeId) -> bool {
+    let layers = &doc.nodes[node].element_data().unwrap().background_images;
+    matches!(layers.first(), Some(Some(layer)) if layer.status == Status::Ok)
+}
+
+#[test]
+fn css_image_layers_past_the_budget_stay_unloaded() {
+    let budget = DecodedImageBudget::with_limit(DECODED);
+    let mut doc = document(&budget);
+    let root = doc.root_node().id;
+    let mut mutation = doc.mutate();
+    let html = mutation.create_element(qual_name!("html", html), vec![]);
+    mutation.append_children(root, &[html]);
+    drop(mutation);
+    let first = background(&mut doc, html, "a.png?no-store");
+    let second = background(&mut doc, html, "bb.png?no-store");
+    assert!(layer_loaded(&doc, first));
+    assert!(!layer_loaded(&doc, second));
+    assert_eq!(budget.retained_bytes(), DECODED);
+}
+
+#[test]
+fn pressure_counts_admitted_and_refused_bytes() {
+    let budget = DecodedImageBudget::with_limit(100);
+    let held = budget.reserve(80).unwrap();
+    assert!(budget.reserve(90).is_none());
+    drop(held);
+    assert_eq!(budget.pressure(), 170);
+    assert_eq!(budget.limit(), 100);
+}
+
+#[cfg(feature = "svg")]
+fn svg_cost(source: &str) -> usize {
+    let svg =
+        crate::util::parse_svg_image(source.as_bytes(), &crate::util::default_svg_fonts()).unwrap();
+    super::svg_retained_bytes(&svg.tree)
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn svg_costs_count_resources_outside_the_rendered_tree() {
+    let points: String = (0..1000).map(|i| format!(" L{i} {i}")).collect();
+    let clip = svg_cost(&format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><clipPath id='c'><path d='M0 0{points}'/></clipPath><rect width='4' height='4' clip-path='url(#c)'/></svg>"
+    ));
+    assert!(clip >= 1000 * 16, "{clip}");
+    let stops: String = (0..200)
+        .map(|i| format!("<stop offset='{}'/>", i as f32 / 200.0))
+        .collect();
+    let gradient = svg_cost(&format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><linearGradient id='g'>{stops}</linearGradient><rect width='4' height='4' fill='url(#g)'/></svg>"
+    ));
+    assert!(gradient >= 200 * 64, "{gradient}");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn nested_rasters_cost_their_decode_and_its_paint_copy() {
+    let png = crate::image_decode::declared_png(512);
+    let href: String = png.iter().map(|byte| format!("%{byte:02X}")).collect();
+    let cost = svg_cost(&format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><image width='4' height='4' href='data:image/png,{href}'/></svg>"
+    ));
+    assert!(cost >= 2 * 512 * 512 * 4, "{cost}");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn svgz_images_inflate_within_a_bound() {
+    use std::io::Write as _;
+    let compress = |source: &[u8]| {
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        gzip.write_all(source).unwrap();
+        gzip.finish().unwrap()
+    };
+    let fonts = crate::util::default_svg_fonts();
+    let small = compress(b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'/>");
+    assert!(crate::util::parse_svg_image(&small, &fonts).is_ok());
+
+    let mut bomb = b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>".to_vec();
+    bomb.resize(crate::node::MAX_SVG_SOURCE_BYTES as usize + 1, b' ');
+    bomb.extend(b"</svg>");
+    let bomb = compress(&bomb);
+    assert!(bomb.len() < 64 * 1024, "{}", bomb.len());
+    assert!(crate::util::parse_svg_image(&bomb, &fonts).is_err());
 }

@@ -221,6 +221,11 @@ impl BaseDocument {
         request_id
     }
 
+    /// The budget this document's decoded images are charged to.
+    pub fn decoded_image_budget(&self) -> &crate::DecodedImageBudget {
+        &self.image_budget
+    }
+
     /// A handler decoding a fetched image for `kind` within the document's
     /// fonts and decoded image budget.
     pub(crate) fn image_handler(&self, kind: ImageType, request_url: &str) -> ImageHandler {

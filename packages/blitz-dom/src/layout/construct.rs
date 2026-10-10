@@ -612,20 +612,31 @@ fn collect_layout_children_with_wrap(
                 doc.nodes[id].remove_damage(CONSTRUCT_BOX | CONSTRUCT_DESCENDENT | CONSTRUCT_FC);
             });
 
+            // Release the previous tree before charging its replacement to the
+            // decoded image budget; one past the budget draws nothing.
+            let special_data = &mut doc
+                .get_node_mut(container_node_id)
+                .unwrap()
+                .element_data_mut()
+                .unwrap()
+                .special_data;
+            *special_data = SpecialElementData::None;
             match crate::util::parse_svg_image(outer_html.as_bytes(), &doc.svg_fonts) {
                 Ok(svg) => {
-                    doc.get_node_mut(container_node_id)
-                        .unwrap()
-                        .element_data_mut()
-                        .unwrap()
-                        .special_data =
-                        SpecialElementData::Image(Box::new(crate::node::ImageData::Svg(svg)));
+                    if doc.image_budget.admit_svg(&svg) {
+                        doc.get_node_mut(container_node_id)
+                            .unwrap()
+                            .element_data_mut()
+                            .unwrap()
+                            .special_data =
+                            SpecialElementData::Image(Box::new(crate::node::ImageData::Svg(svg)));
+                    }
                 }
                 Err(err) => {
+                    // The markup is page content: only the error is logged.
                     #[cfg(feature = "tracing")]
                     tracing::warn!(
                         node_id = ?container_node_id,
-                        html = outer_html,
                         error = ?err,
                         "SVG parse failed",
                     );

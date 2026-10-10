@@ -92,7 +92,7 @@ impl BaseDocument {
             _ if url.scheme() == "data" => self
                 .image_cache
                 .get(&key)
-                .or_else(|| self.decode_data_url(&url, Some(&mut inline.0))),
+                .or_else(|| self.decode_data_url(&url, Some(inline))),
             _ => None,
         };
         FeImageTarget::Fetched(image)
@@ -211,15 +211,21 @@ impl BaseDocument {
 
     /// A `data:` image, decoded like a fetched one and always readable. `None`
     /// when the URL or image is invalid, or a raster would pass the decoded
-    /// image budget or the remaining bytes `draw` may decode.
-    fn decode_data_url(&self, url: &url::Url, draw: Option<&mut u64>) -> Option<ImageData> {
+    /// image budget or what an `inline` draw may still decode.
+    fn decode_data_url(
+        &self,
+        url: &url::Url,
+        inline: Option<&mut InlineDecodes>,
+    ) -> Option<ImageData> {
         let data = data_url::DataUrl::process(url.as_str()).ok()?;
         let (body, _) = data.decode_to_vec().ok()?;
-        if let (Some(draw), Some(bytes)) = (draw, crate::net::bounded_rgba_bytes(&body)) {
-            *draw = draw.checked_sub(bytes)?;
+        if let (Some(inline), Some(bytes)) =
+            (inline, crate::image_decode::bounded_rgba_bytes(&body))
+        {
+            inline.0 = inline.0.checked_sub(bytes)?;
         }
         let body = blitz_traits::net::Bytes::from(body);
-        crate::net::decode_image(&body, true, &self.svg_fonts, &self.image_budget).ok()
+        crate::image_decode::decode_image(&body, true, &self.svg_fonts, &self.image_budget).ok()
     }
 
     fn start_fe_image_fetch(&mut self, node: NodeId, key: ImageKey, url: url::Url) {

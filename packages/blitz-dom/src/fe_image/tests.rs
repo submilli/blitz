@@ -1,6 +1,7 @@
 //! `feImage` requests: synchronous `data:` images, No-CORS fetches that apply
 //! only to the current `href`, fragments, and inert documents.
 use super::FeImageTarget;
+use crate::image_budget::MIN_CHARGE;
 use crate::node::ImageData;
 use crate::{BaseDocument, DocumentConfig, NodeId, QualName, qual_name};
 use blitz_traits::net::{Bytes, CorsSettings, NetHandler, NetProvider, Request, ResponseMetadata};
@@ -308,7 +309,7 @@ fn images_the_cache_refuses_are_charged_until_dropped() {
     }
     let node = fe_image(&mut doc, html, &data_png());
     assert_eq!(loaded(&doc, node), Some(true));
-    assert_eq!(doc.image_budget.retained_bytes(), 4);
+    assert_eq!(doc.image_budget.retained_bytes(), MIN_CHARGE);
     doc.mutate().remove_and_drop_node(node);
     assert_eq!(doc.image_budget.retained_bytes(), 0);
 }
@@ -317,11 +318,6 @@ fn images_the_cache_refuses_are_charged_until_dropped() {
 fn retained_svg_documents_are_charged_by_size() {
     let provider = Arc::new(Deferred::default());
     let (mut doc, html) = document(provider);
-    for index in 0..crate::image_cache::MAX_CACHED_IMAGES {
-        let key = crate::image_request::ImageKey::no_cors(format!("https://filler.test/{index}"));
-        doc.image_cache
-            .insert(key, &ImageData::None, crate::ImageRetention::Store);
-    }
     let rects = "<rect width='1' height='1'/>".repeat(10);
     let svg = format!(
         "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>{rects}</svg>"
@@ -329,6 +325,23 @@ fn retained_svg_documents_are_charged_by_size() {
     let node = fe_image(&mut doc, html, &svg);
     assert!(loaded(&doc, node).is_some());
     assert!(doc.image_budget.retained_bytes() >= 10 * 1024);
+}
+
+#[test]
+fn images_past_the_decoded_image_budget_draw_nothing() {
+    let provider = Arc::new(Deferred::default());
+    let (mut doc, html) = document(provider.clone());
+    doc.image_budget = crate::DecodedImageBudget::with_limit(0);
+    let data = fe_image(&mut doc, html, &data_png());
+    assert_eq!(
+        loaded(&doc, data),
+        None,
+        "refused, also when a draw decodes it"
+    );
+    let fetched = fe_image(&mut doc, html, "a.png");
+    answer(provider.take(), "https://page.test/a.png", true);
+    doc.handle_messages();
+    assert_eq!(loaded(&doc, fetched), None);
 }
 
 #[test]
@@ -370,7 +383,7 @@ fn a_no_store_image_stays_available_while_an_fe_image_holds_it() {
     assert_eq!(loaded(&doc, other), Some(false));
     assert_eq!(
         doc.image_budget.retained_bytes(),
-        4,
+        MIN_CHARGE,
         "one decode, charged once"
     );
 

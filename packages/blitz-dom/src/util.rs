@@ -223,6 +223,12 @@ pub(crate) fn svg_options(fonts: &crate::SvgFontDb) -> usvg::Options<'static> {
                 if nested.fetch_add(1, Ordering::Relaxed) >= MAX_NESTED_SVG_IMAGES {
                     return None;
                 }
+                // usvg would inflate a nested SVGZ document without a bound.
+                let data = if crate::node::is_svgz(&data) {
+                    Arc::new(crate::node::inflate_svgz(&data).ok()?)
+                } else {
+                    data
+                };
                 let kind = decode(mime, data, options)?;
                 let encoded = match &kind {
                     usvg::ImageKind::JPEG(data)
@@ -231,7 +237,7 @@ pub(crate) fn svg_options(fonts: &crate::SvgFontDb) -> usvg::Options<'static> {
                     | usvg::ImageKind::WEBP(data) => data,
                     usvg::ImageKind::SVG(_) => return Some(kind),
                 };
-                let decoded = crate::net::bounded_rgba_bytes(encoded)?;
+                let decoded = crate::image_decode::bounded_rgba_bytes(encoded)?;
                 let total = bytes.fetch_add(decoded, Ordering::Relaxed) + decoded;
                 (total <= MAX_NESTED_SVG_IMAGE_BYTES).then_some(kind)
             }),
@@ -295,7 +301,7 @@ mod svg_tests {
     #[test]
     fn nested_raster_images_are_bounded_by_their_headers() {
         let image = |side: u32| {
-            let png = crate::net::declared_png(side);
+            let png = crate::image_decode::declared_png(side);
             let encoded =
                 percent_encoding::percent_encode(&png, percent_encoding::NON_ALPHANUMERIC);
             format!("<image href='data:image/png,{encoded}' width='1' height='1'/>")
