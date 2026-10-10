@@ -114,6 +114,7 @@ pub use geometry::{BoxMetrics, IntersectionGeometry, ResizeGeometry, VisibilityB
 mod html;
 /// Loading of `<iframe>` elements into sub-documents.
 mod iframe;
+mod image_budget;
 mod image_cache;
 mod image_input;
 mod image_request;
@@ -182,6 +183,7 @@ pub use clock::SystemClock;
 pub use clock::{Clock, FrozenClock};
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, PlainDocument};
+pub use image_budget::{DecodedImageBudget, MAX_DECODED_IMAGE_BYTES};
 pub use image_cache::ImageRetention;
 pub use markup5ever::{
     LocalName, Namespace, NamespaceStaticSet, Prefix, PrefixStaticSet, QualName, local_name,

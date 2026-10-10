@@ -202,7 +202,7 @@ impl BaseDocument {
             self.id(),
             None,
             self.shell_provider.clone(),
-            ImageHandler::new(ImageType::Image, &key.url, self.svg_fonts.clone()),
+            self.image_handler(ImageType::Image, &key.url),
         );
         let request_id = handler.request_id();
         let initiator = if self.nodes[node]
@@ -219,6 +219,17 @@ impl BaseDocument {
         self.net_provider
             .fetch(self.id(), request, Box::new(handler));
         request_id
+    }
+
+    /// A handler decoding a fetched image for `kind` within the document's
+    /// fonts and decoded image budget.
+    pub(crate) fn image_handler(&self, kind: ImageType, request_url: &str) -> ImageHandler {
+        ImageHandler::new(
+            kind,
+            request_url,
+            self.svg_fonts.clone(),
+            self.image_budget.clone(),
+        )
     }
 
     /// Drop an image element's decoded image, including an image button's

@@ -298,7 +298,7 @@ fn failed_requests_are_fetched_again() {
 }
 
 #[test]
-fn images_the_cache_refuses_are_retained_within_a_budget() {
+fn images_the_cache_refuses_are_charged_until_dropped() {
     let provider = Arc::new(Deferred::default());
     let (mut doc, html) = document(provider);
     for index in 0..crate::image_cache::MAX_CACHED_IMAGES {
@@ -308,9 +308,9 @@ fn images_the_cache_refuses_are_retained_within_a_budget() {
     }
     let node = fe_image(&mut doc, html, &data_png());
     assert_eq!(loaded(&doc, node), Some(true));
-    assert_eq!(doc.fe_images.owned_bytes, 4);
+    assert_eq!(doc.image_budget.retained_bytes(), 4);
     doc.mutate().remove_and_drop_node(node);
-    assert_eq!(doc.fe_images.owned_bytes, 0);
+    assert_eq!(doc.image_budget.retained_bytes(), 0);
 }
 
 #[test]
@@ -328,7 +328,7 @@ fn retained_svg_documents_are_charged_by_size() {
     );
     let node = fe_image(&mut doc, html, &svg);
     assert!(loaded(&doc, node).is_some());
-    assert!(doc.fe_images.owned_bytes >= 10 * 1024);
+    assert!(doc.image_budget.retained_bytes() >= 10 * 1024);
 }
 
 #[test]
@@ -364,15 +364,24 @@ fn a_no_store_image_stays_available_while_an_fe_image_holds_it() {
     );
     doc.handle_messages();
     assert_eq!(loaded(&doc, node), Some(false));
-    assert_eq!(doc.fe_images.owned_bytes, 0, "shared through the cache");
 
     let other = fe_image(&mut doc, html, "a.png");
     assert!(provider.urls().is_empty(), "a held image is reused");
     assert_eq!(loaded(&doc, other), Some(false));
+    assert_eq!(
+        doc.image_budget.retained_bytes(),
+        4,
+        "one decode, charged once"
+    );
 
     for element in [node, other] {
         doc.mutate().remove_and_drop_node(element);
     }
+    assert_eq!(
+        doc.image_budget.retained_bytes(),
+        0,
+        "freed with the last holder"
+    );
     fe_image(&mut doc, html, "a.png");
     assert_eq!(
         provider.urls().len(),

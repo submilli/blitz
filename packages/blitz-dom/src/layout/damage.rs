@@ -500,10 +500,12 @@ impl BaseDocument {
                             doc_id,
                             None,
                             self.shell_provider.clone(),
+                            // Fields, not `image_handler`: `node` borrows `self.nodes`.
                             ImageHandler::new(
                                 kind.image_type(idx),
                                 url_str,
                                 self.svg_fonts.clone(),
+                                self.image_budget.clone(),
                             ),
                         );
                         self.pending_images.insert(

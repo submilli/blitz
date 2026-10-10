@@ -7,25 +7,22 @@
 //! No CORS through the document's image fetches (host policy and readback
 //! provenance) and draw nothing until they arrive, while `data:` URLs decode in
 //! the engine: a draw before the queued update decodes them itself, within a
-//! per-draw budget, as Chrome shows them on the first synchronous draw. Decoded
-//! images are kept only through the document's bounded image cache, so equal
-//! URLs share one decode and retained pixels stay within its limits. A
-//! same-document fragment names an element instead and fetches nothing.
+//! per-draw budget, as Chrome shows them on the first synchronous draw. Equal
+//! URLs share one decode through the document's image cache, and every decode
+//! is charged to the document's decoded image budget. A same-document fragment
+//! names an element instead and fetches nothing.
 use crate::image_request::{ImageKey, PendingImage};
-use crate::net::{ImageHandler, ResourceHandler};
-use crate::node::{ImageData, RasterImageData};
+use crate::net::ResourceHandler;
+use crate::node::ImageData;
 use crate::util::ImageType;
 use crate::{BaseDocument, DocumentMutator, NodeId};
 use blitz_traits::net::{CorsSettings, ResourceInitiator};
 use markup5ever::{QualName, local_name, ns};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 /// Decoded bytes a draw may decode itself, for `data:` images whose queued
 /// update has not run yet.
 const MAX_INLINE_DECODE_BYTES: u64 = 64 * 1024 * 1024;
-/// Decoded bytes elements may retain beyond what the image cache holds.
-const MAX_OWNED_BYTES: usize = 64 * 1024 * 1024;
 
 /// Each element's request, and the elements whose request must be updated.
 #[derive(Default)]
@@ -33,8 +30,6 @@ pub(crate) struct FeImages {
     requests: HashMap<NodeId, FeImageRequest>,
     queue: Vec<NodeId>,
     queued: HashSet<NodeId>,
-    /// Bytes of retained images the image cache refused.
-    owned_bytes: usize,
 }
 
 impl FeImages {
@@ -44,13 +39,11 @@ impl FeImages {
 }
 
 /// An element's current request: the resolved URL it is for and, once loaded,
-/// the decoded image. A failed or unsupported image, or one past the retention
-/// budget, stays `None`.
+/// the decoded image. A failed or unsupported image, or one past the decoded
+/// image budget, stays `None`.
 struct FeImageRequest {
     url: String,
     image: Option<ImageData>,
-    /// Bytes of `image` charged to [`MAX_OWNED_BYTES`]: zero when cached.
-    owned: usize,
 }
 
 /// What an `href` names.
@@ -99,7 +92,7 @@ impl BaseDocument {
             _ if url.scheme() == "data" => self
                 .image_cache
                 .get(&key)
-                .or_else(|| decode_data_url(&url, &self.svg_fonts, Some(&mut inline.0))),
+                .or_else(|| self.decode_data_url(&url, Some(&mut inline.0))),
             _ => None,
         };
         FeImageTarget::Fetched(image)
@@ -156,17 +149,19 @@ impl BaseDocument {
         let key = ImageKey::no_cors(url.as_str());
         let cached = self.image_cache.get(&key);
         let data = url.scheme() == "data";
-        let (image, owned) = match cached {
-            Some(image) => (Some(image), 0),
-            None if data => decode_data_url(&url, &self.svg_fonts, None)
-                .map_or((None, 0), |image| self.retain_data_image(&key, image)),
-            None => (None, 0),
+        let image = match cached {
+            Some(image) => Some(image),
+            // The URL is its own body, with nothing forbidding storage.
+            None if data => self.decode_data_url(&url, None).inspect(|image| {
+                self.image_cache
+                    .insert(key.clone(), image, crate::ImageRetention::Store);
+            }),
+            None => None,
         };
         let loaded = data || image.is_some();
         let request = FeImageRequest {
             url: key.url.clone(),
             image,
-            owned,
         };
         self.fe_images.requests.insert(node, request);
         if !loaded {
@@ -179,7 +174,6 @@ impl BaseDocument {
         let Some(request) = self.fe_images.requests.remove(&node) else {
             return;
         };
-        self.fe_images.owned_bytes -= request.owned;
         let key = ImageKey::no_cors(request.url);
         let waiter = (node, ImageType::FilterImage);
         let empty = self.pending_images.get_mut(&key).is_some_and(|pending| {
@@ -210,39 +204,22 @@ impl BaseDocument {
         let Some(image) = image.filter(|_| current) else {
             return;
         };
-        let (image, owned) = self.retain(key, image);
         if let Some(request) = self.fe_images.requests.get_mut(&node) {
-            request.image = image;
-            request.owned = owned;
+            request.image = Some(image);
         }
     }
 
-    /// [`Self::retain`] a decoded `data:` image, offering it to the image
-    /// cache first: the URL is its own body, with nothing forbidding storage.
-    fn retain_data_image(
-        &mut self,
-        key: &ImageKey,
-        image: ImageData,
-    ) -> (Option<ImageData>, usize) {
-        self.image_cache
-            .insert(key.clone(), &image, crate::ImageRetention::Store);
-        self.retain(key, image)
-    }
-
-    /// Keep `image` for an element: shared through the document's image cache,
-    /// once its load has offered it there, or, when the cache refused it, as
-    /// the element's own copy within [`MAX_OWNED_BYTES`]. Returns the image
-    /// (none past both bounds) and the bytes charged to the element.
-    fn retain(&mut self, key: &ImageKey, image: ImageData) -> (Option<ImageData>, usize) {
-        if let Some(cached) = self.image_cache.get(key) {
-            return (Some(cached), 0);
+    /// A `data:` image, decoded like a fetched one and always readable. `None`
+    /// when the URL or image is invalid, or a raster would pass the decoded
+    /// image budget or the remaining bytes `draw` may decode.
+    fn decode_data_url(&self, url: &url::Url, draw: Option<&mut u64>) -> Option<ImageData> {
+        let data = data_url::DataUrl::process(url.as_str()).ok()?;
+        let (body, _) = data.decode_to_vec().ok()?;
+        if let (Some(draw), Some(bytes)) = (draw, crate::net::bounded_rgba_bytes(&body)) {
+            *draw = draw.checked_sub(bytes)?;
         }
-        let bytes = retained_bytes(&image);
-        if self.fe_images.owned_bytes + bytes > MAX_OWNED_BYTES {
-            return (None, 0);
-        }
-        self.fe_images.owned_bytes += bytes;
-        (Some(image), bytes)
+        let body = blitz_traits::net::Bytes::from(body);
+        crate::net::decode_image(&body, true, &self.svg_fonts, &self.image_budget).ok()
     }
 
     fn start_fe_image_fetch(&mut self, node: NodeId, key: ImageKey, url: url::Url) {
@@ -256,7 +233,7 @@ impl BaseDocument {
             self.id(),
             None,
             self.shell_provider.clone(),
-            ImageHandler::new(ImageType::FilterImage, &key.url, self.svg_fonts.clone()),
+            self.image_handler(ImageType::FilterImage, &key.url),
         );
         let request_id = handler.request_id();
         // Resource Timing reports `feImage` fetches as `other`, as Chrome does.
@@ -319,67 +296,8 @@ fn decode_fragment(fragment: &str) -> String {
         .into_owned()
 }
 
-/// What retaining `image` costs: decoded pixels, or for a parsed SVG document
-/// an estimate from its nodes, path points, flattened text and nested images
-/// (the image cache counts SVG documents by entry only).
-fn retained_bytes(image: &ImageData) -> usize {
-    const BYTES_PER_NODE: usize = 1024;
-    const BYTES_PER_POINT: usize = 16;
-    let ImageData::Svg(svg) = image else {
-        return crate::image_cache::decoded_bytes(image);
-    };
-    let mut bytes = BYTES_PER_NODE;
-    let mut pending = vec![svg.tree.root()];
-    while let Some(group) = pending.pop() {
-        for node in group.children() {
-            bytes = bytes.saturating_add(BYTES_PER_NODE);
-            match node {
-                usvg::Node::Group(child) => pending.push(child),
-                usvg::Node::Path(path) => {
-                    let points = path.data().points().len();
-                    bytes = bytes.saturating_add(points.saturating_mul(BYTES_PER_POINT));
-                }
-                usvg::Node::Text(text) => pending.push(text.flattened()),
-                usvg::Node::Image(image) => match image.kind() {
-                    usvg::ImageKind::SVG(tree) => pending.push(tree.root()),
-                    usvg::ImageKind::JPEG(data)
-                    | usvg::ImageKind::PNG(data)
-                    | usvg::ImageKind::GIF(data)
-                    | usvg::ImageKind::WEBP(data) => bytes = bytes.saturating_add(data.len()),
-                },
-            }
-        }
-    }
-    bytes
-}
-
 fn is_xlink_href(name: &QualName) -> bool {
     name.ns == ns!(xlink) && name.local == local_name!("href")
-}
-
-/// A `data:` image, decoded like a fetched one and always readable. `None` when
-/// the URL or image is invalid, or a raster would pass the remaining `budget`.
-fn decode_data_url(
-    url: &url::Url,
-    fonts: &crate::SvgFontDb,
-    budget: Option<&mut u64>,
-) -> Option<ImageData> {
-    let data = data_url::DataUrl::process(url.as_str()).ok()?;
-    let (body, _) = data.decode_to_vec().ok()?;
-    if let (Some(budget), Some(bytes)) = (budget, crate::net::bounded_rgba_bytes(&body)) {
-        *budget = budget.checked_sub(bytes)?;
-    }
-    let body = blitz_traits::net::Bytes::from(body);
-    if let Ok(image) = crate::net::decode_bounded(&body) {
-        let (width, height) = (image.width(), image.height());
-        let mut raster =
-            RasterImageData::new(width, height, Arc::new(image.into_rgba8().into_raw()));
-        raster.origin_clean = true;
-        return Some(ImageData::Raster(raster));
-    }
-    let mut svg = crate::util::parse_svg_image(&body, fonts).ok()?;
-    svg.origin_clean = true;
-    Some(ImageData::Svg(svg))
 }
 
 impl DocumentMutator<'_> {

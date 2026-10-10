@@ -372,6 +372,8 @@ pub struct BaseDocument {
     /// Cache of loaded images, keyed by URL and CORS setting. Allows reusing
     /// images across multiple elements without re-fetching from the network.
     pub(crate) image_cache: crate::image_cache::ImageCache,
+    /// Decoded image bytes this document and those sharing its memory retain.
+    pub(crate) image_budget: crate::DecodedImageBudget,
     /// SVG `feImage` requests and their queued updates.
     #[cfg(feature = "svg")]
     pub(crate) fe_images: crate::fe_image::FeImages,
@@ -577,6 +579,7 @@ impl BaseDocument {
             custom_element_reaction_overflow: false,
             deferred_construction_nodes: Vec::new(),
             image_cache: Default::default(),
+            image_budget: config.decoded_image_budget.unwrap_or_default(),
             #[cfg(feature = "svg")]
             fe_images: Default::default(),
             failed_image_inputs: HashMap::new(),

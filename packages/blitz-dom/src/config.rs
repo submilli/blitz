@@ -79,4 +79,8 @@ pub struct DocumentConfig {
     /// How deeply this document is nested within other documents
     /// (0 for a root document). Used to limit `<iframe>` nesting depth.
     pub subdocument_depth: usize,
+    /// The budget of decoded image bytes. Documents sharing one memory (a
+    /// page and its frames) should share one budget. Defaults to a new
+    /// budget of [`MAX_DECODED_IMAGE_BYTES`](crate::MAX_DECODED_IMAGE_BYTES).
+    pub decoded_image_budget: Option<crate::DecodedImageBudget>,
 }

@@ -589,18 +589,21 @@ pub struct ImageHandler {
     request_url: String,
     #[cfg_attr(not(feature = "svg"), allow(dead_code))]
     svg_fonts: crate::util::SvgFonts,
+    budget: crate::DecodedImageBudget,
 }
 impl ImageHandler {
-    /// `svg_fonts` is the document's, for text in SVG images.
+    /// `svg_fonts` (for text in SVG images) and `budget` are the document's.
     pub(crate) fn new(
         kind: ImageType,
         request_url: impl Into<String>,
         svg_fonts: crate::util::SvgFonts,
+        budget: crate::DecodedImageBudget,
     ) -> Self {
         Self {
             kind,
             request_url: request_url.into(),
             svg_fonts,
+            budget,
         }
     }
 }
@@ -641,15 +644,8 @@ const MAX_DECODED_SIDE: u32 = 16_384;
 const MAX_DECODE_ALLOCATION: u64 = 128 * 1024 * 1024;
 const MAX_RGBA_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Decode `bytes`, refusing images whose decoded or RGBA8 form exceeds
-/// its bound before any pixel buffer is allocated. `image::Limits` caps
-/// the side for every format and the PNG and GIF decoders' working memory;
-/// JPEG and WebP decoders ignore `max_alloc`, but their working memory is
-/// a few bytes per pixel, which the RGBA bound keeps near the same peak.
-/// The output buffer is checked here, as `ImageReader::decode` would.
 /// The RGBA bytes an encoded raster image decodes to, read from its header,
 /// when it is within the decode bounds; `None` when it is not or is unreadable.
-#[cfg(feature = "svg")]
 pub(crate) fn bounded_rgba_bytes(bytes: &[u8]) -> Option<u64> {
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -661,6 +657,12 @@ pub(crate) fn bounded_rgba_bytes(bytes: &[u8]) -> Option<u64> {
         .then_some(rgba)
 }
 
+/// Decode `bytes`, refusing images whose decoded or RGBA8 form exceeds
+/// its bound before any pixel buffer is allocated. `image::Limits` caps
+/// the side for every format and the PNG and GIF decoders' working memory;
+/// JPEG and WebP decoders ignore `max_alloc`, but their working memory is
+/// a few bytes per pixel, which the RGBA bound keeps near the same peak.
+/// The output buffer is checked here, as `ImageReader::decode` would.
 pub(crate) fn decode_bounded(bytes: &Bytes) -> image::ImageResult<image::DynamicImage> {
     use image::ImageDecoder;
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
@@ -677,6 +679,39 @@ pub(crate) fn decode_bounded(bytes: &Bytes) -> image::ImageResult<image::Dynamic
         ));
     }
     image::DynamicImage::from_decoder(decoder)
+}
+
+/// Why [`decode_charged`] produced no image.
+pub(crate) enum DecodeRefusal {
+    /// The image is readable but its pixels would pass the decoded image budget.
+    Budget,
+    /// The bytes are not a raster image within the decode bounds.
+    Image(image::ImageError),
+}
+
+/// [`decode_bounded`] within `budget`: the RGBA bytes are reserved from the
+/// header before any pixel buffer is allocated, and charged to the image.
+pub(crate) fn decode_charged(
+    bytes: &Bytes,
+    budget: &crate::DecodedImageBudget,
+) -> Result<RasterImageData, DecodeRefusal> {
+    let rgba = bounded_rgba_bytes(bytes).and_then(|rgba| usize::try_from(rgba).ok());
+    let reservation = match rgba {
+        Some(rgba) => Some(budget.reserve(rgba).ok_or(DecodeRefusal::Budget)?),
+        // Unreadable or out of bounds: decoding fails before allocating.
+        None => None,
+    };
+    let image = decode_bounded(bytes).map_err(DecodeRefusal::Image)?;
+    let (width, height) = (image.width(), image.height());
+    let raster = RasterImageData::new(width, height, Arc::new(image.into_rgba8().into_raw()));
+    let reservation = match reservation {
+        Some(reservation) => reservation,
+        None => budget
+            .reserve(raster.data.len())
+            .ok_or(DecodeRefusal::Budget)?,
+    };
+    reservation.track_raster(&raster);
+    Ok(raster)
 }
 
 fn decode_limits() -> image::Limits {
@@ -733,41 +768,48 @@ impl ImageHandler {
         origin_clean: bool,
         retention: crate::ImageRetention,
     ) -> Result<Resource, String> {
-        let image_err = match decode_bounded(&bytes) {
-            Ok(image) => {
-                let width = image.width();
-                let height = image.height();
-                let raw_rgba8_data = image.into_rgba8().into_raw();
-                let mut raster = RasterImageData::new(width, height, Arc::new(raw_rgba8_data));
-                raster.origin_clean = origin_clean;
-                return Ok(Resource::Image(
-                    self.kind,
-                    ImageData::Raster(raster),
-                    retention,
-                ));
-            }
-            Err(e) => e.to_string(),
-        };
-
-        #[cfg(feature = "svg")]
-        let svg_err = {
-            use crate::util::parse_svg_image;
-            match parse_svg_image(&bytes, &self.svg_fonts) {
-                Ok(mut svg) => {
-                    svg.origin_clean = origin_clean;
-                    return Ok(Resource::Image(self.kind, ImageData::Svg(svg), retention));
-                }
-                Err(e) => e.to_string(),
-            }
-        };
-        #[cfg(not(feature = "svg"))]
-        let svg_err = "svg feature disabled";
-
-        Err(format!(
-            "Could not parse image ({} bytes): image-crate error: {image_err}; svg fallback error: {svg_err}",
-            bytes.len()
-        ))
+        let image = decode_image(&bytes, origin_clean, &self.svg_fonts, &self.budget)?;
+        Ok(Resource::Image(self.kind, image, retention))
     }
+}
+
+/// Decode a raster image, or else parse an SVG document, charged to `budget`.
+/// The error describes why neither worked; it names no page content.
+#[cfg_attr(not(feature = "svg"), allow(unused_variables))]
+pub(crate) fn decode_image(
+    bytes: &Bytes,
+    origin_clean: bool,
+    svg_fonts: &crate::util::SvgFonts,
+    budget: &crate::DecodedImageBudget,
+) -> Result<ImageData, String> {
+    const BUDGET_EXHAUSTED: &str = "Decoded image budget exhausted";
+    let image_err = match decode_charged(bytes, budget) {
+        Ok(mut raster) => {
+            raster.origin_clean = origin_clean;
+            return Ok(ImageData::Raster(raster));
+        }
+        Err(DecodeRefusal::Budget) => return Err(BUDGET_EXHAUSTED.into()),
+        Err(DecodeRefusal::Image(e)) => e.to_string(),
+    };
+
+    #[cfg(feature = "svg")]
+    let svg_err = match crate::util::parse_svg_image(bytes, svg_fonts) {
+        Ok(mut svg) => {
+            if !budget.admit_svg(&svg) {
+                return Err(BUDGET_EXHAUSTED.into());
+            }
+            svg.origin_clean = origin_clean;
+            return Ok(ImageData::Svg(svg));
+        }
+        Err(e) => e.to_string(),
+    };
+    #[cfg(not(feature = "svg"))]
+    let svg_err = "svg feature disabled";
+
+    Err(format!(
+        "Could not parse image ({} bytes): image-crate error: {image_err}; svg fallback error: {svg_err}",
+        bytes.len()
+    ))
 }
 
 #[cfg(test)]

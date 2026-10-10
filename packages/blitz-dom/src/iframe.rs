@@ -75,6 +75,7 @@ impl BaseDocument {
             incremental: Some(self.incremental_layout),
             abort_signal: Some(abort_signal),
             clock: Some(self.clock.clone()),
+            decoded_image_budget: Some(self.image_budget.clone()),
             subdocument_depth: self.subdocument_depth + 1,
         }
     }
