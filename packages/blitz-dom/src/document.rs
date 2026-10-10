@@ -372,6 +372,9 @@ pub struct BaseDocument {
     /// Cache of loaded images, keyed by URL and CORS setting. Allows reusing
     /// images across multiple elements without re-fetching from the network.
     pub(crate) image_cache: HashMap<crate::image_request::ImageKey, ImageData>,
+    /// SVG `feImage` requests and their queued updates.
+    #[cfg(feature = "svg")]
+    pub(crate) fe_images: crate::fe_image::FeImages,
     pub(crate) failed_image_inputs: HashMap<NodeId, String>,
 
     /// Tracks in-flight image requests. When an image is being fetched, additional
@@ -574,6 +577,8 @@ impl BaseDocument {
             custom_element_reaction_overflow: false,
             deferred_construction_nodes: Vec::new(),
             image_cache: HashMap::new(),
+            #[cfg(feature = "svg")]
+            fe_images: Default::default(),
             failed_image_inputs: HashMap::new(),
             pending_images: HashMap::new(),
             current_image_requests: HashMap::new(),
@@ -1014,6 +1019,8 @@ impl BaseDocument {
     pub(crate) fn remove_node_from_tree(&mut self, node_id: NodeId) -> Option<Node> {
         self.forget_image_input(node_id);
         self.forget_image_element(node_id);
+        #[cfg(feature = "svg")]
+        self.forget_fe_image(node_id);
         self.clear_interaction_state_for_removed_node(node_id);
         self.changed_nodes.remove(&node_id);
         if let Some(node) = self.nodes.get(node_id) {
@@ -1560,6 +1567,11 @@ impl BaseDocument {
             if matches!(image_type, ImageType::Image) && !self.take_current_request(node_id, &key) {
                 continue;
             }
+            if matches!(image_type, ImageType::FilterImage) {
+                #[cfg(feature = "svg")]
+                self.fe_image_loaded(node_id, &key, Some(image.clone()));
+                continue;
+            }
             let Some(node) = self.get_node_mut(node_id) else {
                 continue;
             };
@@ -1577,12 +1589,14 @@ impl BaseDocument {
                     node.insert_damage(ALL_DAMAGE);
                     self.image_loaded(node_id, &key);
                 }
+                // Delivered above, before the node is borrowed.
+                ImageType::FilterImage => {}
                 ImageType::Background(idx) | ImageType::Mask(idx) => {
                     let layer_image = node.element_data_mut().and_then(|el| {
                         let images = match image_type {
                             ImageType::Background(_) => &mut el.background_images,
                             ImageType::Mask(_) => &mut el.mask_images,
-                            ImageType::Image => unreachable!(),
+                            ImageType::Image | ImageType::FilterImage => unreachable!(),
                         };
                         images.get_mut(idx)
                     });

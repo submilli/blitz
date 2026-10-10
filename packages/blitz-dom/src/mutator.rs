@@ -227,6 +227,8 @@ impl DocumentMutator<'_> {
             ..Default::default()
         };
         self.queue_image_update_if_sourced(id);
+        #[cfg(feature = "svg")]
+        self.fe_image_inserted(id);
 
         id
     }
@@ -392,6 +394,8 @@ impl DocumentMutator<'_> {
         let policy_before = self.img_referrer_policy(node_id, &name);
         self.img_source_changed(node_id, &name);
         self.set_attribute_inner(node_id, name.clone(), &value);
+        #[cfg(feature = "svg")]
+        self.fe_image_source_changed(node_id, &name);
         self.img_cors_setting_changed(node_id, cors_before);
         self.img_referrer_policy_changed(node_id, policy_before);
         self.doc.base_href_changed(node_id, &name);
@@ -607,6 +611,10 @@ impl DocumentMutator<'_> {
             self.img_source_changed(node_id, &name);
         }
         self.clear_attribute_inner(node_id, name.clone());
+        #[cfg(feature = "svg")]
+        if existed {
+            self.fe_image_source_changed(node_id, &name);
+        }
         self.img_cors_setting_changed(node_id, cors_before);
         self.img_referrer_policy_changed(node_id, policy_before);
         if existed {
@@ -1356,6 +1364,8 @@ impl<'doc> DocumentMutator<'doc> {
                 {
                     doc.record_custom_element_reaction(CustomElementReaction::Connected(node_id));
                 }
+                #[cfg(feature = "svg")]
+                doc.queue_fe_image_update(node_id);
                 let node = &mut doc.nodes[node_id];
                 node.flags.set(NodeFlags::IS_IN_DOCUMENT, true);
                 node.insert_damage(ALL_DAMAGE);
@@ -1456,6 +1466,8 @@ impl<'doc> DocumentMutator<'doc> {
                 doc.nodes[node_id]
                     .flags
                     .set(NodeFlags::IS_IN_DOCUMENT, false);
+                #[cfg(feature = "svg")]
+                doc.queue_fe_image_update(node_id);
 
                 // Clear any interaction state that references this node, running
                 // the usual teardown steps (unhover/unactive the surviving

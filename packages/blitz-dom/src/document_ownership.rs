@@ -53,8 +53,11 @@ impl DocumentMutator<'_> {
             if old_document == document {
                 continue;
             }
-            // Adoption is a relevant mutation of an `<img>`.
+            // Adoption is a relevant mutation of an `<img>`, and moves an
+            // `feImage`'s request to its new document.
             self.queue_image_update_if_sourced(id);
+            #[cfg(feature = "svg")]
+            self.fe_image_inserted(id);
             if matches!(
                 self.doc.custom_element_state(id),
                 crate::custom_elements::CustomElementState::Custom

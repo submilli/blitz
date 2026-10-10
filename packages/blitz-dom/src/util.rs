@@ -87,6 +87,9 @@ pub enum ImageType {
     Image,
     Background(usize),
     Mask(usize),
+    /// An SVG `feImage` element's `href`. Only built with the `svg` feature,
+    /// which fetches and delivers these.
+    FilterImage,
 }
 
 /// A point
@@ -184,17 +187,58 @@ pub fn walk_tree(indent: usize, node: &Node) {
     }
 }
 
-/// Parse an SVG image.
+/// Images an SVG document may nest (including within nested SVG images).
+#[cfg(feature = "svg")]
+const MAX_NESTED_SVG_IMAGES: usize = 16;
+/// Decoded bytes of the raster images one SVG document may nest. The renderer
+/// decodes them itself, so their headers are checked against this up front.
+#[cfg(feature = "svg")]
+const MAX_NESTED_SVG_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Parse an SVG image. Page-supplied SVG never reaches the network or the
+/// filesystem: nested images may only be `data:` URLs, a bounded number of them.
 #[cfg(feature = "svg")]
 pub(crate) fn parse_svg_image(
     source: &[u8],
     fonts: &crate::SvgFontDb,
 ) -> Result<crate::node::SvgImageData, usvg::Error> {
-    let options = usvg::Options {
+    crate::node::SvgImageData::from_data(source, &svg_options(fonts))
+}
+
+/// usvg options without ambient resource access. usvg's default string resolver
+/// reads paths from the filesystem; nested SVG documents forward only the data
+/// resolver, so its budgets cover every nesting level. Raster images stay
+/// encoded until a renderer decodes them, so only those whose headers fit the
+/// decode bounds and the shared byte budget are kept.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_options(fonts: &crate::SvgFontDb) -> usvg::Options<'static> {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    let nested = Arc::new(AtomicUsize::new(0));
+    let bytes = Arc::new(AtomicU64::new(0));
+    let decode = usvg::ImageHrefResolver::default_data_resolver();
+    usvg::Options {
         fontdb: Arc::clone(fonts),
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: Box::new(move |mime, data, options| {
+                if nested.fetch_add(1, Ordering::Relaxed) >= MAX_NESTED_SVG_IMAGES {
+                    return None;
+                }
+                let kind = decode(mime, data, options)?;
+                let encoded = match &kind {
+                    usvg::ImageKind::JPEG(data)
+                    | usvg::ImageKind::PNG(data)
+                    | usvg::ImageKind::GIF(data)
+                    | usvg::ImageKind::WEBP(data) => data,
+                    usvg::ImageKind::SVG(_) => return Some(kind),
+                };
+                let decoded = crate::net::bounded_rgba_bytes(encoded)?;
+                let total = bytes.fetch_add(decoded, Ordering::Relaxed) + decoded;
+                (total <= MAX_NESTED_SVG_IMAGE_BYTES).then_some(kind)
+            }),
+            resolve_string: Box::new(|_, _| None),
+        },
         ..Default::default()
-    };
-    crate::node::SvgImageData::from_data(source, &options)
+    }
 }
 
 pub trait ToColorColor {
@@ -214,6 +258,71 @@ impl ToColorColor for AbsoluteColor {
 #[cfg(all(test, feature = "svg"))]
 mod svg_tests {
     use super::parse_svg_image;
+
+    fn images(group: &usvg::Group) -> usize {
+        group
+            .children()
+            .iter()
+            .map(|node| match node {
+                usvg::Node::Image(_) => 1,
+                usvg::Node::Group(group) => images(group),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    /// usvg's default resolver reads `href` paths from the filesystem; page SVG
+    /// must not.
+    #[test]
+    fn svg_images_never_read_the_filesystem() {
+        let decode = |text| data_url::forgiving_base64::decode_to_vec(text).unwrap();
+        let path = std::env::temp_dir().join(format!("blitz-svg-{}.png", std::process::id()));
+        std::fs::write(&path, decode(PNG.as_bytes())).unwrap();
+        let svg = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><image href='{}' width='4' height='4'/><image href='data:image/png;base64,{PNG}' width='4' height='4'/></svg>",
+            path.display()
+        );
+        let parsed = parse_svg_image(svg.as_bytes(), &super::default_svg_fonts()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(images(parsed.tree.root()), 1, "only the data: image loads");
+    }
+
+    /// The renderer decodes nested raster images itself, so their headers
+    /// bound them first: sides past the decode limit, or images past the shared
+    /// byte budget, are dropped rather than decoded.
+    #[test]
+    fn nested_raster_images_are_bounded_by_their_headers() {
+        let image = |side: u32| {
+            let png = crate::net::declared_png(side);
+            let encoded =
+                percent_encoding::percent_encode(&png, percent_encoding::NON_ALPHANUMERIC);
+            format!("<image href='data:image/png,{encoded}' width='1' height='1'/>")
+        };
+        let parse = |body: String| {
+            let svg = format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>{body}</svg>"
+            );
+            let parsed = parse_svg_image(svg.as_bytes(), &super::default_svg_fonts()).unwrap();
+            images(parsed.tree.root())
+        };
+        assert_eq!(parse(image(65_536)), 0, "a side past the decode limit");
+        // Each 4096² image decodes to the whole 64 MiB budget.
+        assert_eq!(parse(image(4096).repeat(3)), 1);
+        assert_eq!(parse(image(16).repeat(3)), 3);
+    }
+
+    #[test]
+    fn nested_images_share_one_budget() {
+        let image = format!("<image href='data:image/png;base64,{PNG}' width='1' height='1'/>");
+        let svg = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>{}</svg>",
+            image.repeat(40)
+        );
+        let parsed = parse_svg_image(svg.as_bytes(), &super::default_svg_fonts()).unwrap();
+        assert_eq!(images(parsed.tree.root()), super::MAX_NESTED_SVG_IMAGES);
+    }
 
     #[test]
     fn missing_height_is_computed_from_width_and_viewbox_ratio() {

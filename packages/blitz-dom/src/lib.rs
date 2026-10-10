@@ -62,17 +62,26 @@ mod canvas_svg_attributes;
 #[cfg(feature = "svg")]
 mod canvas_svg_filter;
 #[cfg(feature = "svg")]
+mod canvas_svg_image;
+#[cfg(feature = "svg")]
 mod canvas_svg_units;
 pub mod caret;
 #[cfg(feature = "svg")]
+mod fe_image;
+#[cfg(feature = "svg")]
 pub use canvas_svg_filter::{CanvasSvgFilter, CanvasSvgLimit, ResolvedCanvasSvgFilter};
 #[cfg(feature = "svg")]
+pub use canvas_svg_image::{CanvasSvgElement, CanvasSvgImage, CanvasSvgImageSource};
+#[cfg(feature = "svg")]
 pub use canvas_svg_units::CanvasSvgUnits;
+#[cfg(feature = "svg")]
+pub use svgtypes::{Align as CanvasSvgAlign, AspectRatio as CanvasSvgAspectRatio};
 #[cfg(feature = "svg")]
 pub use usvg::filter as canvas_svg_types;
 #[cfg(feature = "svg")]
 pub use usvg::{
     BlendMode as CanvasSvgBlendMode, Color as CanvasSvgColor, NonZeroRect as CanvasSvgRect,
+    Tree as CanvasSvgTree,
 };
 mod canvas_font;
 mod canvas_style;

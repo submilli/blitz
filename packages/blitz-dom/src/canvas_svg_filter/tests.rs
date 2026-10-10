@@ -253,24 +253,131 @@ fn bounding_box_radii_cannot_overflow_the_parser() {
     assert!(morphology.radius_x().get().is_finite());
 }
 
-#[test]
-fn image_inputs_remain_unresolved() {
-    let (mut document, canvas, filter, _) = self::document();
-    let mut mutation = document.mutate();
-    let image = svg(
-        &mut mutation,
-        "feImage",
-        &[("href", "data:image/png;base64,AA==")],
-    );
-    mutation.append_children(filter, &[image]);
-    drop(mutation);
+/// Snapshot `filter`'s graph for `canvas` and resolve it against a 4×4 bitmap.
+fn resolved(document: &mut BaseDocument, canvas: NodeId) -> ResolvedCanvasSvgFilter {
+    document.flush_style_and_layout(0.0);
     let mut filters = document
         .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
         .unwrap();
     document
         .resolve_canvas_svg_filters(canvas, &mut filters)
         .unwrap();
-    assert!(filters.svg[0].is_none());
+    filters.svg[0]
+        .as_ref()
+        .expect("feImage graphs resolve")
+        .resolve([0.0, 0.0, 4.0, 4.0], [4, 4])
+        .unwrap()
+}
+
+#[test]
+fn image_inputs_capture_their_source_aspect_and_taint() {
+    use crate::canvas_svg_image::CanvasSvgImageSource as Source;
+    let (mut document, canvas, filter, matrix) = self::document();
+    let mut mutation = document.mutate();
+    mutation.remove_node(matrix);
+    // A 1×1 PNG, padded past the 4096-unit bound on serialized attributes.
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let href = format!("data:image/png;base64,{png}{}", " ".repeat(5000));
+    let image = svg(
+        &mut mutation,
+        "feImage",
+        &[
+            ("href", &href),
+            ("x", "1"),
+            ("width", "2"),
+            ("preserveAspectRatio", "xMinYMax slice"),
+            ("result", "i"),
+        ],
+    );
+    let element = svg(&mut mutation, "feImage", &[("href", "#shape")]);
+    let missing = svg(&mut mutation, "feImage", &[]);
+    let pending = svg(
+        &mut mutation,
+        "feImage",
+        &[("href", "https://cdn.test/a.png")],
+    );
+    mutation.append_children(filter, &[image, element, missing, pending]);
+    let shape = svg(
+        &mut mutation,
+        "rect",
+        &[
+            ("id", "shape"),
+            ("width", "2"),
+            ("height", "2"),
+            ("fill", "lime"),
+        ],
+    );
+    let parent = mutation.doc.nodes[filter].parent.unwrap();
+    mutation.append_children(parent, &[shape]);
+    drop(mutation);
+
+    let resolved = resolved(&mut document, canvas);
+    let primitives = resolved.filter.primitives();
+    assert_eq!(primitives.len(), 4);
+    // The parser sees each `feImage` as a transparent flood over its subregion.
+    let usvg::filter::Kind::Flood(flood) = primitives[0].kind() else {
+        panic!("feImage without its href");
+    };
+    assert_eq!(flood.opacity().get(), 0.0);
+    let rect = primitives[0].rect();
+    assert_eq!((rect.x(), rect.width()), (1.0, 2.0));
+    assert_eq!(primitives[0].result(), "i");
+
+    let image = resolved.image(0).unwrap();
+    assert!(matches!(&image.source, Source::Raster(raster) if raster.width == 1));
+    assert_eq!(
+        (image.aspect.align, image.aspect.slice),
+        (svgtypes::Align::XMinYMax, true)
+    );
+    assert!(!resolved.tainted(0), "data: images are readable");
+    let Source::Element(element) = &resolved.image(1).unwrap().source else {
+        panic!("element references capture the element");
+    };
+    assert!(element.tree.root().has_children());
+    assert_eq!((element.bounds.x(), element.bounds.width()), (0.0, 2.0));
+    assert!(resolved.tainted(1), "element references taint");
+    assert!(matches!(resolved.image(2).unwrap().source, Source::None));
+    assert!(resolved.tainted(2), "an feImage without an image taints");
+    assert!(matches!(resolved.image(3).unwrap().source, Source::None));
+    assert!(
+        !resolved.tainted(3),
+        "a pending fetch draws nothing readable"
+    );
+}
+
+#[test]
+fn element_references_bound_their_serialized_subtree() {
+    let (mut document, canvas, filter, matrix) = self::document();
+    let mut mutation = document.mutate();
+    mutation.remove_node(matrix);
+    let image = svg(&mut mutation, "feImage", &[("href", "#group")]);
+    mutation.append_children(filter, &[image]);
+    let parent = mutation.doc.nodes[filter].parent.unwrap();
+    let group = svg(&mut mutation, "g", &[("id", "group")]);
+    mutation.append_children(parent, &[group]);
+    for _ in 0..2000 {
+        let child = svg(&mut mutation, "rect", &[]);
+        mutation.append_children(group, &[child]);
+    }
+    drop(mutation);
+    document.flush_style_and_layout(0.0);
+    let mut filters = document
+        .canvas_filters(canvas, "url(#effect)", &CanvasFont::default())
+        .unwrap();
+    document
+        .resolve_canvas_svg_filters(canvas, &mut filters)
+        .unwrap();
+    let resolved = filters.svg[0]
+        .as_ref()
+        .unwrap()
+        .resolve([0.0, 0.0, 4.0, 4.0], [4, 4])
+        .unwrap();
+    // Past the bounds the reference draws nothing, and still taints.
+    assert!(matches!(
+        resolved.image(0).unwrap().source,
+        crate::canvas_svg_image::CanvasSvgImageSource::None
+    ));
+    assert!(resolved.tainted(0));
 }
 
 #[test]
@@ -444,4 +551,75 @@ fn empty_sizes_empty_primitives_and_ignore_filters() {
         .resolve_canvas_svg_filters(canvas, &mut filters)
         .unwrap();
     assert!(filters.svg[0].is_none());
+}
+
+#[test]
+fn element_references_leave_out_use_and_non_xml_names() {
+    use crate::canvas_svg_image::CanvasSvgImageSource as Source;
+    let (mut document, canvas, filter, matrix) = self::document();
+    let mut mutation = document.mutate();
+    mutation.remove_node(matrix);
+    let image = svg(&mut mutation, "feImage", &[("href", "#group")]);
+    mutation.append_children(filter, &[image]);
+    let parent = mutation.doc.nodes[filter].parent.unwrap();
+    let group = svg(&mut mutation, "g", &[("id", "group")]);
+    let rect = svg(
+        &mut mutation,
+        "rect",
+        &[("width", "2"), ("height", "2"), ("a\"b", "1"), ("p:q", "1")],
+    );
+    let reuse = svg(&mut mutation, "use", &[("href", "#group")]);
+    mutation.append_children(parent, &[group]);
+    mutation.append_children(group, &[rect, reuse]);
+    drop(mutation);
+    let resolved = resolved(&mut document, canvas);
+    let Source::Element(element) = &resolved.image(0).unwrap().source else {
+        panic!("the element still parses");
+    };
+    let group = match element.tree.root().children() {
+        [usvg::Node::Group(group)] => group,
+        children => panic!("{children:?}"),
+    };
+    assert!(matches!(group.children(), [usvg::Node::Path(_)]));
+}
+
+/// `url(#id)` names the document itself whatever its base URL, as CSS local
+/// URLs do; other URLs still resolve against the base.
+#[test]
+fn fragment_references_ignore_the_base_url() {
+    let (mut document, canvas, _, _) = self::document();
+    let mut mutation = document.mutate();
+    let html = mutation.doc.root_element().id;
+    let base = mutation.create_element(qual_name!("base", html), vec![]);
+    mutation.set_attribute(base, qual_name!("href"), "https://cdn.test/assets/");
+    mutation.append_children(html, &[base]);
+    drop(mutation);
+    document.flush_style_and_layout(0.0);
+    let mut filters = document
+        .canvas_filters(
+            canvas,
+            "url(#effect) url(other#effect)",
+            &CanvasFont::default(),
+        )
+        .unwrap();
+    let references: Vec<_> = filters
+        .operations
+        .iter()
+        .map(|operation| match operation {
+            crate::CanvasFilter::Reference(url) => url.as_str(),
+            _ => panic!("a reference"),
+        })
+        .collect();
+    assert_eq!(
+        references,
+        [
+            "https://example.test/page#effect",
+            "https://cdn.test/assets/other#effect"
+        ]
+    );
+    document
+        .resolve_canvas_svg_filters(canvas, &mut filters)
+        .unwrap();
+    assert!(filters.svg[0].is_some());
+    assert!(filters.svg[1].is_none());
 }

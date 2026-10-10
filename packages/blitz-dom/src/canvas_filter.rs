@@ -87,13 +87,58 @@ impl BaseDocument {
         if filters.len() > 32 {
             return None;
         }
-        let operations = filters.iter().map(convert).collect::<Option<Vec<_>>>()?;
+        let mut operations = filters.iter().map(convert).collect::<Option<Vec<_>>>()?;
+        self.localize_fragment_references(node, &declarations, &mut operations);
         Some(CanvasFilters {
             serialized: text.into(),
             operations,
             #[cfg(feature = "svg")]
             svg: Vec::new(),
         })
+    }
+}
+
+impl BaseDocument {
+    /// A fragment-only `url(#id)` names the document itself whatever its base
+    /// URL (<https://drafts.csswg.org/css-values/#local-urls>), so such
+    /// references resolve against the document URL instead.
+    fn localize_fragment_references(
+        &self,
+        node: NodeId,
+        declarations: &style::properties::PropertyDeclarationBlock,
+        operations: &mut [CanvasFilter],
+    ) {
+        let specified =
+            declarations
+                .declarations()
+                .iter()
+                .find_map(|declaration| match declaration {
+                    style::properties::PropertyDeclaration::Filter(list) => Some(list),
+                    _ => None,
+                });
+        let Some(specified) = specified else {
+            return;
+        };
+        let fragments = specified.0.iter().filter_map(|filter| match filter {
+            style::values::generics::effects::Filter::Url(url) => Some(url.is_fragment()),
+            _ => None,
+        });
+        let references = operations
+            .iter_mut()
+            .filter_map(|operation| match operation {
+                CanvasFilter::Reference(url) => Some(url),
+                _ => None,
+            });
+        for (reference, fragment) in references.zip(fragments) {
+            let Ok(resolved) = url::Url::parse(reference) else {
+                continue;
+            };
+            if fragment {
+                let mut local = self.document_url(node);
+                local.set_fragment(resolved.fragment());
+                *reference = local.into();
+            }
+        }
     }
 }
 

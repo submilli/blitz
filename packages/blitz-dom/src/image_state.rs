@@ -186,6 +186,10 @@ impl BaseDocument {
 
     /// Whether [`Self::run_image_updates`] has work at `stage`.
     pub fn has_image_updates(&self, stage: ImageUpdateStage) -> bool {
+        #[cfg(feature = "svg")]
+        if self.fe_images.has_updates() {
+            return true;
+        }
         match stage {
             ImageUpdateStage::Immediate => !self.images.fresh.is_empty(),
             ImageUpdateStage::StableState => {
@@ -207,6 +211,9 @@ impl BaseDocument {
         stage: ImageUpdateStage,
         is_active: impl Fn(NodeId) -> bool,
     ) {
+        // `feImage` requests wait for no microtask: they run at either stage.
+        #[cfg(feature = "svg")]
+        self.run_fe_image_updates(&is_active);
         let mut queued = std::mem::take(&mut self.images.fresh);
         if stage == ImageUpdateStage::StableState {
             queued.splice(0..0, std::mem::take(&mut self.images.deferred));

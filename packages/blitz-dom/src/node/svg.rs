@@ -72,6 +72,8 @@ pub struct SvgImageData {
     pub tree: Arc<usvg::Tree>,
     /// The dimensions declared on the root `<svg>` element.
     pub intrinsic_dimensions: SvgIntrinsicDimensions,
+    /// Readback authority travels with the image, as for [`super::RasterImageData`].
+    pub origin_clean: bool,
 }
 
 impl SvgImageData {
@@ -102,6 +104,7 @@ impl SvgImageData {
         Ok(Self {
             tree: Arc::new(tree),
             intrinsic_dimensions: SvgIntrinsicDimensions::from_xmltree(&doc),
+            origin_clean: false,
         })
     }
 

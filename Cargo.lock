@@ -905,6 +905,7 @@ dependencies = [
  "color",
  "cssparser",
  "cursor-icon",
+ "data-url",
  "debug_timer 0.1.3",
  "euclid",
  "html-escape",

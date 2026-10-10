@@ -643,7 +643,21 @@ const MAX_RGBA_BYTES: u64 = 64 * 1024 * 1024;
 /// JPEG and WebP decoders ignore `max_alloc`, but their working memory is
 /// a few bytes per pixel, which the RGBA bound keeps near the same peak.
 /// The output buffer is checked here, as `ImageReader::decode` would.
-fn decode_bounded(bytes: &Bytes) -> image::ImageResult<image::DynamicImage> {
+/// The RGBA bytes an encoded raster image decodes to, read from its header,
+/// when it is within the decode bounds; `None` when it is not or is unreadable.
+#[cfg(feature = "svg")]
+pub(crate) fn bounded_rgba_bytes(bytes: &[u8]) -> Option<u64> {
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(decode_limits());
+    let (width, height) = reader.into_dimensions().ok()?;
+    let rgba = u64::from(width) * u64::from(height) * 4;
+    (width <= MAX_DECODED_SIDE && height <= MAX_DECODED_SIDE && rgba <= MAX_RGBA_BYTES)
+        .then_some(rgba)
+}
+
+pub(crate) fn decode_bounded(bytes: &Bytes) -> image::ImageResult<image::DynamicImage> {
     use image::ImageDecoder;
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -730,7 +744,10 @@ impl ImageHandler {
         let svg_err = {
             use crate::util::parse_svg_image;
             match parse_svg_image(&bytes, &self.svg_fonts) {
-                Ok(svg) => return Ok(Resource::Svg(self.kind, svg)),
+                Ok(mut svg) => {
+                    svg.origin_clean = origin_clean;
+                    return Ok(Resource::Svg(self.kind, svg));
+                }
                 Err(e) => e.to_string(),
             }
         };

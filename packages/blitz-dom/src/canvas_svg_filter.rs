@@ -1,6 +1,7 @@
 //! Live DOM filter snapshots. SVG parsing and unit resolution stay in the engine.
 
 use crate::canvas_svg_attributes::{Attribute, chrome_attribute};
+use crate::canvas_svg_image::CanvasSvgImage;
 use crate::canvas_svg_units::CanvasSvgUnits;
 use crate::{BaseDocument, CanvasFilter, CanvasFilters, NodeId};
 use std::borrow::Cow;
@@ -11,6 +12,8 @@ const MAX_VISITS: usize = 4096;
 const MAX_NODES: usize = 64;
 const MAX_MARKUP: usize = 16 * 1024;
 const SNAPSHOT_ID: &str = "canvas-filter";
+/// A primitive's subregion attributes, in the order of `Primitive::subregion`.
+const SUBREGION: [&str; 4] = ["x", "y", "width", "height"];
 /// Blink's largest font size, in pixels.
 const MAX_FONT_SIZE: f32 = 10_000.0;
 
@@ -29,14 +32,20 @@ pub struct CanvasSvgFilter {
 pub struct CanvasSvgLimit;
 
 /// Facts about one primitive that the parsed filter does not record.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct Primitive {
-    /// Its own paint depends on currentColor. Chrome taints a canvas only when
-    /// such paint reaches the filter output, and passes displacement through
-    /// when its map is tainted.
+    /// Its own result taints: currentColor paint, or an `feImage` that is not a
+    /// readable fetched image. Chrome taints a canvas only when such a result
+    /// reaches the filter output, and passes displacement through when its map
+    /// is tainted.
     tainted: bool,
     /// A nonpositive width or height made its subregion empty.
     empty_region: bool,
+    /// Which of `x`, `y`, `width` and `height` it sets; the parser gives the
+    /// rest the filter region's values.
+    subregion: [bool; 4],
+    /// What an `feImage` draws; the parser sees it without its `href`.
+    image: Option<CanvasSvgImage>,
 }
 
 /// A parsed snapshot paired with what the parser does not carry.
@@ -63,6 +72,23 @@ impl ResolvedCanvasSvgFilter {
         self.primitives
             .get(index)
             .is_some_and(|primitive| primitive.empty_region)
+    }
+
+    /// Which of `x`, `y`, `width` and `height` primitive `index` leaves to their
+    /// defaults. The parser resolves them from the filter region, while Chrome
+    /// defaults a primitive with inputs to the union of their subregions
+    /// (<https://drafts.fxtf.org/filter-effects/#FilterPrimitiveSubRegion>).
+    /// An unrecorded primitive keeps the parser's values.
+    pub fn defaulted_subregion(&self, index: usize) -> [bool; 4] {
+        self.primitives
+            .get(index)
+            .map_or([false; 4], |primitive| primitive.subregion.map(|set| !set))
+    }
+
+    /// What primitive `index` draws when it is an `feImage`. The parser turns an
+    /// `feImage` without its `href` into a transparent flood.
+    pub fn image(&self, index: usize) -> Option<&CanvasSvgImage> {
+        self.primitives.get(index)?.image.as_ref()
     }
 }
 
@@ -117,9 +143,10 @@ impl BaseDocument {
         filters: &mut CanvasFilters,
     ) -> Result<(), CanvasSvgLimit> {
         let mut snapshots = Vec::with_capacity(filters.operations.len());
+        let mut inline = crate::fe_image::InlineDecodes::default();
         for operation in &filters.operations {
             snapshots.push(match operation {
-                CanvasFilter::Reference(url) => self.canvas_svg_filter(owner, url)?,
+                CanvasFilter::Reference(url) => self.canvas_svg_filter(owner, url, &mut inline)?,
                 _ => None,
             });
         }
@@ -131,6 +158,7 @@ impl BaseDocument {
         &self,
         owner: NodeId,
         reference: &str,
+        inline: &mut crate::fe_image::InlineDecodes,
     ) -> Result<Option<CanvasSvgFilter>, CanvasSvgLimit> {
         let Ok(url) = url::Url::parse(reference) else {
             return Ok(None);
@@ -146,13 +174,15 @@ impl BaseDocument {
             return Err(CanvasSvgLimit);
         }
         let id = percent_encoding::percent_decode_str(fragment).decode_utf8_lossy();
-        let Some(filter) = self.find_canvas_filter(owner, &id)? else {
+        let Some(filter) = self.find_svg_reference(owner, &id)? else {
             return Ok(None);
         };
-        self.snapshot_canvas_filter(filter)
+        self.snapshot_canvas_filter(filter, inline)
     }
 
-    fn find_canvas_filter(
+    /// The first element with ID `id` in `owner`'s tree: its shadow tree, or its
+    /// document.
+    pub(crate) fn find_svg_reference(
         &self,
         owner: NodeId,
         id: &str,
@@ -204,6 +234,7 @@ impl BaseDocument {
     fn snapshot_canvas_filter(
         &self,
         filter: NodeId,
+        inline: &mut crate::fe_image::InlineDecodes,
     ) -> Result<Option<CanvasSvgFilter>, CanvasSvgLimit> {
         let Some(element) = self.nodes[filter].element_data() else {
             return Ok(None);
@@ -235,8 +266,8 @@ impl BaseDocument {
             if nodes > MAX_NODES || pending.len() + node.children.len() > MAX_NODES * 2 {
                 return Err(CanvasSvgLimit);
             }
-            // No geometry, scripts, nested documents or resource-bearing primitives
-            // can enter the synthetic parser document.
+            // No geometry, scripts or nested documents can enter the synthetic
+            // parser document; `feImage` resources are captured separately.
             if !allowed_tag(tag) {
                 return Ok(None);
             }
@@ -244,12 +275,14 @@ impl BaseDocument {
             if node_id == filter {
                 writer.push(&format!(" id=\"{SNAPSHOT_ID}\""))?;
             }
-            let Written { empty_region } =
-                match writer.attributes(element, tag, node_id == filter)? {
-                    Element::Written(written) => written,
-                    Element::Unresolvable => return Ok(None),
-                };
-            let tainted = match node
+            let Written {
+                empty_region,
+                subregion,
+            } = match writer.attributes(element, tag, node_id == filter)? {
+                Element::Written(written) => written,
+                Element::Unresolvable => return Ok(None),
+            };
+            let mut tainted = match node
                 .primary_styles()
                 .map(|s| s.clone())
                 .or_else(|| self.resolve_undisplayed_style(node_id))
@@ -258,9 +291,18 @@ impl BaseDocument {
                 None => false,
             };
             if node.parent == Some(filter) && is_primitive(tag) {
+                let image = if tag == "feImage" {
+                    let (image, image_taints) = self.snapshot_fe_image(node_id, inline)?;
+                    tainted |= image_taints;
+                    Some(image)
+                } else {
+                    None
+                };
                 writer.snapshot.primitives.push(Primitive {
                     tainted,
                     empty_region,
+                    subregion,
+                    image,
                 });
             }
             writer.push(">")?;
@@ -280,6 +322,8 @@ enum Element {
 
 struct Written {
     empty_region: bool,
+    /// Which of `x`, `y`, `width` and `height` the element sets.
+    subregion: [bool; 4],
 }
 
 /// Serializes one snapshot within its markup and attribute budgets.
@@ -291,19 +335,11 @@ struct Writer {
 
 impl Writer {
     fn push(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
-        if self.snapshot.markup.len() + text.len() > MAX_MARKUP {
-            return Err(CanvasSvgLimit);
-        }
-        self.snapshot.markup.push_str(text);
-        Ok(())
+        push_bounded(&mut self.snapshot.markup, text, MAX_MARKUP)
     }
 
     fn push_escaped(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
-        if self.snapshot.markup.len() + text.len() * 6 > MAX_MARKUP {
-            return Err(CanvasSvgLimit);
-        }
-        escape(&mut self.snapshot.markup, text);
-        Ok(())
+        push_escaped_bounded(&mut self.snapshot.markup, text, MAX_MARKUP)
     }
 
     /// Write the element's own attributes as Chrome reads them. Presentation
@@ -316,6 +352,7 @@ impl Writer {
     ) -> Result<Element, CanvasSvgLimit> {
         let mut written = Written {
             empty_region: false,
+            subregion: [false; 4],
         };
         for attr in element.attrs() {
             self.attributes += 1;
@@ -340,7 +377,12 @@ impl Writer {
             {
                 continue;
             }
+            // `feImage` sources are captured with the snapshot, never resolved by
+            // the parser.
             if name == "href" {
+                if tag == "feImage" {
+                    continue;
+                }
                 return Ok(Element::Unresolvable);
             }
             if attr.value.utf16_len_bound() > 4096 {
@@ -353,6 +395,7 @@ impl Writer {
             if is_filter && name == "primitiveUnits" {
                 self.snapshot.bounding_box_units = value == "objectBoundingBox";
             }
+            let axis = SUBREGION.iter().position(|axis| *axis == name);
             let value: Cow<'_, str> = match chrome_attribute(tag, name, value) {
                 Attribute::Keep(value) => Cow::Borrowed(value),
                 Attribute::Replace(value) => Cow::Owned(value),
@@ -361,9 +404,15 @@ impl Writer {
                 Attribute::EmptySize if is_filter => return Ok(Element::Unresolvable),
                 Attribute::EmptySize => {
                     written.empty_region = true;
+                    if let Some(axis) = axis {
+                        written.subregion[axis] = true;
+                    }
                     continue;
                 }
             };
+            if let Some(axis) = axis {
+                written.subregion[axis] = true;
+            }
             self.push(&format!(" {name}=\""))?;
             self.push_escaped(&value)?;
             self.push("\"")?;
@@ -415,7 +464,7 @@ impl Writer {
     }
 }
 
-fn svg_color(color: &style::color::AbsoluteColor) -> String {
+pub(crate) fn svg_color(color: &style::color::AbsoluteColor) -> String {
     use crate::util::ToColorColor;
     let color = color.as_color_color();
     let [r, g, b, a] = color.components;
@@ -456,6 +505,7 @@ fn allowed_tag(tag: &str) -> bool {
             | "feDistantLight"
             | "fePointLight"
             | "feSpotLight"
+            | "feImage"
     )
 }
 
@@ -475,18 +525,49 @@ fn is_primitive(tag: &str) -> bool {
         )
 }
 
+/// Append `text` to `out` unless that would pass `max` bytes.
+pub(crate) fn push_bounded(out: &mut String, text: &str, max: usize) -> Result<(), CanvasSvgLimit> {
+    if out.len() + text.len() > max {
+        return Err(CanvasSvgLimit);
+    }
+    out.push_str(text);
+    Ok(())
+}
+
+/// Append `text` escaped for an attribute value or text, unless that would
+/// pass `max` bytes. The escaped length is counted with the same table.
+pub(crate) fn push_escaped_bounded(
+    out: &mut String,
+    text: &str,
+    max: usize,
+) -> Result<(), CanvasSvgLimit> {
+    let escaped: usize = text
+        .chars()
+        .map(|ch| entity(ch).map_or(ch.len_utf8(), str::len))
+        .sum();
+    if out.len() + escaped > max {
+        return Err(CanvasSvgLimit);
+    }
+    escape(out, text);
+    Ok(())
+}
+
+fn entity(ch: char) -> Option<&'static str> {
+    match ch {
+        '&' => Some("&amp;"),
+        '<' => Some("&lt;"),
+        '>' => Some("&gt;"),
+        '"' => Some("&quot;"),
+        _ => None,
+    }
+}
+
 fn escape(output: &mut String, text: &str) {
     for ch in text.chars() {
-        output.push_str(match ch {
-            '&' => "&amp;",
-            '<' => "&lt;",
-            '>' => "&gt;",
-            '"' => "&quot;",
-            _ => {
-                output.push(ch);
-                continue;
-            }
-        });
+        match entity(ch) {
+            Some(entity) => output.push_str(entity),
+            None => output.push(ch),
+        }
     }
 }
 

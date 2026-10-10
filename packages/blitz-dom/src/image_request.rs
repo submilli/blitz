@@ -34,7 +34,7 @@ impl ImageKey {
 /// Decoded images kept for reuse. A page can reference unboundedly many
 /// URLs, each under three CORS settings; past these limits images are not
 /// cached, and later elements fetch them again.
-const MAX_CACHED_IMAGES: usize = 512;
+pub(crate) const MAX_CACHED_IMAGES: usize = 512;
 const MAX_CACHED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) struct PendingImage {
@@ -68,6 +68,10 @@ impl Waiters {
             *next += 1;
             *next
         });
+    }
+
+    pub fn contains(&self, waiter: &(NodeId, ImageType)) -> bool {
+        self.entries.contains_key(waiter)
     }
 
     pub fn remove(&mut self, waiter: &(NodeId, ImageType)) {
@@ -188,6 +192,10 @@ impl BaseDocument {
                 self.break_image(id);
                 self.image_failed(id, &key);
             }
+            #[cfg(feature = "svg")]
+            if matches!(kind, ImageType::FilterImage) {
+                self.fe_image_loaded(id, &key, None);
+            }
         }
         waiters
     }
@@ -296,7 +304,7 @@ impl DocumentMutator<'_> {
     }
 }
 
-fn decoded_bytes(image: &ImageData) -> usize {
+pub(crate) fn decoded_bytes(image: &ImageData) -> usize {
     match image {
         ImageData::Raster(raster) => raster.data.data().len(),
         // Parsed SVG trees are bounded by the SVG parser and count toward
