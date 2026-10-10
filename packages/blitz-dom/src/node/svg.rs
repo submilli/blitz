@@ -81,6 +81,9 @@ pub struct SvgImageData {
     pub intrinsic_dimensions: SvgIntrinsicDimensions,
     /// Readback authority travels with the image, as for [`super::RasterImageData`].
     pub origin_clean: bool,
+    /// What keeping the document costs the decoded image budget, estimated
+    /// once at parse (see [`crate::svg_bounds::retained_bytes`]).
+    pub(crate) retained_bytes: usize,
 }
 
 impl SvgImageData {
@@ -88,17 +91,10 @@ impl SvgImageData {
     /// [`usvg::Tree`] and the declared root dimensions from a single XML
     /// parse.
     ///
-    /// Like [`usvg::Tree::from_data`], gzip-compressed data (SVGZ) is
-    /// decompressed first, here within [`MAX_SVG_SOURCE_BYTES`].
+    /// Unlike [`usvg::Tree::from_data`], `data` is never inflated: page data
+    /// is parsed through `svg_bounds::parse_svg_image`, which inflates SVGZ within
+    /// its bounds first.
     pub fn from_data(data: &[u8], options: &usvg::Options) -> Result<Self, usvg::Error> {
-        let decompressed;
-        let data = if is_svgz(data) {
-            decompressed = inflate_svgz(data)?;
-            decompressed.as_slice()
-        } else {
-            data
-        };
-
         let text = std::str::from_utf8(data).map_err(|_| usvg::Error::NotAnUtf8Str)?;
         let xml_options = roxmltree::ParsingOptions {
             allow_dtd: true,
@@ -108,6 +104,7 @@ impl SvgImageData {
             .map_err(usvg::Error::ParsingFailed)?;
         let tree = usvg::Tree::from_xmltree(&doc, options)?;
         Ok(Self {
+            retained_bytes: crate::svg_bounds::retained_bytes(&tree),
             tree: Arc::new(tree),
             intrinsic_dimensions: SvgIntrinsicDimensions::from_xmltree(&doc),
             origin_clean: false,
@@ -231,30 +228,4 @@ impl SvgImageData {
             }
         }
     }
-}
-
-/// The SVG source an SVGZ image may inflate to. A few hundred kilobytes of
-/// gzip inflate a thousandfold; usvg's own `decompress_svgz` has no bound.
-/// Uncompressed responses are bounded by the host's response limit, which
-/// this matches.
-pub(crate) const MAX_SVG_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
-
-/// Whether `data` starts with the gzip magic bytes, as usvg detects SVGZ.
-pub(crate) fn is_svgz(data: &[u8]) -> bool {
-    data.starts_with(&[0x1f, 0x8b])
-}
-
-/// Inflate SVGZ `data`, failing past [`MAX_SVG_SOURCE_BYTES`] before
-/// allocating more.
-pub(crate) fn inflate_svgz(data: &[u8]) -> Result<Vec<u8>, usvg::Error> {
-    use std::io::Read;
-    let mut inflated = Vec::new();
-    flate2::read::GzDecoder::new(data)
-        .take(MAX_SVG_SOURCE_BYTES + 1)
-        .read_to_end(&mut inflated)
-        .map_err(|_| usvg::Error::MalformedGZip)?;
-    if inflated.len() as u64 > MAX_SVG_SOURCE_BYTES {
-        return Err(usvg::Error::ElementsLimitReached);
-    }
-    Ok(inflated)
 }

@@ -11,20 +11,25 @@
 //! Chrome has no such limit: it discards decoded images under memory pressure
 //! and decodes them again when they are painted. A guest cannot do that
 //! without keeping every encoded body, so past the budget images break instead.
-use crate::node::RasterImageData;
+use crate::node::{ImageData, RasterImageData};
 use linebender_resource_handle::WeakBlob;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-/// Decoded bytes all documents sharing a budget may retain. Each image costs
-/// up to twice its charge at its peak: a decode's own working memory (at most
-/// 128 MiB besides the RGBA image it reserves, see `image_decode::decode_bounded`), or
-/// the premultiplied copy a CPU renderer makes of every raster a frame paints.
-/// Images therefore stay within 256 MiB of a 512 MiB guest.
+/// Decoded bytes all documents sharing a budget may retain. Images peak at
+/// twice this in a guest, which decodes and paints on one thread: during a
+/// decode, by its working memory (at most 128 MiB besides the RGBA image it
+/// reserves, see `image_decode`), and during a paint, by the premultiplied
+/// copy a CPU renderer makes of every raster it draws. Images therefore stay
+/// within 256 MiB of a 512 MiB guest.
 pub const MAX_DECODED_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 
 /// The least an image is charged: its allocations and ledger entry, so many
 /// tiny images still count.
 pub(crate) const MIN_CHARGE: usize = 64;
+
+/// Cached images a budget keeps alive at once; see [`DecodedImageBudget::pin`].
+const MAX_PINS: usize = 4096;
 
 /// Entries tracked before the first prune of dropped images; later prunes run
 /// when the entries have doubled since the last, so pruning is amortized.
@@ -63,6 +68,7 @@ impl DecodedImageBudget {
             entries: Vec::new(),
             pruned_len: 0,
             pressure: 0,
+            pins: VecDeque::new(),
         })))
     }
 
@@ -92,9 +98,14 @@ impl DecodedImageBudget {
         ledger.pressure = ledger.pressure.saturating_add(bytes as u64);
         if !ledger.fits(bytes) {
             ledger.prune();
-            if !ledger.fits(bytes) {
-                return None;
-            }
+        }
+        if !ledger.fits(bytes) && !ledger.pins.is_empty() {
+            // Cached images nothing shows give way before a decode is refused.
+            ledger.pins.clear();
+            ledger.prune();
+        }
+        if !ledger.fits(bytes) {
+            return None;
         }
         ledger.reserved += bytes;
         Some(Reservation {
@@ -107,11 +118,21 @@ impl DecodedImageBudget {
     /// exists. `false` when it does not fit, and it must then be dropped.
     #[cfg(feature = "svg")]
     pub(crate) fn admit_svg(&self, svg: &crate::node::SvgImageData) -> bool {
-        let Some(reservation) = self.reserve(svg_retained_bytes(&svg.tree)) else {
+        let Some(reservation) = self.reserve(svg.retained_bytes) else {
             return false;
         };
         reservation.charge(WeakImage::Svg(Arc::downgrade(&svg.tree)));
         true
+    }
+
+    /// Keep a cached `image` alive although nothing holds it, until a
+    /// reservation needs the memory; the oldest pins go past [`MAX_PINS`].
+    pub(crate) fn pin(&self, image: &ImageData) {
+        let mut ledger = self.ledger();
+        if ledger.pins.len() >= MAX_PINS {
+            ledger.pins.pop_front();
+        }
+        ledger.pins.push_back(image.clone());
     }
 
     fn ledger(&self) -> MutexGuard<'_, Ledger> {
@@ -165,6 +186,8 @@ struct Ledger {
     pruned_len: usize,
     /// See [`DecodedImageBudget::pressure`].
     pressure: u64,
+    /// See [`DecodedImageBudget::pin`].
+    pins: VecDeque<ImageData>,
 }
 
 impl Ledger {
@@ -210,69 +233,6 @@ impl WeakImage {
             Self::Svg(tree) => tree.strong_count() > 0,
         }
     }
-}
-
-/// What retaining a parsed SVG document costs, estimated from its nodes
-/// (including clip paths, masks, patterns, filters and gradient stops), path
-/// points, flattened text and nested documents. A nested raster stays encoded
-/// in the tree, but the renderer decodes it and copies the decode on every
-/// paint, so it costs twice its decoded size.
-#[cfg(feature = "svg")]
-pub(crate) fn svg_retained_bytes(tree: &usvg::Tree) -> usize {
-    const BYTES_PER_NODE: usize = 1024;
-    const BYTES_PER_POINT: usize = 16;
-    const BYTES_PER_STOP: usize = 64;
-    let mut bytes = 0usize;
-    let mut add = |more: usize| bytes = bytes.saturating_add(more);
-    let mut trees = vec![tree];
-    let mut groups: Vec<&usvg::Group> = Vec::new();
-    while let Some(tree) = trees.pop() {
-        add(BYTES_PER_NODE);
-        groups.push(tree.root());
-        groups.extend(tree.clip_paths().iter().map(|clip| clip.root()));
-        groups.extend(tree.masks().iter().map(|mask| mask.root()));
-        groups.extend(tree.patterns().iter().map(|pattern| pattern.root()));
-        for primitive in tree.filters().iter().flat_map(|filter| filter.primitives()) {
-            add(BYTES_PER_NODE);
-            if let usvg::filter::Kind::Image(image) = primitive.kind() {
-                groups.push(image.root());
-            }
-        }
-        let linear = tree.linear_gradients().iter().map(|g| g.stops().len());
-        let radial = tree.radial_gradients().iter().map(|g| g.stops().len());
-        for stops in linear.chain(radial) {
-            add(BYTES_PER_NODE.saturating_add(stops.saturating_mul(BYTES_PER_STOP)));
-        }
-        while let Some(group) = groups.pop() {
-            for node in group.children() {
-                add(BYTES_PER_NODE);
-                match node {
-                    usvg::Node::Group(child) => groups.push(child),
-                    usvg::Node::Path(path) => {
-                        add(path.data().points().len().saturating_mul(BYTES_PER_POINT));
-                    }
-                    usvg::Node::Text(text) => groups.push(text.flattened()),
-                    usvg::Node::Image(image) => match image.kind() {
-                        usvg::ImageKind::SVG(nested) => trees.push(nested),
-                        usvg::ImageKind::JPEG(data)
-                        | usvg::ImageKind::PNG(data)
-                        | usvg::ImageKind::GIF(data)
-                        | usvg::ImageKind::WEBP(data) => add(nested_raster_bytes(data)),
-                    },
-                }
-            }
-        }
-    }
-    bytes
-}
-
-/// A nested raster's decode and its renderer copy; its encoded size when its
-/// header is unreadable, as the renderer then fails to decode it.
-#[cfg(feature = "svg")]
-fn nested_raster_bytes(encoded: &[u8]) -> usize {
-    crate::image_decode::bounded_rgba_bytes(encoded)
-        .and_then(|rgba| usize::try_from(rgba).ok())
-        .map_or(encoded.len(), |rgba| rgba.saturating_mul(2))
 }
 
 #[cfg(test)]

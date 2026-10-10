@@ -7,6 +7,7 @@
 //!
 //! [list of available images]: https://html.spec.whatwg.org/multipage/images.html#list-of-available-images
 //! [RFC 9111 §5.2.2.5]: https://www.rfc-editor.org/rfc/rfc9111#section-5.2.2.5
+use crate::DecodedImageBudget;
 use crate::image_request::ImageKey;
 use crate::node::{ImageData, RasterImageData};
 use linebender_resource_handle::WeakBlob;
@@ -15,7 +16,8 @@ use std::collections::HashMap;
 /// How long a document may keep a decoded image for other requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageRetention {
-    /// Kept until the cache's bounds refuse it.
+    /// Kept until the cache's bounds refuse it, or the decoded image budget
+    /// needs its memory for an image something shows.
     Store,
     /// The response is `no-store`: available only while held elsewhere.
     WhileHeld,
@@ -36,15 +38,24 @@ impl ImageRetention {
 pub(crate) const MAX_CACHED_IMAGES: usize = 512;
 const MAX_CACHED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
+/// Entries are weak. A storable image is kept alive by the decoded image
+/// budget instead ([`DecodedImageBudget::pin`]), which lets go of it before
+/// it refuses a decode, so unshown cached images never break shown ones.
 #[derive(Default)]
 pub(crate) struct ImageCache {
-    /// Each entry with its [`decoded_bytes`], computed once.
-    entries: HashMap<ImageKey, (Entry, usize)>,
+    entries: HashMap<ImageKey, CacheEntry>,
 }
+
+struct CacheEntry {
+    image: HeldImage,
+    /// The image's [`decoded_bytes`], computed once.
+    bytes: usize,
+}
+
 impl ImageCache {
     /// The decoded image for `key`, if it is still available.
     pub fn get(&self, key: &ImageKey) -> Option<ImageData> {
-        self.entries.get(key)?.0.upgrade()
+        self.entries.get(key)?.image.upgrade()
     }
 
     #[cfg(test)]
@@ -52,14 +63,21 @@ impl ImageCache {
         self.get(key).is_some()
     }
 
-    /// Offer `image` for reuse under `key`. Entries whose holders have all
-    /// let go are dropped first; live entries count toward both bounds.
-    pub fn insert(&mut self, key: ImageKey, image: &ImageData, retention: ImageRetention) {
+    /// Offer `image` for reuse under `key`, a storable one pinned by
+    /// `budget`. Entries whose holders have all let go are dropped first; live
+    /// entries count toward both bounds.
+    pub fn insert(
+        &mut self,
+        key: ImageKey,
+        image: &ImageData,
+        retention: ImageRetention,
+        budget: &DecodedImageBudget,
+    ) {
         let mut cached = 0usize;
-        self.entries.retain(|_, (entry, bytes)| {
-            let live = entry.upgrade().is_some();
+        self.entries.retain(|_, entry| {
+            let live = entry.image.upgrade().is_some();
             if live {
-                cached = cached.saturating_add(*bytes);
+                cached = cached.saturating_add(entry.bytes);
             }
             live
         });
@@ -69,15 +87,14 @@ impl ImageCache {
         {
             return;
         }
-        let entry = match retention {
-            ImageRetention::Store => Entry::Stored(image.clone()),
-            ImageRetention::WhileHeld => match HeldImage::new(image) {
-                Some(held) => Entry::Held(held),
-                // Nothing can hold an image that did not decode.
-                None => return,
-            },
+        // Nothing can hold an image that did not decode.
+        let Some(held) = HeldImage::new(image) else {
+            return;
         };
-        self.entries.insert(key, (entry, bytes));
+        if retention == ImageRetention::Store {
+            budget.pin(image);
+        }
+        self.entries.insert(key, CacheEntry { image: held, bytes });
     }
 
     #[cfg(test)]
@@ -96,19 +113,6 @@ impl ImageCache {
     }
 }
 
-enum Entry {
-    Stored(ImageData),
-    Held(HeldImage),
-}
-impl Entry {
-    fn upgrade(&self) -> Option<ImageData> {
-        match self {
-            Self::Stored(image) => Some(image.clone()),
-            Self::Held(held) => held.upgrade(),
-        }
-    }
-}
-
 /// A decoded image that does not keep its pixels or tree alive.
 enum HeldImage {
     Raster {
@@ -122,6 +126,7 @@ enum HeldImage {
         tree: std::sync::Weak<usvg::Tree>,
         intrinsic_dimensions: crate::node::SvgIntrinsicDimensions,
         origin_clean: bool,
+        retained_bytes: usize,
     },
 }
 impl HeldImage {
@@ -138,6 +143,7 @@ impl HeldImage {
                 tree: std::sync::Arc::downgrade(&svg.tree),
                 intrinsic_dimensions: svg.intrinsic_dimensions,
                 origin_clean: svg.origin_clean,
+                retained_bytes: svg.retained_bytes,
             }),
             ImageData::None => None,
         }
@@ -161,10 +167,12 @@ impl HeldImage {
                 tree,
                 intrinsic_dimensions,
                 origin_clean,
+                retained_bytes,
             } => Some(ImageData::Svg(crate::node::SvgImageData {
                 tree: tree.upgrade()?,
                 intrinsic_dimensions: *intrinsic_dimensions,
                 origin_clean: *origin_clean,
+                retained_bytes: *retained_bytes,
             })),
         }
     }
@@ -176,7 +184,7 @@ fn decoded_bytes(image: &ImageData) -> usize {
     match image {
         ImageData::Raster(raster) => raster.data.data().len(),
         #[cfg(feature = "svg")]
-        ImageData::Svg(svg) => crate::image_budget::svg_retained_bytes(&svg.tree),
+        ImageData::Svg(svg) => svg.retained_bytes,
         ImageData::None => 0,
     }
 }

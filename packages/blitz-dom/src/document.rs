@@ -1551,7 +1551,8 @@ impl BaseDocument {
             waiting_nodes.len()
         );
 
-        self.image_cache.insert(key.clone(), &image, retention);
+        self.image_cache
+            .insert(key.clone(), &image, retention, &self.image_budget);
 
         // Apply to all waiting nodes
         for (node_id, image_type) in waiting_nodes {

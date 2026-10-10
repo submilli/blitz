@@ -108,10 +108,17 @@ impl BaseDocument {
             return Ok(CanvasSvgImageSource::None);
         }
         markup.push_str("</svg>");
-        let options = crate::util::svg_options(&self.svg_fonts);
-        let Ok(tree) = usvg::Tree::from_str(&markup, &options) else {
+        // Parsed within the decoded image budget, which charges the tree
+        // while a snapshot holds it.
+        let parsed = crate::svg_bounds::parse_svg_image(
+            markup.as_bytes(),
+            &self.svg_fonts,
+            &self.image_budget,
+        );
+        let Ok(svg) = parsed else {
             return Ok(CanvasSvgImageSource::None);
         };
+        let tree = svg.tree;
         let transform = node
             .attr(crate::local_name!("transform"))
             .and_then(|value| value.parse::<svgtypes::Transform>().ok())
@@ -126,10 +133,7 @@ impl BaseDocument {
             .to_non_zero_rect()
             .and_then(|bounds| bounds.transform(transform));
         Ok(bounds.map_or(CanvasSvgImageSource::None, |bounds| {
-            CanvasSvgImageSource::Element(CanvasSvgElement {
-                tree: Arc::new(tree),
-                bounds,
-            })
+            CanvasSvgImageSource::Element(CanvasSvgElement { tree, bounds })
         }))
     }
 

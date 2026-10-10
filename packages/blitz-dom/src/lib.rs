@@ -130,6 +130,8 @@ mod option_state;
 mod output_state;
 mod reclamation;
 mod resource_roots;
+#[cfg(feature = "svg")]
+mod svg_bounds;
 mod validation;
 pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
 pub use reclamation::NodeReachability;

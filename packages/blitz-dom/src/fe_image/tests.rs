@@ -304,14 +304,24 @@ fn images_the_cache_refuses_are_charged_until_dropped() {
     let (mut doc, html) = document(provider);
     for index in 0..crate::image_cache::MAX_CACHED_IMAGES {
         let key = crate::image_request::ImageKey::no_cors(format!("https://filler.test/{index}"));
-        doc.image_cache
-            .insert(key, &ImageData::None, crate::ImageRetention::Store);
+        let filler = ImageData::Raster(crate::node::RasterImageData::new(
+            1,
+            1,
+            Arc::new(vec![0; 4]),
+        ));
+        doc.image_cache.insert(
+            key,
+            &filler,
+            crate::ImageRetention::Store,
+            &doc.image_budget,
+        );
     }
+    let fillers = doc.image_budget.retained_bytes();
     let node = fe_image(&mut doc, html, &data_png());
     assert_eq!(loaded(&doc, node), Some(true));
-    assert_eq!(doc.image_budget.retained_bytes(), MIN_CHARGE);
+    assert_eq!(doc.image_budget.retained_bytes() - fillers, MIN_CHARGE);
     doc.mutate().remove_and_drop_node(node);
-    assert_eq!(doc.image_budget.retained_bytes(), 0);
+    assert_eq!(doc.image_budget.retained_bytes(), fillers);
 }
 
 #[test]

@@ -151,11 +151,7 @@ impl BaseDocument {
         let data = url.scheme() == "data";
         let image = match cached {
             Some(image) => Some(image),
-            // The URL is its own body, with nothing forbidding storage.
-            None if data => self.decode_data_url(&url, None).inspect(|image| {
-                self.image_cache
-                    .insert(key.clone(), image, crate::ImageRetention::Store);
-            }),
+            None if data => self.decode_stored_data_url(&key, &url),
             None => None,
         };
         let loaded = data || image.is_some();
@@ -207,6 +203,19 @@ impl BaseDocument {
         if let Some(request) = self.fe_images.requests.get_mut(&node) {
             request.image = Some(image);
         }
+    }
+
+    /// Decode a `data:` `url` and store it in the image cache under `key`: the
+    /// URL is its own body, with nothing forbidding storage.
+    fn decode_stored_data_url(&mut self, key: &ImageKey, url: &url::Url) -> Option<ImageData> {
+        let image = self.decode_data_url(url, None)?;
+        self.image_cache.insert(
+            key.clone(),
+            &image,
+            crate::ImageRetention::Store,
+            &self.image_budget,
+        );
+        Some(image)
     }
 
     /// A `data:` image, decoded like a fetched one and always readable. `None`

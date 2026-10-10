@@ -27,15 +27,13 @@ pub(crate) fn decode_image(
     };
 
     #[cfg(feature = "svg")]
-    let svg_err = match crate::util::parse_svg_image(bytes, svg_fonts) {
+    let svg_err = match crate::svg_bounds::parse_svg_image(bytes, svg_fonts, budget) {
         Ok(mut svg) => {
-            if !budget.admit_svg(&svg) {
-                return Err(BUDGET_EXHAUSTED.into());
-            }
             svg.origin_clean = origin_clean;
             return Ok(ImageData::Svg(svg));
         }
-        Err(e) => e.to_string(),
+        Err(crate::svg_bounds::SvgRefusal::Budget) => return Err(BUDGET_EXHAUSTED.into()),
+        Err(crate::svg_bounds::SvgRefusal::Invalid) => "not an SVG document",
     };
     #[cfg(not(feature = "svg"))]
     let svg_err = "svg feature disabled";
@@ -75,7 +73,7 @@ pub(crate) fn bounded_rgba_bytes(bytes: &[u8]) -> Option<u64> {
 /// JPEG and WebP decoders ignore `max_alloc`, but their working memory is
 /// a few bytes per pixel, which the RGBA bound keeps near the same peak.
 /// The output buffer is checked here, as `ImageReader::decode` would.
-pub(crate) fn decode_bounded(bytes: &Bytes) -> image::ImageResult<image::DynamicImage> {
+fn decode_bounded(bytes: &Bytes) -> image::ImageResult<image::DynamicImage> {
     use image::ImageDecoder;
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
