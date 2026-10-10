@@ -301,9 +301,10 @@ fn failed_requests_are_fetched_again() {
 fn images_the_cache_refuses_are_retained_within_a_budget() {
     let provider = Arc::new(Deferred::default());
     let (mut doc, html) = document(provider);
-    for index in 0..crate::image_request::MAX_CACHED_IMAGES {
+    for index in 0..crate::image_cache::MAX_CACHED_IMAGES {
         let key = crate::image_request::ImageKey::no_cors(format!("https://filler.test/{index}"));
-        doc.image_cache.insert(key, ImageData::None);
+        doc.image_cache
+            .insert(key, &ImageData::None, crate::ImageRetention::Store);
     }
     let node = fe_image(&mut doc, html, &data_png());
     assert_eq!(loaded(&doc, node), Some(true));
@@ -316,9 +317,10 @@ fn images_the_cache_refuses_are_retained_within_a_budget() {
 fn retained_svg_documents_are_charged_by_size() {
     let provider = Arc::new(Deferred::default());
     let (mut doc, html) = document(provider);
-    for index in 0..crate::image_request::MAX_CACHED_IMAGES {
+    for index in 0..crate::image_cache::MAX_CACHED_IMAGES {
         let key = crate::image_request::ImageKey::no_cors(format!("https://filler.test/{index}"));
-        doc.image_cache.insert(key, ImageData::None);
+        doc.image_cache
+            .insert(key, &ImageData::None, crate::ImageRetention::Store);
     }
     let rects = "<rect width='1' height='1'/>".repeat(10);
     let svg = format!(
@@ -345,4 +347,36 @@ fn a_failed_request_joins_a_fetch_another_element_started() {
     doc.handle_messages();
     assert_eq!(loaded(&doc, node), Some(true));
     assert_eq!(loaded(&doc, other), Some(true));
+}
+
+#[test]
+fn a_no_store_image_stays_available_while_an_fe_image_holds_it() {
+    let provider = Arc::new(Deferred::default());
+    let (mut doc, html) = document(provider.clone());
+    let node = fe_image(&mut doc, html, "a.png");
+    provider.take().bytes_with_metadata(
+        "https://page.test/a.png".into(),
+        Bytes::from(png()),
+        ResponseMetadata {
+            no_store: true,
+            ..Default::default()
+        },
+    );
+    doc.handle_messages();
+    assert_eq!(loaded(&doc, node), Some(false));
+    assert_eq!(doc.fe_images.owned_bytes, 0, "shared through the cache");
+
+    let other = fe_image(&mut doc, html, "a.png");
+    assert!(provider.urls().is_empty(), "a held image is reused");
+    assert_eq!(loaded(&doc, other), Some(false));
+
+    for element in [node, other] {
+        doc.mutate().remove_and_drop_node(element);
+    }
+    fe_image(&mut doc, html, "a.png");
+    assert_eq!(
+        provider.urls().len(),
+        1,
+        "a released image is fetched again"
+    );
 }

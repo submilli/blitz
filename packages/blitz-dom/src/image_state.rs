@@ -347,7 +347,7 @@ impl BaseDocument {
         }
         let request = self.image_request(node);
         if let Some((key, _)) = &request
-            && let Some(image) = self.image_cache.get(key).cloned()
+            && let Some(image) = self.image_cache.get(key)
         {
             let url = key.url.clone();
             self.replace_current_request(node, ImageRequestState::CompletelyAvailable, url);

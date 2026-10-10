@@ -47,6 +47,18 @@ fn answer(handler: Box<dyn NetHandler>, final_url: &str, origin_clean: bool) {
     );
 }
 
+/// Answer with a response whose `Cache-Control` forbids storing it.
+fn answer_no_store(handler: Box<dyn NetHandler>, final_url: &str) {
+    handler.bytes_with_metadata(
+        final_url.into(),
+        png(),
+        ResponseMetadata {
+            no_store: true,
+            ..Default::default()
+        },
+    );
+}
+
 fn document(provider: Arc<Deferred>) -> BaseDocument {
     let mut doc = BaseDocument::new(DocumentConfig {
         base_url: Some("https://page.test/".into()),
@@ -187,34 +199,6 @@ fn a_failed_request_breaks_its_current_image_and_releases_waiters() {
 }
 
 #[test]
-fn the_decoded_image_cache_is_bounded() {
-    let provider = Arc::new(Deferred::default());
-    let mut doc = document(provider);
-    let image = || {
-        crate::node::ImageData::Raster(crate::node::RasterImageData::new(
-            1,
-            1,
-            Arc::new(vec![0; 4]),
-        ))
-    };
-    for index in 0..(super::MAX_CACHED_IMAGES + 10) {
-        doc.cache_image(
-            ImageKey::no_cors(format!("https://cdn.test/{index}")),
-            &image(),
-        );
-    }
-    assert_eq!(doc.image_cache.len(), super::MAX_CACHED_IMAGES);
-    doc.image_cache.clear();
-    let large = crate::node::ImageData::Raster(crate::node::RasterImageData::new(
-        4096,
-        4097,
-        Arc::new(vec![0; 4096 * 4097 * 4]),
-    ));
-    doc.cache_image(ImageKey::no_cors("https://cdn.test/large"), &large);
-    assert!(doc.image_cache.is_empty(), "one image over the byte budget");
-}
-
-#[test]
 fn a_base_url_change_does_not_supersede_an_image_in_flight() {
     let provider = Arc::new(Deferred::default());
     let mut doc = document(provider.clone());
@@ -245,4 +229,48 @@ fn removing_src_supersedes_the_request_in_flight() {
     doc.handle_messages();
     assert_eq!(origin_clean(&doc, img), None, "the late image is not shown");
     assert!(doc.current_image_requests.is_empty());
+}
+
+#[test]
+fn a_no_store_image_is_reused_only_while_an_element_holds_it() {
+    let provider = Arc::new(Deferred::default());
+    let mut doc = document(provider.clone());
+    let first = connected_img(&mut doc, None);
+    let (request, handler) = provider.take(0);
+    answer_no_store(handler, request.url.as_str());
+    doc.handle_messages();
+    assert_eq!(origin_clean(&doc, first), Some(false));
+
+    // Held by `first`, the image is available to a later element.
+    let second = connected_img(&mut doc, None);
+    assert!(provider.modes().is_empty(), "a held image is reused");
+    assert_eq!(origin_clean(&doc, second), Some(false));
+
+    // Once both let go, setting the same URL fetches it again, as Chrome
+    // does after `src = ''`.
+    for img in [first, second] {
+        doc.mutate().set_attribute(img, qual_name!("src"), "");
+    }
+    doc.mutate()
+        .set_attribute(first, qual_name!("src"), "https://cdn.test/a.png");
+    assert_eq!(provider.modes(), [Some(CorsSettings::NoCors)]);
+    let (request, handler) = provider.take(0);
+    answer_no_store(handler, request.url.as_str());
+    doc.handle_messages();
+    assert_eq!(origin_clean(&doc, first), Some(false));
+}
+
+#[test]
+fn a_storable_image_outlives_its_elements() {
+    let provider = Arc::new(Deferred::default());
+    let mut doc = document(provider.clone());
+    let img = connected_img(&mut doc, None);
+    let (request, handler) = provider.take(0);
+    answer(handler, request.url.as_str(), false);
+    doc.handle_messages();
+    doc.mutate().set_attribute(img, qual_name!("src"), "");
+    doc.mutate()
+        .set_attribute(img, qual_name!("src"), "https://cdn.test/a.png");
+    assert!(provider.modes().is_empty());
+    assert_eq!(origin_clean(&doc, img), Some(false));
 }

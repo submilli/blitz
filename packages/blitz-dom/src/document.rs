@@ -7,7 +7,7 @@ use crate::mutator::ViewportMut;
 use crate::net::{
     Resource, ResourceHandler, ResourceLoadResponse, StylesheetHandler, StylesheetLoader,
 };
-use crate::node::{ImageData, NodeFlags, RasterImageData, SpecialElementData, Status, TextBrush};
+use crate::node::{ImageData, NodeFlags, SpecialElementData, Status, TextBrush};
 use crate::scrolling::ScrollAnimationState;
 use crate::selection::TextSelection;
 use crate::stylo_device::{DeviceChanges, make_device};
@@ -371,7 +371,7 @@ pub struct BaseDocument {
 
     /// Cache of loaded images, keyed by URL and CORS setting. Allows reusing
     /// images across multiple elements without re-fetching from the network.
-    pub(crate) image_cache: HashMap<crate::image_request::ImageKey, ImageData>,
+    pub(crate) image_cache: crate::image_cache::ImageCache,
     /// SVG `feImage` requests and their queued updates.
     #[cfg(feature = "svg")]
     pub(crate) fe_images: crate::fe_image::FeImages,
@@ -576,7 +576,7 @@ impl BaseDocument {
             custom_element_reaction_bytes: 0,
             custom_element_reaction_overflow: false,
             deferred_construction_nodes: Vec::new(),
-            image_cache: HashMap::new(),
+            image_cache: Default::default(),
             #[cfg(feature = "svg")]
             fe_images: Default::default(),
             failed_image_inputs: HashMap::new(),
@@ -1471,28 +1471,11 @@ impl BaseDocument {
                 self.stylist
                     .force_stylesheet_origins_dirty(style::stylesheets::OriginSet::all());
             }
-            Resource::Image(_kind, width, height, image_data, origin_clean) => {
-                // Create the ImageData and cache it
-                let mut raster = RasterImageData::new(width, height, image_data);
-                raster.origin_clean = origin_clean;
-                let image = ImageData::Raster(raster);
-
+            Resource::Image(_kind, image, retention) => {
                 let Some(url) = res.resolved_url.as_ref() else {
                     return;
                 };
-
-                self.apply_loaded_image(url, res.request_id, image);
-            }
-            #[cfg(feature = "svg")]
-            Resource::Svg(_kind, svg) => {
-                // Create the ImageData and cache it
-                let image = ImageData::Svg(svg);
-
-                let Some(url) = res.resolved_url.as_ref() else {
-                    return;
-                };
-
-                self.apply_loaded_image(url, res.request_id, image);
+                self.apply_loaded_image(url, res.request_id, image, retention);
             }
             Resource::DocumentSrc(html) => {
                 let Some(node_id) = res.node_id else {
@@ -1547,7 +1530,13 @@ impl BaseDocument {
 
     /// Cache a loaded image and apply it to all nodes waiting on it
     /// (`<img>` elements, `background-image` layers and `mask-image` layers).
-    fn apply_loaded_image(&mut self, url: &str, request_id: usize, image: ImageData) {
+    fn apply_loaded_image(
+        &mut self,
+        url: &str,
+        request_id: usize,
+        image: ImageData,
+        retention: crate::ImageRetention,
+    ) {
         // Get all nodes waiting for this image
         let Some((key, waiting_nodes)) = self.take_image_waiters(url, request_id) else {
             return;
@@ -1559,8 +1548,7 @@ impl BaseDocument {
             waiting_nodes.len()
         );
 
-        // Cache the image
-        self.cache_image(key.clone(), &image);
+        self.image_cache.insert(key.clone(), &image, retention);
 
         // Apply to all waiting nodes
         for (node_id, image_type) in waiting_nodes {

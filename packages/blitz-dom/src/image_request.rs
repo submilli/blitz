@@ -2,7 +2,7 @@
 //! completion identity; decoded images are shared per URL and CORS setting.
 use crate::image_state::is_html_img;
 use crate::net::{ImageHandler, ResourceHandler};
-use crate::node::{ImageData, SpecialElementData};
+use crate::node::SpecialElementData;
 use crate::{BaseDocument, DocumentMutator, NodeId, util::ImageType};
 use blitz_traits::net::{CorsSettings, ResourceInitiator};
 use markup5ever::{QualName, local_name, ns};
@@ -30,12 +30,6 @@ impl ImageKey {
         Self::new(url, CorsSettings::NoCors)
     }
 }
-
-/// Decoded images kept for reuse. A page can reference unboundedly many
-/// URLs, each under three CORS settings; past these limits images are not
-/// cached, and later elements fetch them again.
-pub(crate) const MAX_CACHED_IMAGES: usize = 512;
-const MAX_CACHED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) struct PendingImage {
     pub request_id: usize,
@@ -118,16 +112,6 @@ impl BaseDocument {
             )
         };
         Some((key, url))
-    }
-
-    pub(crate) fn cache_image(&mut self, key: ImageKey, image: &ImageData) {
-        let cached: usize = self.image_cache.values().map(decoded_bytes).sum();
-        if self.image_cache.len() >= MAX_CACHED_IMAGES
-            || cached.saturating_add(decoded_bytes(image)) > MAX_CACHED_IMAGE_BYTES
-        {
-            return;
-        }
-        self.image_cache.insert(key, image.clone());
     }
 
     pub(crate) fn remove_image_waiter(&mut self, node: NodeId, key: &ImageKey) {
@@ -301,17 +285,6 @@ impl DocumentMutator<'_> {
         if after.is_some_and(|after| after != before) {
             self.queue_image_update(node);
         }
-    }
-}
-
-pub(crate) fn decoded_bytes(image: &ImageData) -> usize {
-    match image {
-        ImageData::Raster(raster) => raster.data.data().len(),
-        // Parsed SVG trees are bounded by the SVG parser and count toward
-        // the entry limit only.
-        #[cfg(feature = "svg")]
-        ImageData::Svg(_) => 0,
-        ImageData::None => 0,
     }
 }
 

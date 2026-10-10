@@ -1664,7 +1664,7 @@ impl<'doc> DocumentMutator<'doc> {
                 .element_data_mut()
                 .expect("image request is an element");
             element.form_state.image_input_image = Some(Box::new(cached_image.clone()));
-            element.special_data = SpecialElementData::Image(Box::new(cached_image.clone()));
+            element.special_data = SpecialElementData::Image(Box::new(cached_image));
             node.clear_layout_cache();
             node.insert_damage(ALL_DAMAGE);
             return;

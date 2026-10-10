@@ -57,6 +57,10 @@ pub trait NetHandler: Send + Sync + 'static {
 pub struct ResponseMetadata {
     pub stylesheet_origin_clean: bool,
     pub image_origin_clean: bool,
+    /// The response's `Cache-Control` forbids storing it
+    /// ([RFC 9111 §5.2.2.5](https://www.rfc-editor.org/rfc/rfc9111#section-5.2.2.5)).
+    /// A document keeps such an image only while an element holds it.
+    pub no_store: bool,
 }
 
 /// A [CORS settings attribute](https://html.spec.whatwg.org/multipage/urls-and-fetching.html#cors-settings-attributes)

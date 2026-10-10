@@ -483,7 +483,7 @@ impl BaseDocument {
                         Some(ImageResourceData {
                             url: new_url.clone(),
                             status: Status::Ok,
-                            image: cached_image.clone(),
+                            image: cached_image,
                         })
                     } else if let Some(waiting_list) = self.pending_images.get_mut(&key) {
                         // Image is already being fetched, queue this node

@@ -24,6 +24,7 @@ use blitz_traits::shell::ShellProvider;
 
 use url::Url;
 
+use crate::node::{ImageData, RasterImageData};
 use crate::{document::DocumentEvent, util::ImageType};
 
 pub(crate) fn stamped_request(url: Url, signal: Option<&AbortSignal>) -> Request {
@@ -56,9 +57,9 @@ pub struct FontFaceOverrides {
 
 #[derive(Clone, Debug)]
 pub enum Resource {
-    Image(ImageType, u32, u32, Arc<Vec<u8>>, bool),
-    #[cfg(feature = "svg")]
-    Svg(ImageType, crate::node::SvgImageData),
+    /// A decoded raster or SVG image, and whether its response lets the
+    /// document keep it for other requests.
+    Image(ImageType, ImageData, crate::ImageRetention),
     Css(DocumentStyleSheet, bool),
     /// Stylesheet loaded for an `@import` rule, to be attached to the rule on the document thread
     ImportedCss(ServoArc<Locked<ImportRule>>, ServoArc<Stylesheet>),
@@ -615,7 +616,10 @@ impl NetHandler for ResourceHandler<ImageHandler> {
         bytes: Bytes,
         metadata: blitz_traits::net::ResponseMetadata,
     ) {
-        let result = self.data.parse(bytes, metadata.image_origin_clean);
+        let retention = crate::ImageRetention::of(&metadata);
+        let result = self
+            .data
+            .parse(bytes, metadata.image_origin_clean, retention);
         self.respond(self.data.request_url.clone(), result)
     }
 
@@ -723,18 +727,23 @@ pub(crate) fn declared_png_of(side: u32, colour: u8) -> Bytes {
 }
 
 impl ImageHandler {
-    fn parse(&self, bytes: Bytes, origin_clean: bool) -> Result<Resource, String> {
+    fn parse(
+        &self,
+        bytes: Bytes,
+        origin_clean: bool,
+        retention: crate::ImageRetention,
+    ) -> Result<Resource, String> {
         let image_err = match decode_bounded(&bytes) {
             Ok(image) => {
                 let width = image.width();
                 let height = image.height();
                 let raw_rgba8_data = image.into_rgba8().into_raw();
+                let mut raster = RasterImageData::new(width, height, Arc::new(raw_rgba8_data));
+                raster.origin_clean = origin_clean;
                 return Ok(Resource::Image(
                     self.kind,
-                    width,
-                    height,
-                    Arc::new(raw_rgba8_data),
-                    origin_clean,
+                    ImageData::Raster(raster),
+                    retention,
                 ));
             }
             Err(e) => e.to_string(),
@@ -746,7 +755,7 @@ impl ImageHandler {
             match parse_svg_image(&bytes, &self.svg_fonts) {
                 Ok(mut svg) => {
                     svg.origin_clean = origin_clean;
-                    return Ok(Resource::Svg(self.kind, svg));
+                    return Ok(Resource::Image(self.kind, ImageData::Svg(svg), retention));
                 }
                 Err(e) => e.to_string(),
             }

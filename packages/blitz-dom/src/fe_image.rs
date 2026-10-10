@@ -99,7 +99,6 @@ impl BaseDocument {
             _ if url.scheme() == "data" => self
                 .image_cache
                 .get(&key)
-                .cloned()
                 .or_else(|| decode_data_url(&url, &self.svg_fonts, Some(&mut inline.0))),
             _ => None,
         };
@@ -155,12 +154,12 @@ impl BaseDocument {
             return;
         };
         let key = ImageKey::no_cors(url.as_str());
-        let cached = self.image_cache.get(&key).cloned();
+        let cached = self.image_cache.get(&key);
         let data = url.scheme() == "data";
         let (image, owned) = match cached {
             Some(image) => (Some(image), 0),
             None if data => decode_data_url(&url, &self.svg_fonts, None)
-                .map_or((None, 0), |image| self.retain(&key, image)),
+                .map_or((None, 0), |image| self.retain_data_image(&key, image)),
             None => (None, 0),
         };
         let loaded = data || image.is_some();
@@ -218,16 +217,25 @@ impl BaseDocument {
         }
     }
 
+    /// [`Self::retain`] a decoded `data:` image, offering it to the image
+    /// cache first: the URL is its own body, with nothing forbidding storage.
+    fn retain_data_image(
+        &mut self,
+        key: &ImageKey,
+        image: ImageData,
+    ) -> (Option<ImageData>, usize) {
+        self.image_cache
+            .insert(key.clone(), &image, crate::ImageRetention::Store);
+        self.retain(key, image)
+    }
+
     /// Keep `image` for an element: shared through the document's image cache,
-    /// or, when the cache refuses it, as the element's own copy within
-    /// [`MAX_OWNED_BYTES`]. Returns the image (none past both bounds) and the
-    /// bytes charged to the element.
+    /// once its load has offered it there, or, when the cache refused it, as
+    /// the element's own copy within [`MAX_OWNED_BYTES`]. Returns the image
+    /// (none past both bounds) and the bytes charged to the element.
     fn retain(&mut self, key: &ImageKey, image: ImageData) -> (Option<ImageData>, usize) {
-        if !self.image_cache.contains_key(key) {
-            self.cache_image(key.clone(), &image);
-        }
         if let Some(cached) = self.image_cache.get(key) {
-            return (Some(cached.clone()), 0);
+            return (Some(cached), 0);
         }
         let bytes = retained_bytes(&image);
         if self.fe_images.owned_bytes + bytes > MAX_OWNED_BYTES {
@@ -318,7 +326,7 @@ fn retained_bytes(image: &ImageData) -> usize {
     const BYTES_PER_NODE: usize = 1024;
     const BYTES_PER_POINT: usize = 16;
     let ImageData::Svg(svg) = image else {
-        return crate::image_request::decoded_bytes(image);
+        return crate::image_cache::decoded_bytes(image);
     };
     let mut bytes = BYTES_PER_NODE;
     let mut pending = vec![svg.tree.root()];
