@@ -528,13 +528,21 @@ impl DocumentMutator<'_> {
     }
 }
 
+/// The [default object size] of replaced elements: 300×150 CSS pixels.
+///
+/// [default object size]: https://drafts.csswg.org/css-images-3/#default-object-size
+#[cfg(feature = "svg")]
+const DEFAULT_OBJECT_SIZE: (f32, f32) = (300.0, 150.0);
+
 fn natural_size(image: &ImageData) -> (u32, u32) {
     match image {
         ImageData::Raster(raster) => (raster.width, raster.height),
         #[cfg(feature = "svg")]
         ImageData::Svg(svg) => {
-            let size = svg.tree.size();
-            (size.width().round() as u32, size.height().round() as u32)
+            // Chrome reports an SVG without natural dimensions at its concrete
+            // size against the default object size.
+            let (width, height) = svg.concrete_size(DEFAULT_OBJECT_SIZE);
+            (width.round() as u32, height.round() as u32)
         }
         ImageData::None => (0, 0),
     }

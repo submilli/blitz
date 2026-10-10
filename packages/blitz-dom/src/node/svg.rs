@@ -20,6 +20,9 @@ pub struct SvgIntrinsicDimensions {
     /// Whether the root declared a `viewBox` with a zero width or height,
     /// which disables rendering of the element per the SVG spec.
     pub degenerate_view_box: bool,
+    /// The root `preserveAspectRatio`, which places the `viewBox` in the
+    /// viewport (`xMidYMid meet` when absent or invalid).
+    pub preserve_aspect_ratio: svgtypes::AspectRatio,
 }
 
 impl SvgIntrinsicDimensions {
@@ -54,6 +57,10 @@ impl SvgIntrinsicDimensions {
             height: parse_length("height"),
             view_box_size,
             degenerate_view_box,
+            preserve_aspect_ratio: root
+                .attribute("preserveAspectRatio")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_default(),
         }
     }
 }
@@ -173,6 +180,30 @@ impl SvgImageData {
             _ => self.viewbox_aspect_ratio().unwrap_or_else(|| {
                 let size = self.tree.size();
                 size.width() / size.height()
+            }),
+        }
+    }
+
+    /// The concrete object size of the SVG as an image without a specified
+    /// size: the CSS [default sizing algorithm] against `default`. A missing
+    /// natural dimension follows the other one through the `viewBox` ratio, or
+    /// is the default's; without either, the `viewBox` ratio is contained in
+    /// `default`, and without a ratio the size is `default`. Unlike
+    /// [`Self::intrinsic_size`], there is no fallback to the resolved tree size.
+    ///
+    /// [default sizing algorithm]: https://drafts.csswg.org/css-images-3/#default-sizing
+    pub fn concrete_size(&self, default: (f32, f32)) -> (f32, f32) {
+        let ratio = self.viewbox_aspect_ratio();
+        match (self.intrinsic_width(), self.intrinsic_height()) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => (w, ratio.map_or(default.1, |ratio| w / ratio)),
+            (None, Some(h)) => (ratio.map_or(default.0, |ratio| h * ratio), h),
+            (None, None) => ratio.map_or(default, |ratio| {
+                if default.0 / default.1 > ratio {
+                    (default.1 * ratio, default.1)
+                } else {
+                    (default.0, default.0 / ratio)
+                }
             }),
         }
     }

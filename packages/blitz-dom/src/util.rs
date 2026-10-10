@@ -346,6 +346,43 @@ mod svg_tests {
     }
 
     #[test]
+    fn concrete_size_follows_the_default_sizing_algorithm() {
+        let size = |root: &str| {
+            let src = format!("<svg xmlns='http://www.w3.org/2000/svg' {root}/>");
+            let svg = parse_svg_image(src.as_bytes(), &super::default_svg_fonts()).unwrap();
+            svg.concrete_size((20.0, 16.0))
+        };
+        assert_eq!(size("width='8' height='6' viewBox='0 0 4 2'"), (8.0, 6.0));
+        assert_eq!(size("width='10' viewBox='0 0 4 2'"), (10.0, 5.0));
+        assert_eq!(size("height='4' viewBox='0 0 4 2'"), (8.0, 4.0));
+        assert_eq!(size("width='10'"), (10.0, 16.0));
+        assert_eq!(size("height='3'"), (20.0, 3.0));
+        // Contained in the default: limited by its width, then its height.
+        assert_eq!(size("viewBox='0 0 4 2'"), (20.0, 10.0));
+        assert_eq!(size("viewBox='0 0 1 2'"), (8.0, 16.0));
+        assert_eq!(size("width='50%' viewBox='0 0 4 2'"), (20.0, 10.0));
+        // No ratio: the default, not usvg's 100x100 fallback.
+        assert_eq!(size(""), (20.0, 16.0));
+    }
+
+    #[test]
+    fn root_preserve_aspect_ratio_is_captured() {
+        let parse = |root: &str| {
+            let src = format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 2' {root}/>");
+            let svg = parse_svg_image(src.as_bytes(), &super::default_svg_fonts()).unwrap();
+            svg.intrinsic_dimensions.preserve_aspect_ratio
+        };
+        let aspect = parse("preserveAspectRatio='xMinYMax slice'");
+        assert_eq!(aspect.align, svgtypes::Align::XMinYMax);
+        assert!(aspect.slice);
+        assert_eq!(parse(""), svgtypes::AspectRatio::default());
+        assert_eq!(
+            parse("preserveAspectRatio='bogus'"),
+            svgtypes::AspectRatio::default()
+        );
+    }
+
+    #[test]
     fn absolute_dimensions_are_intrinsic() {
         let src = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 48 32"></svg>"#;
         let svg = parse_svg_image(src, &super::default_svg_fonts()).unwrap();
