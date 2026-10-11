@@ -402,20 +402,27 @@ fn references_unstyled_containers_pass_on_are_counted() {
     assert!(doc.capture_svg_element(patterned).is_err());
 }
 
-/// The parser splits arcs into curves by their radius: radii it could not
-/// subdivide within bounds are refused, in shapes and in path data.
+/// The parser splits arcs into curves by their radius: radii past the bound
+/// are refused, in shapes and in path data.
 #[test]
 fn huge_arc_radii_are_refused() {
     let (mut doc, svg) = page("");
     let mut m = doc.mutate();
-    let circle = add(&mut m, svg, "circle", &[("r", "3e38")]);
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let hidden = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let circle = add(&mut m, hidden, "circle", &[("r", "3e38")]);
     let rounded = add(
         &mut m,
         svg,
         "rect",
         &[("width", "1"), ("height", "1"), ("rx", "1e30")],
     );
-    let arc = add(&mut m, svg, "path", &[("d", "M0 0A1e30 1e30 0 1 1 2e30 0")]);
+    let arc = add(
+        &mut m,
+        hidden,
+        "path",
+        &[("d", "M0 0A1e30 1e30 0 1 1 2e30 0")],
+    );
     let ordinary = add(&mut m, svg, "circle", &[("r", "1e6"), ("fill", "red")]);
     drop(m);
     doc.flush_style_and_layout(0.0);
@@ -436,4 +443,99 @@ fn text_weighs_per_character() {
     drop(m);
     doc.flush_style_and_layout(0.0);
     assert!(doc.capture_svg_element(text).is_err());
+}
+
+/// A `<use>` without styles passes the references its containers give it to
+/// its content: they are built per painted element of the content.
+#[test]
+fn references_passed_through_unstyled_uses_are_counted() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "p")]);
+    for _ in 0..100 {
+        add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let icons = add(&mut m, sprites, "g", &[("id", "icons")]);
+    for _ in 0..200 {
+        add(&mut m, icons, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let filled = add(&mut m, sprites, "g", &[("id", "x"), ("fill", "url(#p)")]);
+    add(&mut m, filled, "use", &[("href", "#icons")]);
+    let group = add(&mut m, svg, "g", &[]);
+    add(&mut m, group, "use", &[("href", "#x")]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(group).is_err());
+}
+
+/// Radii the parser derives are bounded too: an arc spanning far endpoints,
+/// percentages of a huge nested viewport, and font-relative lengths of a huge
+/// font size are refused before parsing.
+#[test]
+fn derived_radii_are_bounded() {
+    let css = ".wide{stroke-width:1e30px}";
+    let (mut doc, svg) = page(css);
+    let mut m = doc.mutate();
+    // A hidden SVG of its own, which layout never parses: usvg subdivides
+    // arcs by radius wherever it parses them (SUB-1570).
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let far = add(&mut m, sprites, "path", &[("d", "M0 0A1 1 0 0 1 3e38 0")]);
+    let nested = add(&mut m, sprites, "g", &[]);
+    let viewport = add(
+        &mut m,
+        nested,
+        "svg",
+        &[("width", "1e30"), ("height", "1e30")],
+    );
+    add(&mut m, viewport, "circle", &[("r", "50%")]);
+    let percent_viewport = add(&mut m, sprites, "g", &[]);
+    add(&mut m, percent_viewport, "svg", &[("width", "1000%")]);
+    let fonts = add(&mut m, sprites, "g", &[("id", "f"), ("font-size", "1e30")]);
+    add(&mut m, fonts, "circle", &[("r", "1em")]);
+    let font_use = add(&mut m, svg, "g", &[]);
+    add(&mut m, font_use, "use", &[("href", "#f")]);
+    let stroked = add(
+        &mut m,
+        svg,
+        "line",
+        &[("class", "wide"), ("x2", "1"), ("stroke", "red")],
+    );
+    let ordinary = add(
+        &mut m,
+        svg,
+        "path",
+        &[("d", "M0 0A5 5 0 0 1 10 10"), ("stroke", "red")],
+    );
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    for target in [far, nested, percent_viewport, font_use, stroked] {
+        assert!(doc.capture_svg_element(target).is_err(), "{target}");
+    }
+    assert!(doc.capture_svg_element(ordinary).is_ok());
+}
+
+/// Whitespace between elements is not shaped: an indented sprite used many
+/// times fits.
+#[test]
+fn indented_sprites_fit() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let icon = add(&mut m, sprites, "symbol", &[("id", "icon")]);
+    for _ in 0..60 {
+        let indent = m.create_text_node("\n        ");
+        m.append_children(icon, &[indent]);
+        add(&mut m, icon, "path", &[("d", "M0 0 L1 1"), ("fill", "red")]);
+    }
+    let group = add(&mut m, svg, "g", &[]);
+    for _ in 0..30 {
+        add(&mut m, group, "use", &[("href", "#icon")]);
+    }
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(group).unwrap().is_some());
 }

@@ -10,7 +10,7 @@
 //! marker for each vertex of the path it marks.
 
 use super::elements::{
-    HIDDEN_CONTAINERS, attribute_reference, bounded_radii, fragment, href, included, markable,
+    HIDDEN_CONTAINERS, attribute_reference, bounded_numbers, fragment, href, included, markable,
     middle_vertices, takes_paint, unmarked_shape,
 };
 use super::lookup::local_urls;
@@ -134,6 +134,21 @@ impl Plan {
     }
 }
 
+/// The attribute references, in `Slot::ATTRIBUTES` order, an element without
+/// styles passes to its children.
+type AttributeReferences = [Option<usize>; Slot::ATTRIBUTES.len()];
+const NO_REFERENCES: AttributeReferences = [None; Slot::ATTRIBUTES.len()];
+
+/// The element whose attribute references are being passed on.
+struct Passing<'a> {
+    id: NodeId,
+    tag: &'a str,
+    element: &'a ElementData,
+    depth: usize,
+    /// The source it instances, for a `<use>`.
+    instance: Option<usize>,
+}
+
 /// A reference found while walking one source.
 struct Found {
     element: NodeId,
@@ -201,7 +216,7 @@ impl Builder<'_> {
         // A resource never paints where it stands; an instanced symbol does.
         // Elements without styles inherit references from their ancestors'
         // attributes, as the parser resolves them (`Slot::ATTRIBUTES` order).
-        let mut pending = vec![(root, kind == Kind::Resource, 1, [None; 5])];
+        let mut pending = vec![(root, kind == Kind::Resource, 1, NO_REFERENCES)];
         while let Some((id, hidden, depth, inherited)) = pending.pop() {
             let Some(tag) = included(self.doc, id) else {
                 continue;
@@ -229,7 +244,7 @@ impl Builder<'_> {
             if let Some(style) = style {
                 bound_dashes(style)?;
             }
-            if !bounded_radii(tag, element) {
+            if !bounded_numbers(tag, element, style.is_none()) {
                 return Err(CanvasSvgLimit);
             }
             walked.weight = walked.weight.saturating_add(self.weight(id));
@@ -248,7 +263,7 @@ impl Builder<'_> {
             // A `<use>`'s target comes first: its other references are
             // inherited by the target's content.
             let mut instance = None;
-            let mut own = [None; 5];
+            let mut own = NO_REFERENCES;
             for (slot, id_ref, target_kind) in self.references(tag, element, style) {
                 let Some(target) = self.target(&id_ref, target_kind)? else {
                     continue;
@@ -271,9 +286,16 @@ impl Builder<'_> {
                 });
             }
             let inherited = if style.is_some() {
-                [None; 5]
+                NO_REFERENCES
             } else {
-                self.inherit_attributes(&mut walked, id, tag, depth, own, inherited)
+                let passing = Passing {
+                    id,
+                    tag,
+                    element,
+                    depth,
+                    instance,
+                };
+                self.inherit_attributes(&mut walked, &passing, own, inherited)
             };
             pending.extend(
                 node.children
@@ -291,15 +313,10 @@ impl Builder<'_> {
     fn inherit_attributes(
         &self,
         walked: &mut Walked,
-        id: NodeId,
-        tag: &str,
-        depth: usize,
-        own: [Option<usize>; 5],
-        inherited: [Option<usize>; 5],
-    ) -> [Option<usize>; 5] {
-        let element = self.doc.nodes[id]
-            .element_data()
-            .expect("included nodes are elements");
+        passing: &Passing<'_>,
+        own: AttributeReferences,
+        inherited: AttributeReferences,
+    ) -> AttributeReferences {
         let mut passed = inherited;
         for (index, (_, slot)) in Slot::ATTRIBUTES.iter().enumerate() {
             if own[index].is_some() {
@@ -309,16 +326,17 @@ impl Builder<'_> {
             let Some(target) = inherited[index] else {
                 continue;
             };
-            let builds = self.builds(tag, element, *slot, target);
-            if builds > 0 {
+            let builds = self.builds(passing.tag, passing.element, *slot, target);
+            // A `<use>` passes it on to its content, charged later.
+            if builds > 0 || passing.instance.is_some() {
                 walked.found.push(Found {
-                    element: id,
+                    element: passing.id,
                     slot: *slot,
                     target,
                     builds,
-                    through: None,
-                    multiplies: true,
-                    depth,
+                    through: passing.instance,
+                    multiplies: self.multiplies(target),
+                    depth: passing.depth,
                     visible_instance: false,
                 });
             }
@@ -344,8 +362,19 @@ impl Builder<'_> {
             .filter_map(|child| self.doc.nodes[*child].text_data())
             .map(|text| text.content.utf16_len_bound())
             .sum();
-        // The parser shapes and flattens every character of text.
-        1 + attributes / WEIGHT_BYTES + text / 2
+        // The parser shapes and flattens every character of text content;
+        // other text is whitespace it skips.
+        let text_content = matches!(
+            node.element_data()
+                .map(|element| element.name.local.as_ref()),
+            Some("text" | "tspan" | "textPath")
+        );
+        let text_weight = if text_content {
+            text / 2
+        } else {
+            text / WEIGHT_BYTES
+        };
+        1 + attributes / WEIGHT_BYTES + text_weight
     }
 
     /// How many times the parser builds `target` for one reference: once per
@@ -357,7 +386,7 @@ impl Builder<'_> {
             return 1;
         }
         match (self.target_tag(target), slot) {
-            ("pattern", _) => 1,
+            ("pattern", _) => usize::from(takes_paint(tag)),
             ("marker", Slot::MarkerMid) => middle_vertices(tag, element),
             ("marker", Slot::MarkerStart | Slot::MarkerEnd) => usize::from(markable(tag)),
             _ => 0,

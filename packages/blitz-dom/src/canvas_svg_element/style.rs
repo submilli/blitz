@@ -7,7 +7,7 @@
 //! `PaintResourceSubtree` leaves them out.
 
 use super::MAX_ATTRIBUTE_LEN;
-use super::elements::unmarked_shape;
+use super::elements::{MAX_PERCENT, numbers_within, unmarked_shape};
 use super::plan::Slot;
 use crate::canvas_svg_filter::{CanvasSvgLimit, svg_color};
 use style::properties::{ComputedValues, LonghandId, LonghandIdSet, PropertyDeclarationId};
@@ -132,6 +132,11 @@ impl<'a> StyleWriter<'a> {
             let Some(value) = element.value(id, &copy) else {
                 continue;
             };
+            // Round joins and caps are arcs the parser subdivides by radius.
+            let length = matches!(id, LonghandId::StrokeWidth | LonghandId::StrokeDashoffset);
+            if length && !numbers_within(&value, MAX_PERCENT) {
+                return Err(CanvasSvgLimit);
+            }
             if value.len() <= MAX_ATTRIBUTE_LEN {
                 out.push((name, value));
             }
