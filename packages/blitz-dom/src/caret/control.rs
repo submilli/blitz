@@ -36,7 +36,7 @@ impl DocumentMutator<'_> {
             _ => (selection.start, selection.end),
         };
         let mut focus = flow.caret(focus)?;
-        focus.upstream = request.upstream;
+        focus.upstream = request.memory.upstream;
         let carets = Carets {
             anchor: flow.caret(anchor)?,
             focus,

@@ -64,6 +64,8 @@ impl Waiters {
         });
     }
 
+    // Only feImage loads (`fe_image.rs`, behind `svg`) ask.
+    #[cfg(feature = "svg")]
     pub fn contains(&self, waiter: &(NodeId, ImageType)) -> bool {
         self.entries.contains_key(waiter)
     }

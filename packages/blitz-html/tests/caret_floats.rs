@@ -7,12 +7,11 @@ mod common;
 
 use blitz_dom::caret::{Alter, Granularity};
 use caret_support::*;
-use common::q;
+use common::{FLOAT, q};
 
 #[test]
 fn line_boundaries_continue_around_floats() {
-    let doc =
-        laid_out("<p>hello <img style='float:left;width:10px;height:10px'> world</p><p>next</p>");
+    let doc = laid_out(&format!("<p>hello {FLOAT} world</p><p>next</p>"));
     let (hello, world) = (child(&doc, "p", 0), child(&doc, "p", 2));
     let steps = [
         (Alter::Move, FORWARD, Granularity::LineBoundary),
@@ -27,7 +26,7 @@ fn line_boundaries_continue_around_floats() {
 
 #[test]
 fn floats_on_later_lines_do_not_end_the_line() {
-    let doc = laid_out("<p>aaa<br>hello <img style='float:left;width:10px;height:10px'> world</p>");
+    let doc = laid_out(&format!("<p>aaa<br>hello {FLOAT} world</p>"));
     let (hello, world) = (child(&doc, "p", 2), child(&doc, "p", 4));
     let moved = carets(
         &doc,
@@ -50,7 +49,7 @@ fn unselectable_floats_take_no_stops() {
 
 #[test]
 fn floats_opening_a_line_belong_to_it_and_locate_back() {
-    let doc = laid_out("<p>aaa<br><img style='float:left;width:10px;height:10px'>hello world</p>");
+    let doc = laid_out(&format!("<p>aaa<br>{FLOAT}hello world</p>"));
     let (p, aaa, hello) = (q(&doc, "p"), child(&doc, "p", 0), child(&doc, "p", 3));
     let forward = moves(FORWARD, Granularity::LineBoundary, 1);
     assert_eq!(carets(&doc, at(p, 3), &forward), [at(hello, 11)]);

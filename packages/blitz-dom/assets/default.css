@@ -85,6 +85,11 @@ button {
     font-family: system-ui, sans-serif;
 }
 
+/* A drop-down select is an atomic inline-level control, as in Chrome. */
+select {
+    display: inline-block;
+}
+
 textarea {
     font-family: monospace;
 }

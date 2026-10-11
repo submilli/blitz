@@ -6,7 +6,6 @@
 //! DOM position renders there. Collapsed white space, hidden text and
 //! generated content take no units, so positions around them coincide.
 
-use super::float::{Beside, FloatStops};
 use super::geometry::Edges;
 use super::order::Key;
 use crate::{NodeId, ranges::Boundary};
@@ -49,9 +48,6 @@ pub(super) struct Flow {
     entries: Vec<Entry>,
     /// The representative DOM point of every unit boundary that is a stop.
     stops: Vec<Option<Boundary>>,
-    /// What the stops of a floated or positioned replaced element's
-    /// one-atom flow stand for (see [`super::float`]).
-    float_stops: Option<FloatStops>,
     /// The content after this flow continues on a later line with no
     /// forced break between: the flow ends at a soft wrap.
     wraps_after: bool,
@@ -68,32 +64,12 @@ impl Flow {
             units: Vec::new(),
             entries: Vec::new(),
             stops: Vec::new(),
-            float_stops: None,
             wraps_after: false,
-        }
-    }
-
-    pub(super) fn set_float_stops(&mut self, stops: FloatStops) {
-        self.float_stops = Some(stops);
-    }
-
-    /// Record what follows a float once the builder reaches it.
-    pub(super) fn set_float_after(&mut self, after: Beside) {
-        if let Some(stops) = &mut self.float_stops {
-            stops.after = after;
         }
     }
 
     pub(super) fn set_wraps_after(&mut self) {
         self.wraps_after = true;
-    }
-
-    pub(super) fn float_stops(&self) -> Option<FloatStops> {
-        self.float_stops
-    }
-
-    pub(super) fn is_float(&self) -> bool {
-        self.float_stops.is_some()
     }
 
     pub(super) fn push_unit(&mut self, kind: UnitKind, edges: Edges, text: &str) {
@@ -281,16 +257,6 @@ impl Flow {
 
     pub(super) fn ends_with_break(&self) -> bool {
         self.units.last().is_some_and(|u| u.kind == UnitKind::Break)
-    }
-
-    /// Whether the flow ends with white space at a soft wrap. Unlike
-    /// [`Self::line_range`], it holds for a space that is the line's only
-    /// unit: content taking no units (hidden text) may share the line.
-    pub(super) fn ends_with_hanging_space(&self) -> bool {
-        let Some(last) = self.units.len().checked_sub(1) else {
-            return false;
-        };
-        self.wraps_after && is_collapsed_space(self.unit_text(last))
     }
 
     /// Whether `index` both ends a line and starts the next one.

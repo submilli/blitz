@@ -3,7 +3,7 @@
 use super::flow::Flow;
 use super::navigate::{self, Caret, Carets, Flows};
 use super::order::{self, Key, TreeOrder};
-use super::{Modified, ModifyRequest, build};
+use super::{CaretMemory, Granularity, Modified, ModifyRequest, build, visible};
 use crate::{BaseDocument, NodeId, ranges::Boundary};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -18,9 +18,15 @@ impl BaseDocument {
         focus: Boundary,
         request: ModifyRequest,
     ) -> Option<Modified> {
+        if matches!(
+            request.granularity,
+            Granularity::Line | Granularity::Paragraph | Granularity::LineBoundary
+        ) {
+            return visible::modify_selection(self, anchor, focus, request);
+        }
         let flows = DocumentFlows::new(self);
         let mut focus_caret = flows.locate(focus)?;
-        focus_caret.upstream = request.upstream;
+        focus_caret.upstream = request.memory.upstream;
         let carets = Carets {
             anchor: flows.locate(anchor)?,
             focus: focus_caret,
@@ -29,8 +35,11 @@ impl BaseDocument {
         Some(Modified {
             anchor: flows.point(moved.anchor)?,
             focus: flows.point(moved.focus)?,
-            line_x,
-            upstream: moved.focus.upstream,
+            memory: CaretMemory {
+                line_x,
+                upstream: moved.focus.upstream,
+                ..CaretMemory::default()
+            },
         })
     }
 }

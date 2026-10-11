@@ -76,11 +76,20 @@ impl BaseDocument {
 
     /// HTMLFormElement.elements historically excludes image submit buttons.
     pub fn form_elements(&self, form: NodeId) -> Vec<NodeId> {
-        self.form_controls(form).into_iter().filter(|&id| {
-            !self.get_node(id).and_then(|node| node.element_data()).is_some_and(|element| {
-                element.name.local.as_ref() == "input" && element.attr(crate::local_name!("type")).is_some_and(|kind| kind.eq_ignore_ascii_case("image"))
+        self.form_controls(form)
+            .into_iter()
+            .filter(|&id| {
+                !self
+                    .get_node(id)
+                    .and_then(|node| node.element_data())
+                    .is_some_and(|element| {
+                        element.name.local.as_ref() == "input"
+                            && element
+                                .attr(crate::local_name!("type"))
+                                .is_some_and(|kind| kind.eq_ignore_ascii_case("image"))
+                    })
             })
-        }).collect()
+            .collect()
     }
 
     /// Batch form ownership for one current DOM tree in linear work. Radio
@@ -149,8 +158,12 @@ mod tests {
     fn form_elements_excludes_image_buttons_without_losing_submission_controls() {
         let mut doc = BaseDocument::new(DocumentConfig::default());
         let mut m = doc.mutate();
-        let form = m.try_create_element(QualName::new(None, ns!(html), "form".into()), vec![]).unwrap();
-        let image = m.try_create_element(QualName::new(None, ns!(html), "input".into()), vec![]).unwrap();
+        let form = m
+            .try_create_element(QualName::new(None, ns!(html), "form".into()), vec![])
+            .unwrap();
+        let image = m
+            .try_create_element(QualName::new(None, ns!(html), "input".into()), vec![])
+            .unwrap();
         m.set_attribute(image, QualName::new(None, ns!(), "type".into()), "IMAGE");
         m.append_children(form, &[image]);
         assert_eq!(m.doc.form_controls(form), vec![image]);

@@ -1,0 +1,350 @@
+//! Line steps and boundaries in Chrome's model (results from Chrome 154 on
+//! macOS): canonical positions, line boxes and hit testing.
+
+mod caret_support;
+mod common;
+
+use blitz_dom::caret::{Alter, CaretMemory, Direction, Granularity, ModifyRequest};
+use caret_support::{BACKWARD, FORWARD, at, carets, child, laid_out, moves, walk};
+use common::{FLOAT, q};
+
+#[test]
+fn a_line_of_generated_content_takes_a_step_to_the_document_start() {
+    // Chrome finds the generated line a caret container, as a DOM leaf
+    // follows it in the context, but hits no DOM position on it.
+    let doc = laid_out(
+        "<style>.x::after{content:'a\\A';white-space:pre}</style><p>zz<br><span class=x></span>bb</p>",
+    );
+    let (zz, bb) = (child(&doc, "p", 0), child(&doc, "p", 3));
+    assert_eq!(
+        carets(&doc, at(bb, 1), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(zz, 0)]
+    );
+}
+
+#[test]
+fn a_step_out_of_an_inline_block_passes_its_own_line() {
+    // A button lays out as an inline-block: lines are compared by the
+    // outer block's inline contents.
+    let doc = laid_out(&format!("<p>xx</p><p>aa{FLOAT}<button>bt</button></p>"));
+    let xx = child(&doc, "p", 0);
+    let bt = doc.get_node(q(&doc, "button")).unwrap().children[0];
+    assert_eq!(
+        carets(&doc, at(bt, 1), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(xx, 2)]
+    );
+}
+
+#[test]
+fn the_kept_horizontal_position_is_the_centred_caret() {
+    // The bar caret after "b" sits half its width before the boundary, so
+    // it hits the left half of the space above.
+    let doc = laid_out(&format!("<p>zz <span>a<br></span>{FLOAT}bb</p>"));
+    let (zz, bb) = (child(&doc, "p", 0), child(&doc, "p", 3));
+    assert_eq!(
+        carets(&doc, at(bb, 1), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(zz, 2)]
+    );
+}
+
+#[test]
+fn line_boundaries_of_right_to_left_lines_are_logical() {
+    let doc = laid_out("<p dir=rtl>aa <span>bb</span></p>");
+    let aa = child(&doc, "p", 0);
+    let bb = doc.get_node(q(&doc, "span")).unwrap().children[0];
+    assert_eq!(
+        carets(
+            &doc,
+            at(aa, 1),
+            &moves(FORWARD, Granularity::LineBoundary, 1)
+        ),
+        [at(bb, 2)]
+    );
+    assert_eq!(
+        carets(
+            &doc,
+            at(aa, 1),
+            &moves(BACKWARD, Granularity::LineBoundary, 1)
+        ),
+        [at(aa, 0)]
+    );
+}
+
+#[test]
+fn an_extended_range_reports_its_smallest_equivalent() {
+    // The focus at "bb" start reports as the point after the <br>.
+    let doc = laid_out(&format!("<p>aa<br>bb{FLOAT}</p><p>cc</p>"));
+    let (p, aa) = (q(&doc, "p"), child(&doc, "p", 0));
+    let extend = [(Alter::Extend, FORWARD, Granularity::Line)];
+    assert_eq!(
+        walk(&doc, (at(aa, 1), at(aa, 1)), &extend),
+        [(at(aa, 1), at(p, 2))]
+    );
+}
+
+#[test]
+fn a_step_past_its_work_budget_leaves_the_selection() {
+    // Each empty span is a leaf on the line whose canonical position walks
+    // back over the spans before it.
+    let spans = "<span></span>".repeat(3000);
+    let doc = laid_out(&format!("<p>xx</p><p>aa{spans}bb</p>"));
+    let p = q(&doc, "p + p");
+    let bb = *doc.get_node(p).unwrap().children.last().unwrap();
+    assert_eq!(
+        carets(&doc, at(bb, 1), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(bb, 1)]
+    );
+}
+
+#[test]
+fn a_step_from_geometry_overflowing_to_infinity_does_not_panic() {
+    // The block's edges sum to infinity, so the caret's clamp bounds are NaN.
+    let doc = laid_out("<p style='margin-left:2e38px;padding-left:2e38px'>aa</p><p>bb</p>");
+    let aa = child(&doc, "p", 0);
+    let moved = carets(&doc, at(aa, 1), &moves(FORWARD, Granularity::Line, 1));
+    assert_eq!(moved.len(), 1);
+}
+
+#[test]
+fn steps_pass_many_empty_boxes_between_lines() {
+    // Each empty box's position canonicalizes by scanning to the text on
+    // either side; the scans share their result, so the steps stay within
+    // the work budget (Chrome: "b" then "a").
+    let empty = "<div></div>".repeat(3000);
+    let doc = laid_out(&format!("<p>a</p>{empty}<p>b</p>"));
+    let a = child(&doc, "p", 0);
+    let b = child(&doc, "p:last-of-type", 0);
+    assert_eq!(
+        carets(&doc, at(a, 1), &moves(FORWARD, Granularity::Line, 1)),
+        [at(b, 1)]
+    );
+    assert_eq!(
+        carets(&doc, at(b, 1), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(a, 1)]
+    );
+}
+
+#[test]
+fn right_and_left_by_line_and_paragraph_are_logical() {
+    // Chrome 154 leaves `BidiVisualOrderCaretMovement` off: right is the
+    // next line or paragraph and left the previous one, in any direction.
+    let doc = laid_out("<div dir=rtl>aaa<br>bbb</div><p dir=rtl>ccc</p><p dir=rtl>ddd</p>");
+    let (aaa, bbb) = (child(&doc, "div", 0), child(&doc, "div", 2));
+    let (right, left) = (Direction::Right, Direction::Left);
+    assert_eq!(
+        carets(&doc, at(aaa, 1), &moves(right, Granularity::Line, 1)),
+        [at(bbb, 1)]
+    );
+    assert_eq!(
+        carets(&doc, at(bbb, 1), &moves(left, Granularity::Line, 1)),
+        [at(aaa, 1)]
+    );
+    let (ccc, ddd) = (child(&doc, "p", 0), child(&doc, "p:last-of-type", 0));
+    assert_eq!(
+        carets(&doc, at(ccc, 1), &moves(right, Granularity::Paragraph, 1)),
+        [at(ddd, 1)]
+    );
+    assert_eq!(
+        carets(&doc, at(ddd, 1), &moves(left, Granularity::Paragraph, 1)),
+        [at(ccc, 1)]
+    );
+}
+
+#[test]
+fn extension_by_line_stays_out_of_shadow_trees() {
+    // Chrome moves an end that a line step carries into a shadow tree
+    // beside its host, then makes it visible in the DOM tree: the start of
+    // the next paragraph (Chrome reports the equivalent `<p>`, 0).
+    for mode in ["open", "closed"] {
+        let doc = laid_out(&format!(
+            "<p>aa</p><div><template shadowrootmode={mode}><span>shadow</span></template></div><p>tail</p>"
+        ));
+        let aa = child(&doc, "p", 0);
+        let tail = child(&doc, "p:last-of-type", 0);
+        let extend = [(Alter::Extend, FORWARD, Granularity::Line)];
+        assert_eq!(
+            walk(&doc, (at(aa, 1), at(aa, 1)), &extend),
+            [(at(aa, 1), at(tail, 0))],
+            "{mode}"
+        );
+        let extend = [(Alter::Extend, BACKWARD, Granularity::Line)];
+        assert_eq!(
+            walk(&doc, (at(tail, 1), at(tail, 1)), &extend),
+            [(at(tail, 1), at(tail, 0))],
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn positions_at_a_shadow_host_are_dom_offsets() {
+    // The host has three flat children (its shadow content) but two light
+    // children: every result is a valid DOM boundary point.
+    let doc = laid_out(
+        "<div id=h><template shadowrootmode=open><b>S1</b><slot></slot><i>S2</i></template>light1<br>light2</div>",
+    );
+    let host = q(&doc, "#h");
+    let dom_length = |boundary: blitz_dom::ranges::Boundary| {
+        let node = doc.get_node(boundary.node).unwrap();
+        node.text_data()
+            .map_or(node.children.len(), |t| t.content.to_utf16().len())
+    };
+    for offset in 0..=3 {
+        for direction in [FORWARD, BACKWARD] {
+            for granularity in [
+                Granularity::Line,
+                Granularity::LineBoundary,
+                Granularity::Paragraph,
+            ] {
+                for found in carets(&doc, at(host, offset), &moves(direction, granularity, 2)) {
+                    assert!(found.offset <= dom_length(found), "{offset} {found:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn steps_keep_the_position_after_an_hr_between_calls() {
+    // Chrome keeps a selection's positions between `modify()` calls: from
+    // after the second `<hr>` a step up passes the first, where the same
+    // boundary point as an offset in the body would stay.
+    let doc = laid_out("<p>abc</p><hr><hr><p>def</p>");
+    let body = q(&doc, "body");
+    let (abc, def) = (child(&doc, "p", 0), child(&doc, "p:last-of-type", 0));
+    assert_eq!(
+        carets(&doc, at(def, 1), &moves(BACKWARD, Granularity::Line, 3)),
+        [at(body, 3), at(body, 2), at(abc, 1)]
+    );
+    let extend = [(Alter::Extend, BACKWARD, Granularity::Line); 3];
+    assert_eq!(
+        walk(&doc, (at(def, 1), at(def, 1)), &extend),
+        [
+            (at(def, 1), at(body, 3)),
+            (at(def, 1), at(body, 2)),
+            (at(def, 1), at(abc, 1)),
+        ]
+    );
+    let block_images = laid_out(
+        "<p>abc</p><img style='display:block;width:20px;height:20px'>\
+         <img style='display:block;width:20px;height:20px'><p>def</p>",
+    );
+    let body = q(&block_images, "body");
+    let abc = child(&block_images, "p", 0);
+    let def = child(&block_images, "p:last-of-type", 0);
+    assert_eq!(
+        carets(
+            &block_images,
+            at(def, 1),
+            &moves(BACKWARD, Granularity::Line, 3)
+        ),
+        [at(body, 3), at(abc, 1), at(abc, 0)]
+    );
+}
+
+#[test]
+fn steps_pass_spaces_removed_before_breaks() {
+    // The space ending "ab " before a `<br>` is removed, and the white
+    // space of the boxes after it collapses away (Chrome's results).
+    let doc = laid_out("<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>");
+    let (ab, cd, ef) = (
+        child(&doc, "p", 0),
+        child(&doc, "p", 3),
+        child(&doc, "p", 7),
+    );
+    let span_space = child(&doc, "span", 0);
+    let b_space = child(&doc, "b", 0);
+    let steps = [
+        (Alter::Move, FORWARD, Granularity::Line),
+        (Alter::Move, BACKWARD, Granularity::Line),
+        (Alter::Move, FORWARD, Granularity::Character),
+    ];
+    assert_eq!(
+        carets(&doc, at(span_space, 0), &steps),
+        [at(cd, 2), at(ab, 2), at(cd, 0)]
+    );
+    assert_eq!(
+        carets(&doc, at(b_space, 0), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(ab, 2)]
+    );
+    let steps = [
+        (Alter::Move, BACKWARD, Granularity::Line),
+        (Alter::Move, FORWARD, Granularity::Paragraph),
+        (Alter::Move, BACKWARD, Granularity::Paragraph),
+    ];
+    assert_eq!(
+        carets(&doc, at(ef, 1), &steps),
+        [at(cd, 1), at(ef, 1), at(cd, 1)]
+    );
+}
+
+#[test]
+fn a_paragraph_step_ends_where_line_steps_would_cycle_unlike_chrome() {
+    // Blitz lays a `<button>` out unlike Chrome (SUB-1576), and here a line
+    // step down from its line comes back up: the paragraph step stops at
+    // the first repeated position instead of stepping until its work
+    // budget runs out (Chrome moves to "bb", 2).
+    let doc = laid_out(
+        "<p><em style='display:inline-block;width:15px'><img width=18 height=7>\
+         <button>x<a></a></button></em>bb</p>",
+    );
+    let em = q(&doc, "em");
+    assert_eq!(
+        carets(&doc, at(em, 0), &moves(FORWARD, Granularity::Paragraph, 1)),
+        [at(em, 1)]
+    );
+}
+
+#[test]
+fn line_steps_pass_many_forced_breaks() {
+    // Parley positions no cluster for these breaks; one walk over the
+    // lines finds the line of each, not a walk per break.
+    let doc = laid_out(&format!("<p>a{}b</p>", "<br>".repeat(20_000)));
+    let p = q(&doc, "p");
+    let b = doc.get_node(p).unwrap().children.last().copied().unwrap();
+    let moved = carets(&doc, at(b, 1), &moves(BACKWARD, Granularity::Line, 1));
+    assert_eq!(moved.len(), 1);
+    assert_ne!(moved[0], at(b, 1));
+}
+
+#[test]
+fn a_kept_position_beside_a_removed_node_becomes_an_offset() {
+    // After a step up to after the second `<hr>` (body, 3), removing that
+    // `<hr>` leaves (body, 2): Chrome turns the position after the removed
+    // node into an offset, which stays put for one step. Removing the first
+    // `<hr>` instead keeps the position after the second, which steps on.
+    for (removed, expected) in [
+        (2, ["BODY:2", "BODY:2", "abc:1"]),
+        (1, ["BODY:2", "abc:1", "abc:0"]),
+    ] {
+        let mut doc = laid_out("<p>abc</p><hr><hr><p>def</p>");
+        let body = q(&doc, "body");
+        let (abc, def) = (child(&doc, "p", 0), child(&doc, "p:last-of-type", 0));
+        let up = ModifyRequest {
+            alter: Alter::Move,
+            direction: BACKWARD,
+            granularity: Granularity::Line,
+            memory: CaretMemory::default(),
+        };
+        let moved = doc.modify_selection(at(def, 1), at(def, 1), up).unwrap();
+        assert_eq!(moved.focus, at(body, 3));
+        let hr = doc.get_node(body).unwrap().children[removed];
+        doc.mutate().remove_and_drop_node(hr);
+        doc.resolve(0.0);
+        let name = |point: blitz_dom::ranges::Boundary| match point.node {
+            node if node == body => format!("BODY:{}", point.offset),
+            node if node == abc => format!("abc:{}", point.offset),
+            _ => format!("{point:?}"),
+        };
+        let (mut focus, mut memory) = (at(body, 2), moved.memory);
+        let mut seen = vec![name(focus)];
+        for _ in 0..2 {
+            let request = ModifyRequest { memory, ..up };
+            if let Some(moved) = doc.modify_selection(focus, focus, request) {
+                (focus, memory) = (moved.focus, moved.memory);
+            }
+            seen.push(name(focus));
+        }
+        assert_eq!(seen, expected, "removed child {removed}");
+    }
+}

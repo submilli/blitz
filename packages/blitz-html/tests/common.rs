@@ -7,6 +7,9 @@ use blitz_dom::{BaseDocument, DocumentConfig, NodeId};
 use blitz_html::{DocumentHtmlParser, HtmlProvider};
 use blitz_traits::shell::{ColorScheme, Viewport};
 
+/// A 10px square left float.
+pub const FLOAT: &str = "<img style='float:left;width:10px;height:10px'>";
+
 /// Parse `html` into a document with a base URL, an 800x600 viewport, and
 /// the HTML parser provider (needed for `innerHTML`-style parsing).
 pub fn parse(html: &str) -> BaseDocument {
@@ -18,6 +21,17 @@ pub fn parse(html: &str) -> BaseDocument {
     };
     let mut doc = BaseDocument::new(config);
     DocumentHtmlParser::parse_into_mutator(&mut doc.mutate(), html);
+    doc
+}
+
+/// Parse `html` and lay it out with the bundled Liberation Sans as the only
+/// font, so text metrics do not depend on the machine.
+pub fn laid_out(html: &str) -> BaseDocument {
+    let mut doc = parse(html);
+    *doc.font_ctx().lock().unwrap() = blitz_dom::build_single_font_ctx(include_bytes!(
+        "../../blitz-dom/assets/test-fonts/LiberationSans-Regular.ttf"
+    ));
+    doc.resolve(0.0);
     doc
 }
 

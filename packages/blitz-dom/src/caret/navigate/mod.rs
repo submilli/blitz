@@ -7,8 +7,10 @@
 //! grow the selection at the side they move toward, and the focus stays in
 //! the anchor's tree (a selection does not cross a shadow boundary). Line
 //! and paragraph steps keep a horizontal position across consecutive moves.
+//! Documents move by line, paragraph and line boundary in
+//! [`crate::caret::visible`]; here those steps only reach text controls,
+//! whose content is a single flow.
 
-use super::float;
 use super::flow::Flow;
 use super::segments;
 use super::{Alter, Direction, Granularity, ModifyRequest};
@@ -109,7 +111,11 @@ pub(super) fn modify(
         };
         // Chrome takes a range's vertical position from its start, in either
         // direction.
-        let x = request.line_x.or_else(|| mover.x(start)).unwrap_or(0.0);
+        let x = request
+            .memory
+            .line_x
+            .or_else(|| mover.x(start))
+            .unwrap_or(0.0);
         let target = mover.step(origin, granularity, x)?;
         return Some((collapsed(target), vertical.then_some(x)));
     }
@@ -129,7 +135,11 @@ pub(super) fn modify(
         };
         return Some((carets, None));
     }
-    let x = request.line_x.or_else(|| mover.x(focus)).unwrap_or(0.0);
+    let x = request
+        .memory
+        .line_x
+        .or_else(|| mover.x(focus))
+        .unwrap_or(0.0);
     let mut target = mover.step(focus, granularity, x)?;
     let crosses = (focus > anchor && target < anchor) || (focus < anchor && target > anchor);
     if crosses && granularity.keeps_anchor_side() {
@@ -203,29 +213,10 @@ impl Mover<'_> {
         }
     }
 
-    /// The horizontal position of a caret on its own line. A float's stop
-    /// takes that of the content it stands for on the float's line, and
-    /// otherwise draws at the float's start edge.
+    /// The horizontal position of a caret on its own line.
     fn x(&self, caret: Caret) -> Option<f32> {
         let flow = self.flows.flow(caret.flow)?;
-        let beside = self
-            .stand_in_on_root(caret)
-            .filter(|(beside, beside_flow)| line_of(beside_flow, *beside) == flow.line(0));
-        let (caret, flow) = beside.unwrap_or((caret, flow));
         Some(flow.x(caret.index, line_of(flow, caret)))
-    }
-
-    /// The inline caret a float's stop stands for (see [`float::stand_in`])
-    /// and its flow, when that is in the float's own root: content inside a
-    /// following box draws on lines of its own.
-    fn stand_in_on_root(&self, caret: Caret) -> Option<(Caret, &Flow)> {
-        let root = self.flows.flow(caret.flow)?.root();
-        let beside = float::stand_in(self.flows, caret)?;
-        let flow = self
-            .flows
-            .flow(beside.flow)
-            .filter(|flow| flow.root() == root)?;
-        Some((beside, flow))
     }
 
     fn character(&self, caret: Caret) -> Option<Caret> {

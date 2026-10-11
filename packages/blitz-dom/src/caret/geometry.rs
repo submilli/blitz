@@ -151,8 +151,18 @@ impl ClusterEdge {
     }
 }
 
+/// The width of a box's content area.
+pub(super) fn content_width(node: &Node) -> f32 {
+    let layout = node.final_layout();
+    layout.size.width
+        - layout.border.left
+        - layout.border.right
+        - layout.padding.left
+        - layout.padding.right
+}
+
 /// The document position of a box's content edge, where its layout starts.
-fn content_origin(node: &Node) -> (f32, f32) {
+pub(super) fn content_origin(node: &Node) -> (f32, f32) {
     let layout = node.final_layout();
     let position = node.unrounded_absolute_position(0.0, 0.0);
     (

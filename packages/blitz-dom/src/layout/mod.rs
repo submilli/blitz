@@ -26,6 +26,7 @@ pub(crate) mod inline;
 pub(crate) mod list;
 pub(crate) mod paint_tree;
 pub(crate) mod replaced;
+mod select;
 pub(crate) mod table;
 
 use self::replaced::{
@@ -173,6 +174,7 @@ impl BaseDocument {
         inputs: taffy::tree::LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> taffy::tree::LayoutOutput {
+        let select_label = self.select_label_length(dom_node_id(node_id));
         let node = &mut self.nodes[dom_node_id(node_id)];
 
         let font_styles = node.primary_styles().map(|style| {
@@ -225,6 +227,16 @@ impl BaseDocument {
                 // })
             }
             NodeData::Element(element_data) | NodeData::AnonymousBlock(element_data) => {
+                if let Some(label) = select_label {
+                    let size = select::content_size(label, font_size, resolved_line_height);
+                    return compute_leaf_layout(
+                        inputs,
+                        &node.layout_style(),
+                        resolve_calc_value,
+                        |_known_size, _available_space| size,
+                    );
+                }
+
                 // TODO: deduplicate with single-line text input
                 if *element_data.name.local == *"textarea" {
                     let rows = element_data

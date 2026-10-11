@@ -2,22 +2,13 @@
 // Each test target uses a subset of the helpers.
 #![allow(dead_code)]
 
-use crate::common::{parse, q};
-use blitz_dom::caret::{Alter, Direction, Granularity, ModifyRequest};
+pub use crate::common::laid_out;
+use crate::common::q;
+use blitz_dom::caret::{Alter, CaretMemory, Direction, Granularity, ModifyRequest};
 use blitz_dom::{BaseDocument, NodeId, ranges::Boundary};
 
 pub const FORWARD: Direction = Direction::Forward;
 pub const BACKWARD: Direction = Direction::Backward;
-pub const FLOAT: &str = "<img style='float:left;width:10px;height:10px'>";
-
-pub fn laid_out(html: &str) -> BaseDocument {
-    let mut doc = parse(html);
-    *doc.font_ctx().lock().unwrap() = blitz_dom::build_single_font_ctx(include_bytes!(
-        "../../../blitz-dom/assets/test-fonts/LiberationSans-Regular.ttf"
-    ));
-    doc.resolve(0.0);
-    doc
-}
 
 pub fn child(doc: &BaseDocument, selector: &str, index: usize) -> NodeId {
     doc.get_node(q(doc, selector)).unwrap().children[index]
@@ -34,7 +25,7 @@ pub fn walk(
     steps: &[(Alter, Direction, Granularity)],
 ) -> Vec<(Boundary, Boundary)> {
     let (mut anchor, mut focus) = start;
-    let (mut line_x, mut upstream) = (None, false);
+    let mut memory = CaretMemory::default();
     steps
         .iter()
         .map(|&(alter, direction, granularity)| {
@@ -42,12 +33,10 @@ pub fn walk(
                 alter,
                 direction,
                 granularity,
-                line_x,
-                upstream,
+                memory,
             };
             if let Some(moved) = doc.modify_selection(anchor, focus, request) {
-                (anchor, focus, line_x, upstream) =
-                    (moved.anchor, moved.focus, moved.line_x, moved.upstream);
+                (anchor, focus, memory) = (moved.anchor, moved.focus, moved.memory);
             }
             (anchor, focus)
         })

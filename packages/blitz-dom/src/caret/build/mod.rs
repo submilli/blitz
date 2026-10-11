@@ -7,15 +7,15 @@
 //! order, and entering or leaving it is a step.
 
 use super::align::{Aligner, TextStyle};
-use super::float::Walked;
+use super::content::{
+    Content, Visit, children_for_stack, classify, inside_marker, is_forced_break,
+};
 use super::flow::{Entry, Flow, UnitKind};
 use super::geometry::{Edges, LayoutGeometry};
 use super::order::{TreeOrder, flattened_root, is_out_of_flow};
-use crate::layout::construct::{InlineElement, inline_element};
-use crate::node::{ListItemLayoutPosition, Marker, NodeData, TextLayout};
+use crate::layout::construct::InlineElement;
+use crate::node::TextLayout;
 use crate::{BaseDocument, NodeId, ranges::Boundary};
-use style::values::computed::Display;
-use style::values::specified::box_::{DisplayInside, DisplayOutside};
 
 mod floats;
 
@@ -34,8 +34,6 @@ pub(super) fn document_flows(doc: &BaseDocument, order: &TreeOrder, root: NodeId
         layers: vec![Layer::new(&doc.nodes[root], text, None)],
         hanging_space: false,
         opaque: None,
-        line_start: true,
-        last: Walked::Inline,
         broke_since_unit: false,
     };
     builder.marker(root);
@@ -112,7 +110,7 @@ struct Opaque {
 }
 
 enum Step {
-    Node { id: NodeId, generated: bool },
+    Node(Visit),
     LeaveOpaque(NodeId),
     LeaveLayer,
 }
@@ -128,12 +126,6 @@ struct Builder<'a> {
     /// caret position when the line ends after it.
     hanging_space: bool,
     opaque: Option<Opaque>,
-    /// Nothing precedes on the current line but floats: the root's start,
-    /// or after a forced break from the DOM. Inline content and boxes that
-    /// sit beside floats clear it.
-    line_start: bool,
-    /// The last content walked, which decides what a float's stops stand for.
-    last: Walked,
     /// A forced break was aligned after the flow's last unit, so the flow
     /// does not end at a soft wrap.
     broke_since_unit: bool,
@@ -142,22 +134,12 @@ struct Builder<'a> {
 impl Builder<'_> {
     /// An inside list marker precedes the root's content in its layout.
     fn marker(&mut self, root: NodeId) {
-        let Some(item) = self.doc.nodes[root]
-            .element_data()
-            .and_then(|e| e.list_item_data.as_deref())
-        else {
+        let Some(text) = inside_marker(self.doc, root) else {
             return;
-        };
-        if !matches!(item.position, ListItemLayoutPosition::Inside) {
-            return;
-        }
-        let text = match &item.marker {
-            Marker::Char(ch) => format!("{ch} "),
-            Marker::String(text) => text.clone(),
         };
         let style = TextStyle::of(None);
         for ch in text.chars() {
-            self.align(ch, style, true);
+            self.align(ch, style);
         }
     }
 
@@ -167,7 +149,7 @@ impl Builder<'_> {
         push_children(self.doc, root, &mut pending, false);
         while let Some(step) = pending.pop() {
             match step {
-                Step::Node { id, generated } => self.node(id, generated, &mut pending),
+                Step::Node(Visit { id, generated }) => self.node(id, generated, &mut pending),
                 Step::LeaveOpaque(id) => self.leave_opaque(id),
                 Step::LeaveLayer => self.leave_layer(),
             }
@@ -175,40 +157,22 @@ impl Builder<'_> {
     }
 
     fn node(&mut self, id: NodeId, generated: bool, pending: &mut Vec<Step>) {
-        let node = &self.doc.nodes[id];
-        let element = match &node.data {
-            NodeData::Text(_) => return self.text(id, generated),
-            NodeData::Element(element) | NodeData::AnonymousBlock(element) => element,
-            _ => return,
-        };
-        let kind = inline_element(element);
-        if kind == InlineElement::Hidden {
-            return;
-        }
-        let display = node.display_style().unwrap_or(Display::inline());
-        match (display.outside(), display.inside()) {
-            (DisplayOutside::None, DisplayInside::None) => {}
-            (DisplayOutside::None, DisplayInside::Contents) => {
-                let children = node.flat_children().iter().rev();
-                pending.extend(children.map(|&id| Step::Node { id, generated }));
+        match classify(self.doc, id) {
+            Content::Text => self.text(id, generated),
+            Content::Skip => {}
+            Content::Contents => {
+                let children = children_for_stack(self.doc, id, generated, false);
+                pending.extend(children.map(Step::Node));
             }
-            (DisplayOutside::Inline, DisplayInside::Flow) => match kind {
-                InlineElement::Atom => self.atom(id),
-                InlineElement::Break => self.forced_break(id),
-                InlineElement::Span | InlineElement::Hidden => self.span(id, generated, pending),
-            },
-            _ => self.inline_box(id, kind, pending),
+            Content::Atom => self.atom(id),
+            Content::Break => self.forced_break(id),
+            Content::Span => self.span(id, generated, pending),
+            Content::Box(kind) => self.inline_box(id, kind, pending),
         }
     }
 
-    /// Leave a nested box. A float ending its content stands for the point
-    /// after the box, which starts the next flow: what follows the box
-    /// (even a forced break) is outside it.
     fn leave_layer(&mut self) {
         self.layers.pop();
-        if matches!(self.last, Walked::Float(_)) {
-            self.reach(Walked::Inline);
-        }
     }
 
     fn span(&mut self, id: NodeId, generated: bool, pending: &mut Vec<Step>) {
@@ -239,16 +203,16 @@ impl Builder<'_> {
             if kind == InlineElement::Atom {
                 return self.floated_atom(id);
             }
-            return self.end_at_embedded_box(id);
+            return self.split();
         }
         if kind == InlineElement::Atom {
             return self.atom(id);
         }
         let Some(inner) = flattened_root(self.doc, id) else {
-            return self.end_at_embedded_box(id);
+            return self.split();
         };
         let Some(text) = inline_layout(self.doc, inner) else {
-            return self.end_at_embedded_box(id);
+            return self.split();
         };
         self.enter_opaque(id, pending);
         let line = self.layers.last().map(|layer| layer.box_line(id));
@@ -271,7 +235,7 @@ impl Builder<'_> {
             // Generated content takes layout text but no caret positions;
             // like any content, it keeps a preceding space from hanging.
             for ch in data.content.as_str_lossy().chars() {
-                if self.align(ch, style, true).is_some() && !style.collapsible(ch) {
+                if self.align(ch, style).is_some() && !style.collapsible(ch) {
                     self.hanging_space = false;
                 }
             }
@@ -291,7 +255,7 @@ impl Builder<'_> {
     /// Record one DOM character: a new unit when it starts a rendered
     /// grapheme, part of the last unit inside one, or a position only.
     fn character(&mut self, point: Boundary, ch: char, style: TextStyle, selectable: bool) {
-        let Some(range) = self.align(ch, style, false) else {
+        let Some(range) = self.align(ch, style) else {
             return self.entry(point, self.flow.len(), selectable);
         };
         let Some(layer) = self.layers.last() else {
@@ -345,8 +309,6 @@ impl Builder<'_> {
             trailing,
             line: layer.box_line(id),
         };
-        self.reach(Walked::Inline);
-        self.line_start = false;
         if self.opaque.is_some() {
             return self.extend_opaque(edges);
         }
@@ -364,7 +326,7 @@ impl Builder<'_> {
     /// white space ahead of it hangs. The position after it belongs to the
     /// following content.
     fn forced_break(&mut self, id: NodeId) {
-        let Some(range) = self.align('\n', TextStyle::preserved(), false) else {
+        let Some(range) = self.align('\n', TextStyle::preserved()) else {
             return;
         };
         let Some(edges) = self.layers.last().map(|l| l.edges(range.start, range.end)) else {
@@ -413,26 +375,13 @@ impl Builder<'_> {
         }
     }
 
-    /// Align one DOM or `generated` character with the layout, tracking
-    /// line starts: any laid-out character counts, rendered or not,
-    /// selectable or not. A forced break opens a line for the floats after
-    /// it only from the DOM: Chrome's stop before a float after a generated
-    /// break stands for the content before the break.
-    fn align(
-        &mut self,
-        ch: char,
-        style: TextStyle,
-        generated: bool,
-    ) -> Option<std::ops::Range<usize>> {
+    /// Align one DOM or generated character with the layout, noting a
+    /// forced break after the flow's last unit.
+    fn align(&mut self, ch: char, style: TextStyle) -> Option<std::ops::Range<usize>> {
         let layer = self.layers.last_mut()?;
         let range = layer.aligner.char(ch, style)?;
         if is_forced_break(layer.aligner.slice(range.clone())) {
-            self.reach(Walked::Break);
-            self.line_start |= !generated;
             self.broke_since_unit = true;
-        } else {
-            self.reach(Walked::Inline);
-            self.line_start &= style.collapsible(ch);
         }
         Some(range)
     }
@@ -492,21 +441,7 @@ impl Builder<'_> {
 
 /// Children in layout construction order, pushed for a stack walk.
 fn push_children(doc: &BaseDocument, id: NodeId, pending: &mut Vec<Step>, generated: bool) {
-    let node = &doc.nodes[id];
-    if let Some(after) = node.after() {
-        pending.push(Step::Node {
-            id: after,
-            generated: true,
-        });
-    }
-    let children = node.flat_children().iter().rev();
-    pending.extend(children.map(|&id| Step::Node { id, generated }));
-    if let Some(before) = node.before() {
-        pending.push(Step::Node {
-            id: before,
-            generated: true,
-        });
-    }
+    pending.extend(children_for_stack(doc, id, generated, true).map(Step::Node));
 }
 
 /// The boundary points before and after `id` in its DOM parent.
@@ -523,10 +458,4 @@ fn sibling_points(doc: &BaseDocument, id: NodeId) -> Option<(Boundary, Boundary)
             offset: index + 1,
         },
     ))
-}
-
-/// Whether laid-out text is a forced break. Chrome steps over a CR and an
-/// LF separately, though they form one grapheme cluster.
-fn is_forced_break(text: &str) -> bool {
-    matches!(text, "\n" | "\r")
 }

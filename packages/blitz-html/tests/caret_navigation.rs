@@ -5,7 +5,7 @@ mod caret_support;
 mod common;
 
 use blitz_dom::BaseDocument;
-use blitz_dom::caret::{Alter, Direction, Granularity, ModifyRequest};
+use blitz_dom::caret::{Alter, CaretMemory, Direction, Granularity, ModifyRequest};
 use caret_support::*;
 use common::q;
 
@@ -304,8 +304,7 @@ fn element_positions_and_empty_documents() {
         alter: Alter::Move,
         direction: FORWARD,
         granularity: Granularity::Character,
-        line_x: None,
-        upstream: false,
+        memory: CaretMemory::default(),
     };
     assert_eq!(
         doc.modify_selection(at(body, 0), at(body, 0), request),
@@ -344,8 +343,7 @@ fn deeply_nested_inline_content_is_navigable() {
         alter: Alter::Move,
         direction: FORWARD,
         granularity: Granularity::DocumentBoundary,
-        line_x: None,
-        upstream: false,
+        memory: CaretMemory::default(),
     };
     let moved = doc.modify_selection(at(p, 0), at(p, 0), request).unwrap();
     assert_eq!(moved.focus.offset, 1);
@@ -386,8 +384,11 @@ fn text_controls_move_over_their_editor_layout() {
                 alter,
                 direction,
                 granularity,
-                line_x,
-                upstream,
+                memory: CaretMemory {
+                    line_x,
+                    upstream,
+                    ..CaretMemory::default()
+                },
             };
             let moved = doc.mutate().modify_control_selection(id, request).unwrap();
             (line_x, upstream) = (moved.line_x, moved.upstream);
@@ -669,13 +670,15 @@ fn flows_without_stops_neither_stall_line_ends_nor_sentences() {
     let doc = laid_out(
         "<div>ab<span style='display:inline-block'><div>cd</div></span><span style='user-select:none'>XY</span></div>",
     );
-    let ab = child(&doc, "div", 0);
+    let (ab, cd) = (child(&doc, "div", 0), child(&doc, "span div", 0));
     let moved = carets(
         &doc,
         at(ab, 0),
         &moves(FORWARD, Granularity::LineBoundary, 1),
     );
-    assert_eq!(moved, [at(ab, 2)]);
+    // The line ends after its last leaf, the unselectable text, which
+    // canonicalizes back into the inline-block, as in Chrome 154.
+    assert_eq!(moved, [at(cd, 2)]);
 
     let doc = laid_out("<p>Hi. <span style='user-select:none'>X</span></p><p>Next.</p>");
     let (hi, next) = (child(&doc, "p", 0), child(&doc, "p + p", 0));
@@ -691,8 +694,10 @@ fn stored_upstream_affinity_applies_only_at_a_soft_wrap() {
         alter: Alter::Move,
         direction: FORWARD,
         granularity: Granularity::Line,
-        line_x: None,
-        upstream: true,
+        memory: CaretMemory {
+            upstream: true,
+            ..CaretMemory::default()
+        },
     };
     let moved = doc.modify_selection(at(cd, 0), at(cd, 0), request).unwrap();
     assert_eq!(moved.focus, at(ef, 0));
