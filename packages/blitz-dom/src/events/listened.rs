@@ -1,6 +1,7 @@
 //! A native event whose listeners have run, with the steps that follow them.
-//! They act on the event's target where it lives when the listeners return
-//! (see [`crate::Placement`]).
+//! A click's steps act on its target where it lives when the listeners
+//! return (see [`crate::Placement`]); other events' stay in the dispatching
+//! document.
 
 use crate::{BaseDocument, CheckableActivation, NodeId};
 use blitz_traits::events::{DomEvent, DomEventData};

@@ -430,7 +430,17 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                     continue;
                 }
             };
-            let activation = if matches!(event.data, DomEventData::Click(_)) {
+            let click = matches!(event.data, DomEventData::Click(_));
+            // A pointer's click goes to the node it pressed and released. A
+            // listener that moved that node away released over something
+            // else, so no click follows, as in Chrome.
+            if click
+                && event.pointer_activation
+                && self.handler.placement(event.target) != crate::Placement::Here(event.target)
+            {
+                continue;
+            }
+            let activation = if click {
                 let mut doc = self.doc.inner_mut();
                 let target = doc
                     .node_chain(event.target)
@@ -447,7 +457,6 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             {
                 self.handler.follow(previous);
             }
-            let click = matches!(event.data, DomEventData::Click(_));
             let event_state = self.run_handler_event(&mut event, EventState::default());
             let listened = super::ListenedEvent {
                 event,

@@ -2,14 +2,16 @@
 //!
 //! An embedder with a separate arena per document can let a listener adopt
 //! the event's target into another document, which rebuilds the node there
-//! under a new ID. The steps that follow the listeners (checkable activation,
-//! form activation and default actions) belong to the node, not to the ID it
-//! had: they run where the node lives when the listeners return, as in
+//! under a new ID. The steps that follow a click's listeners (checkable
+//! activation, form activation and the click's default action) belong to the
+//! node, not to the ID it had: they run where the node lives when the
+//! listeners return, as in
 //! [DOM § 2.9](https://dom.spec.whatwg.org/#concept-event-dispatch), where
 //! the activation target is a node. The embedder says where that is
 //! ([`Placement`]); Blitz relocates the pending steps
 //! ([`crate::ClickActivation`], [`crate::ListenedEvent`]) into this document,
-//! or hands them to the embedder to relocate into another one.
+//! or hands them to the embedder to relocate into another one. Other native
+//! defaults keep to the dispatching document, whose input state they use.
 
 use crate::NodeId;
 

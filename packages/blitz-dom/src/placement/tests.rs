@@ -300,3 +300,50 @@ fn the_driver_completes_a_moved_checkbox_click_in_its_new_document() {
         ]
     );
 }
+
+/// Places one node elsewhere and records the events it sees.
+struct MovedAway {
+    node: NodeId,
+    log: Rc<RefCell<Vec<String>>>,
+}
+
+impl EventHandler for MovedAway {
+    fn handle_event(
+        &mut self,
+        _: &[NodeId],
+        event: &mut DomEvent,
+        _: &mut dyn Document,
+        _: &mut EventState,
+    ) {
+        self.log.borrow_mut().push(event.name().to_string());
+    }
+    fn placement(&self, node: NodeId) -> Placement {
+        if node == self.node {
+            Placement::Elsewhere
+        } else {
+            Placement::Here(node)
+        }
+    }
+}
+
+#[test]
+fn a_pointer_click_at_a_target_moved_away_is_not_dispatched() {
+    for pointer in [true, false] {
+        let mut document = BaseDocument::new(DocumentConfig::default());
+        let target = checkbox(&mut document);
+        let data = document.nodes[target].synthetic_click_event(Modifiers::empty());
+        let mut click = DomEvent::new(target, data);
+        click.pointer_activation = pointer;
+        let mut document = Rc::new(RefCell::new(document));
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let handler = MovedAway {
+            node: target,
+            log: log.clone(),
+        };
+        EventDriver::new(&mut document, handler).handle_dom_event(click);
+        // A programmatic click still reaches the node.
+        let expected: &[&str] = if pointer { &[] } else { &["click"] };
+        assert_eq!(*log.borrow(), expected, "pointer={pointer}");
+        assert_eq!(document.borrow().checkedness(target), !pointer);
+    }
+}
