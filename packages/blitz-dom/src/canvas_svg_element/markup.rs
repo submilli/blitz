@@ -1,9 +1,12 @@
 //! The painted and placed markups of a [`Plan`].
 
 use super::MAX_ELEMENT_MARKUP;
-use super::plan::{Kind, Plan, Slot, included};
-use super::style::{StyleWriter, Values};
+use super::elements::{href, included, xml_name};
+use super::plan::{Kind, Plan, Slot};
+use super::style::{StyleWriter, Values, from_style};
+use super::viewport::view_box_size;
 use crate::canvas_svg_filter::{CanvasSvgLimit, push_bounded, push_escaped_bounded};
+use crate::node::ElementData;
 use crate::{BaseDocument, NodeId};
 
 /// Serialized markup of one reference.
@@ -97,27 +100,29 @@ impl Writer<'_> {
             if id == root && kind != Kind::Root {
                 self.push(&format!(" id=\"{}\"", copy_id(index)))?;
             }
-            self.attributes(id, tag)?;
-            let style = node.primary_styles().expect("included nodes are styled");
-            let parent_style =
-                parent.and_then(|parent: NodeId| self.doc.nodes[parent].primary_styles());
-            let values = match (kind, &parent_style) {
-                (Kind::Instance, _) => Values::Declared,
-                (_, Some(parent)) => Values::BelowParent(parent),
-                (_, None) => Values::All,
-            };
-            let plan = self.plan;
-            let mut declarations = self
-                .style
-                .write(&style, values, |slot| plan.reference(id, slot).map(copy_id))?;
-            // Blink does not clip to nested viewports while painting.
-            if matches!(tag, "svg" | "symbol") {
-                declarations.push_str("overflow:visible;");
-            }
-            if !declarations.is_empty() {
-                self.push(" style=\"")?;
-                self.push_escaped(&declarations)?;
-                self.push("\"")?;
+            let element = node.element_data().expect("included nodes are elements");
+            let styled = node.primary_styles();
+            self.attributes(id, tag, element, styled.is_none())?;
+            if let Some(style) = styled {
+                let parent_style =
+                    parent.and_then(|parent: NodeId| self.doc.nodes[parent].primary_styles());
+                let values = match (kind, &parent_style) {
+                    (Kind::Instance, _) => Values::Declared,
+                    (_, Some(parent)) => Values::BelowParent(parent),
+                    (_, None) => Values::All,
+                };
+                let plan = self.plan;
+                let copy = |slot| plan.reference(id, slot).map(copy_id);
+                let mut declarations = self.style.write(&style, tag, values, copy)?;
+                // Blink does not clip to nested viewports while painting.
+                if matches!(tag, "svg" | "symbol") {
+                    declarations.push_str("overflow:visible;");
+                }
+                if !declarations.is_empty() {
+                    self.push(" style=\"")?;
+                    self.push_escaped(&declarations)?;
+                    self.push("\"")?;
+                }
             }
             self.push(">")?;
             pending.push((id, true, parent));
@@ -131,61 +136,124 @@ impl Writer<'_> {
         Ok(())
     }
 
-    /// Write the element's own attributes. Styles, IDs and effects stay out,
-    /// references name copies, and positioning goes to the placed markup only.
-    fn attributes(&mut self, id: NodeId, tag: &str) -> Result<(), CanvasSvgLimit> {
-        let element = self.doc.nodes[id]
-            .element_data()
-            .expect("included nodes are elements");
+    /// Write the element's own attributes. IDs, classes, styles, handlers and
+    /// effects stay out, references name copies, and positioning goes to the
+    /// placed markup only. An element without styles keeps its presentation
+    /// attributes.
+    fn attributes(
+        &mut self,
+        id: NodeId,
+        tag: &str,
+        element: &ElementData,
+        unstyled: bool,
+    ) -> Result<(), CanvasSvgLimit> {
         for attr in element.attrs() {
             let local = attr.name.local.as_ref();
             if attr.name.ns != markup5ever::ns!()
                 || local.starts_with("on")
                 || matches!(local, "id" | "class" | "style" | "xmlns" | "href")
                 || EFFECTS.contains(&local)
-                || super::style::from_style(local)
                 || !xml_name(local)
             {
                 continue;
             }
-            if let Some((_, slot)) = Slot::MARKERS.iter().find(|(name, _)| *name == local) {
-                if let Some(copy) = self.plan.reference(id, *slot) {
-                    self.push(&format!(" {local}=\"url(#{})\"", copy_id(copy)))?;
+            let value = attr.value.as_str_lossy();
+            if from_style(local) {
+                if unstyled {
+                    self.unstyled_presentation(id, local, value)?;
                 }
                 continue;
             }
-            let positioning = local == "transform"
-                || (tag == "use" && matches!(local, "x" | "y"))
-                || (matches!(tag, "svg" | "symbol")
-                    && matches!(local, "x" | "y" | "viewBox" | "preserveAspectRatio"));
-            let text = format!(" {local}=\"");
-            if positioning {
+            if let Some(painted) = self.painted_position(id, tag, element, local) {
                 self.transformed = true;
-                self.push_placed(&text)?;
-                push_escaped_bounded(
-                    &mut self.placed,
-                    attr.value.as_str_lossy(),
-                    MAX_ELEMENT_MARKUP,
-                )?;
+                if let Some(painted) = painted {
+                    self.push_painted(&format!(" {local}=\"{painted}\""))?;
+                }
+                self.push_placed(&format!(" {local}=\""))?;
+                self.push_placed_escaped(value)?;
                 self.push_placed("\"")?;
                 continue;
             }
-            self.push(&text)?;
-            self.push_escaped(attr.value.as_str_lossy())?;
+            self.push(&format!(" {local}=\""))?;
+            self.push_escaped(value)?;
             self.push("\"")?;
         }
         self.href(id, tag, element)
     }
 
-    /// References name their copies; images keep their own `href`.
-    fn href(
-        &mut self,
+    /// How a positioning attribute appears in the painted markup, or `None`
+    /// when it is not one: left out (`Some(None)`), or a nested viewport's
+    /// size made its `viewBox` size, so that percentages inside resolve as
+    /// Blink resolves them while nothing scales.
+    fn painted_position(
+        &self,
         id: NodeId,
         tag: &str,
-        element: &crate::node::ElementData,
+        element: &ElementData,
+        local: &str,
+    ) -> Option<Option<String>> {
+        let axis = match local {
+            "width" => 0,
+            "height" => 1,
+            "transform" => return Some(None),
+            "x" | "y" if matches!(tag, "use" | "svg" | "symbol") => return Some(None),
+            "viewBox" | "preserveAspectRatio" if matches!(tag, "svg" | "symbol") => {
+                return Some(None);
+            }
+            _ => return None,
+        };
+        let view_box = match tag {
+            "svg" => view_box_size(element)?,
+            // A `<use>` sizes the viewport of the `<symbol>` it instances.
+            "use" => {
+                let copy = self.plan.reference(id, Slot::Href)?;
+                let target = self.doc.nodes[self.plan.sources[copy].node].element_data()?;
+                if target.name.local.as_ref() != "symbol" {
+                    return None;
+                }
+                view_box_size(target)?
+            }
+            _ => return None,
+        };
+        Some(Some(view_box[axis].to_string()))
+    }
+
+    /// A presentation attribute of an element without styles: written as it
+    /// stands, but for a reference, which names its copy or is left out.
+    fn unstyled_presentation(
+        &mut self,
+        id: NodeId,
+        local: &str,
+        value: &str,
     ) -> Result<(), CanvasSvgLimit> {
+        let slot = match local {
+            "fill" => Some(Slot::Fill),
+            "stroke" => Some(Slot::Stroke),
+            _ => Slot::MARKERS
+                .iter()
+                .find(|(name, _)| *name == local)
+                .map(|(_, slot)| *slot),
+        };
+        let reference = value.trim_start().starts_with("url(");
+        match slot.filter(|_| reference) {
+            Some(slot) => {
+                if let Some(copy) = self.plan.reference(id, slot) {
+                    self.push(&format!(" {local}=\"url(#{})\"", copy_id(copy)))?;
+                }
+            }
+            None => {
+                self.push(&format!(" {local}=\""))?;
+                self.push_escaped(value)?;
+                self.push("\"")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// References name their copies; images keep their own `href`.
+    fn href(&mut self, id: NodeId, tag: &str, element: &ElementData) -> Result<(), CanvasSvgLimit> {
         if tag == "image" {
-            if let Some(href) = super::plan::href(element) {
+            if let Some(href) = href(element) {
                 self.push(" href=\"")?;
                 self.push_escaped(href)?;
                 self.push("\"")?;
@@ -200,16 +268,24 @@ impl Writer<'_> {
 
     /// Append to both markups.
     fn push(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
-        push_bounded(&mut self.painted, text, MAX_ELEMENT_MARKUP)?;
+        self.push_painted(text)?;
         self.push_placed(text)
+    }
+
+    fn push_escaped(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
+        push_escaped_bounded(&mut self.painted, text, MAX_ELEMENT_MARKUP)?;
+        self.push_placed_escaped(text)
+    }
+
+    fn push_painted(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
+        push_bounded(&mut self.painted, text, MAX_ELEMENT_MARKUP)
     }
 
     fn push_placed(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
         push_bounded(&mut self.placed, text, MAX_ELEMENT_MARKUP)
     }
 
-    fn push_escaped(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
-        push_escaped_bounded(&mut self.painted, text, MAX_ELEMENT_MARKUP)?;
+    fn push_placed_escaped(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
         push_escaped_bounded(&mut self.placed, text, MAX_ELEMENT_MARKUP)
     }
 }
@@ -217,14 +293,4 @@ impl Writer<'_> {
 /// The ID of copy `index`. Elements keep no IDs of their own, so it is unique.
 fn copy_id(index: usize) -> String {
     format!("c{index}")
-}
-
-/// Whether `name` is an XML name without a prefix: a page may create elements
-/// and attributes whose names would break the serialized markup, or name
-/// prefixes it never declares.
-pub(super) fn xml_name(name: &str) -> bool {
-    let start = |ch: char| ch.is_alphabetic() || ch == '_';
-    let mut chars = name.chars();
-    chars.next().is_some_and(start)
-        && chars.all(|ch| start(ch) || ch.is_alphanumeric() || matches!(ch, '-' | '.'))
 }

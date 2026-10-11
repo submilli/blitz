@@ -387,3 +387,282 @@ fn declarations_of_another_lock_are_skipped() {
     assert!(block.try_read_with(&ours.read()).is_none());
     assert!(block.try_read_with(&theirs.read()).is_some());
 }
+
+/// Every copy is expanded by the parser wherever it stands, `<defs>`
+/// included: a chain of copies that each instance a large tree counts once
+/// per copy. The chain is also too deep for the parser's recursion.
+#[test]
+fn expansion_counts_every_copy() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    // A hidden SVG of its own, which layout never parses: usvg recurses once
+    // per `<use>` in a chain (SUB-1570).
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    add(
+        &mut m,
+        sprites,
+        "rect",
+        &[("id", "d0"), ("width", "1"), ("height", "1")],
+    );
+    // d6 expands to about 2^6 rects.
+    for level in 1..=6 {
+        let group = add(&mut m, sprites, "g", &[("id", &format!("d{level}"))]);
+        for _ in 0..2 {
+            add(
+                &mut m,
+                group,
+                "use",
+                &[("href", &format!("#d{}", level - 1))],
+            );
+        }
+    }
+    // A chain of 200 groups, each using the next, the last using d6.
+    for link in 0..200 {
+        let group = add(&mut m, sprites, "g", &[("id", &format!("f{link}"))]);
+        let next = if link == 199 {
+            "#d6".to_owned()
+        } else {
+            format!("#f{}", link + 1)
+        };
+        add(&mut m, group, "use", &[("href", &next)]);
+    }
+    let chained = add(&mut m, svg, "g", &[]);
+    add(&mut m, chained, "use", &[("href", "#f0")]);
+    let direct = add(&mut m, svg, "g", &[]);
+    add(&mut m, direct, "use", &[("href", "#d6")]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(direct).unwrap().is_some());
+    assert!(doc.capture_svg_element(chained).is_err());
+}
+
+/// Instances copy their content too: large path data weighs more than an
+/// element.
+#[test]
+fn expansion_weighs_content() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let data = format!("M0 0{}", " L1 1".repeat(20_000));
+    add(&mut m, svg, "path", &[("id", "p"), ("d", &data)]);
+    let group = add(&mut m, svg, "g", &[]);
+    for _ in 0..100 {
+        add(&mut m, group, "use", &[("href", "#p")]);
+    }
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(group).is_err());
+}
+
+/// SVG attributes take unitless lengths: `font-size="20"` reaches the
+/// computed style that replaces the attribute.
+#[test]
+fn unitless_presentation_lengths_apply() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let text = add(
+        &mut m,
+        svg,
+        "text",
+        &[("font-size", "20"), ("stroke-width", "3")],
+    );
+    drop(m);
+    let markup = painted(&mut doc, text);
+    assert!(markup.contains("font-size:20px"), "{markup}");
+    assert!(markup.contains("stroke-width:3px"), "{markup}");
+}
+
+/// Stop colors, text anchors and markers reach computed style from
+/// presentation attributes, `style` attributes and stylesheets alike.
+#[test]
+fn stops_anchors_and_markers_come_from_style() {
+    let (mut doc, svg) = page(".anchored{text-anchor:middle}");
+    let mut m = doc.mutate();
+    let defs = add(&mut m, svg, "defs", &[]);
+    let gradient = add(&mut m, defs, "linearGradient", &[("id", "g")]);
+    add(
+        &mut m,
+        gradient,
+        "stop",
+        &[("style", "stop-color:rgb(0,255,0);stop-opacity:0.5")],
+    );
+    let marker = add(&mut m, defs, "marker", &[("id", "m")]);
+    add(&mut m, marker, "rect", &[("width", "1"), ("height", "1")]);
+    let group = add(&mut m, svg, "g", &[("marker-end", "url(#m)")]);
+    let line = [("x2", "4"), ("stroke", "url(#g)")];
+    let path = add(&mut m, group, "line", &line);
+    let text = add(&mut m, svg, "text", &[("class", "anchored")]);
+    drop(m);
+    let markup = painted(&mut doc, path);
+    assert!(
+        markup.contains("stop-color:rgba(0,255,0,1);stop-opacity:0.5"),
+        "{markup}"
+    );
+    // The marker comes from the group outside the subtree, through style.
+    assert!(
+        markup.contains("marker-end:url(#c2)") || markup.contains("marker-end:url(#c1)"),
+        "{markup}"
+    );
+    let element = capture(&mut doc, path).unwrap();
+    assert!(element.tree.root().has_children());
+    assert!(painted(&mut doc, text).contains("text-anchor:middle"));
+}
+
+/// A `<use>` may instance a sprite below `display: none`, which has no
+/// computed styles: it enters with its attributes, as Chrome renders it.
+#[test]
+fn sprites_below_display_none_are_instanced() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let sprites = add(&mut m, svg, "svg", &[("style", "display:none")]);
+    let symbol = add(&mut m, sprites, "symbol", &[("id", "icon")]);
+    add(
+        &mut m,
+        symbol,
+        "rect",
+        &[("width", "2"), ("height", "2"), ("fill", "rgb(0,0,255)")],
+    );
+    let group = add(&mut m, svg, "g", &[]);
+    add(
+        &mut m,
+        group,
+        "use",
+        &[("href", "#icon"), ("width", "2"), ("height", "2")],
+    );
+    drop(m);
+    let element = capture(&mut doc, group).unwrap();
+    let paths = paths(&element);
+    assert_eq!(paths.len(), 1);
+    assert_eq!(fill_color(&paths[0]), Some((0, 0, 255)));
+}
+
+/// A nested viewport's `viewBox` scale is not painted, but percentages
+/// inside still resolve against the `viewBox` (Blink's viewport resolver).
+#[test]
+fn nested_view_boxes_keep_their_percentages() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let group = add(&mut m, svg, "g", &[]);
+    let nested = [
+        ("width", "100"),
+        ("height", "100"),
+        ("viewBox", "0 0 10 10"),
+    ];
+    let nested = add(&mut m, group, "svg", &nested);
+    add(
+        &mut m,
+        nested,
+        "rect",
+        &[("width", "50%"), ("height", "50%")],
+    );
+    drop(m);
+    let element = capture(&mut doc, group).unwrap();
+    let bounds = paths(&element)[0].abs_bounding_box();
+    assert_eq!((bounds.width(), bounds.height()), (5.0, 5.0));
+    // The placed markup keeps the viewBox scale for the bounds.
+    assert_eq!(element.bounds.width(), 50.0);
+}
+
+/// Patterns paint their content through `PaintResourceSubtree` too: Chrome
+/// draws a pattern's translated child untranslated (`patternTransform` in
+/// `element-images.js`).
+#[test]
+fn pattern_content_leaves_its_transforms_out() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let pattern = [
+        ("id", "p"),
+        ("width", "4"),
+        ("height", "4"),
+        ("patternUnits", "userSpaceOnUse"),
+    ];
+    let pattern = add(&mut m, svg, "pattern", &pattern);
+    add(
+        &mut m,
+        pattern,
+        "rect",
+        &[
+            ("transform", "translate(1,1)"),
+            ("width", "1"),
+            ("height", "1"),
+        ],
+    );
+    let rect = add(
+        &mut m,
+        svg,
+        "rect",
+        &[("fill", "url(#p)"), ("width", "4"), ("height", "4")],
+    );
+    drop(m);
+    let markup = painted(&mut doc, rect);
+    assert!(!markup.contains("translate"), "{markup}");
+}
+
+/// Only local `url()`s name copies: another document's `#id` draws the
+/// fallback, as in Chrome.
+#[test]
+fn external_paint_servers_are_not_local() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    add(&mut m, svg, "linearGradient", &[("id", "g")]);
+    let fill = [
+        ("fill", "url(https://other.test/a.svg#g) rgb(255,0,0)"),
+        ("width", "2"),
+        ("height", "2"),
+    ];
+    let rect = add(&mut m, svg, "rect", &fill);
+    drop(m);
+    let element = capture(&mut doc, rect).unwrap();
+    assert_eq!(fill_color(&paths(&element)[0]), Some((255, 0, 0)));
+}
+
+/// IDs are looked up as needed, so a reference early in a document larger
+/// than one lookup's budget still resolves.
+#[test]
+fn references_resolve_in_large_documents() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let group = add(&mut m, svg, "g", &[]);
+    add(&mut m, group, "use", &[("href", "#early")]);
+    add(
+        &mut m,
+        svg,
+        "rect",
+        &[("id", "early"), ("width", "1"), ("height", "1")],
+    );
+    let filler = add(&mut m, svg, "g", &[]);
+    for _ in 0..6000 {
+        add(&mut m, filler, "g", &[]);
+    }
+    drop(m);
+    let element = capture(&mut doc, group).unwrap();
+    assert_eq!(paths(&element).len(), 1);
+}
+
+/// A chain of light `<use>`s stays within the weight but not the depth the
+/// parser recurses to.
+#[test]
+fn use_nesting_is_bounded() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    add(&mut m, sprites, "g", &[("id", "l0")]);
+    for link in 1..=65 {
+        let group = add(&mut m, sprites, "g", &[("id", &format!("l{link}"))]);
+        add(
+            &mut m,
+            group,
+            "use",
+            &[("href", &format!("#l{}", link - 1))],
+        );
+    }
+    let shallow = add(&mut m, svg, "g", &[]);
+    add(&mut m, shallow, "use", &[("href", "#l40")]);
+    let deep = add(&mut m, svg, "g", &[]);
+    add(&mut m, deep, "use", &[("href", "#l65")]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(shallow).is_ok());
+    assert!(doc.capture_svg_element(deep).is_err());
+}

@@ -1,9 +1,11 @@
 //! The viewport a referenced element's lengths resolve against, and whether
 //! its geometry depends on it.
 
+use super::MAX_ATTRIBUTE_LEN;
 use crate::canvas_svg_filter::CanvasSvgLimit;
 use crate::{BaseDocument, NodeId};
 use std::str::FromStr;
+use style::properties::ComputedValues;
 use svgtypes::LengthUnit;
 
 /// Ancestors inspected for the nearest viewport.
@@ -75,9 +77,9 @@ impl BaseDocument {
 }
 
 /// A valid `viewBox`'s size.
-fn view_box_size(element: &crate::node::ElementData) -> Option<[f32; 2]> {
+pub(super) fn view_box_size(element: &crate::node::ElementData) -> Option<[f32; 2]> {
     let value = element.attr(markup5ever::local_name!("viewBox"))?;
-    if value.len() > 4096 {
+    if value.len() > MAX_ATTRIBUTE_LEN {
         return None;
     }
     let view_box = svgtypes::ViewBox::from_str(value).ok()?;
@@ -90,7 +92,7 @@ fn view_box_size(element: &crate::node::ElementData) -> Option<[f32; 2]> {
 /// An SVG length in user units, percentages of `around`. Negative and
 /// invalid lengths are `None`, which keeps the default.
 fn resolve_length(value: &str, around: f32, font_size: f32) -> Option<f32> {
-    if value.len() > 4096 {
+    if value.len() > MAX_ATTRIBUTE_LEN {
         return None;
     }
     let length = svgtypes::Length::from_str(value.trim()).ok()?;
@@ -118,9 +120,13 @@ fn resolve_length(value: &str, around: f32, font_size: f32) -> Option<f32> {
 pub(super) fn self_dependent(
     tag: &str,
     element: &crate::node::ElementData,
-    style: &style::properties::ComputedValues,
+    style: Option<&ComputedValues>,
 ) -> bool {
-    let attr = |name: &str| element.attr(markup5ever::LocalName::from(name));
+    let attr = |name: &str| {
+        element
+            .attr(markup5ever::LocalName::from(name))
+            .filter(|value| value.len() <= MAX_ATTRIBUTE_LEN)
+    };
     let percent = |names: &[&str]| {
         names
             .iter()
@@ -131,13 +137,13 @@ pub(super) fn self_dependent(
             .iter()
             .any(|name| attr(name).is_some_and(relative_length))
     };
-    let shape = |names: &[&str]| percent(names) || stroke_dependent(style);
+    let stroke = style.is_some_and(stroke_dependent);
     match tag {
-        "rect" => shape(&["x", "y", "width", "height", "rx", "ry"]),
-        "circle" => shape(&["cx", "cy", "r"]),
-        "ellipse" => shape(&["cx", "cy", "rx", "ry"]),
-        "line" => relative(&["x1", "y1", "x2", "y2"]) || stroke_dependent(style),
-        "path" | "polyline" | "polygon" => stroke_dependent(style),
+        "rect" => percent(&["x", "y", "width", "height", "rx", "ry"]) || stroke,
+        "circle" => percent(&["cx", "cy", "r"]) || stroke,
+        "ellipse" => percent(&["cx", "cy", "rx", "ry"]) || stroke,
+        "line" => relative(&["x1", "y1", "x2", "y2"]) || stroke,
+        "path" | "polyline" | "polygon" => stroke,
         "image" => percent(&["x", "y", "width", "height"]),
         "text" => true,
         "svg" | "use" => relative(&["x", "y", "width", "height"]),
@@ -145,23 +151,27 @@ pub(super) fn self_dependent(
     }
 }
 
-/// Stroke lengths given in percentages.
-fn stroke_dependent(style: &style::properties::ComputedValues) -> bool {
-    use style_traits::ToCss;
-    [
-        style.clone_stroke_width().to_css_string(),
-        style.clone_stroke_dasharray().to_css_string(),
-        style.clone_stroke_dashoffset().to_css_string(),
-    ]
-    .iter()
-    .any(|value| value.contains('%'))
+/// Stroke lengths given in percentages, read without serializing them.
+fn stroke_dependent(style: &ComputedValues) -> bool {
+    use style::values::generics::svg::{SVGLength, SVGStrokeDashArray};
+    let svg = style.get_inherited_svg();
+    let width = match &svg.stroke_width {
+        SVGLength::LengthPercentage(width) => width.0.has_percentage(),
+        SVGLength::ContextValue => false,
+    };
+    let offset = match &svg.stroke_dashoffset {
+        SVGLength::LengthPercentage(offset) => offset.has_percentage(),
+        SVGLength::ContextValue => false,
+    };
+    let dashes = match &svg.stroke_dasharray {
+        SVGStrokeDashArray::Values(dashes) => dashes.iter().any(|dash| dash.0.has_percentage()),
+        SVGStrokeDashArray::ContextValue => false,
+    };
+    width || offset || dashes
 }
 
 /// Blink's `SVGLength::IsRelative`: a percentage or a font-relative unit.
 fn relative_length(value: &str) -> bool {
-    if value.len() > 4096 {
-        return false;
-    }
     svgtypes::Length::from_str(value.trim()).is_ok_and(|length| {
         matches!(
             length.unit,

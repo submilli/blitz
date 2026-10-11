@@ -18,3 +18,8 @@ participate in matching, including their nested children.
 SUB-1561 adds `Locked::try_read_with` to `shared_lock.rs`, which returns `None`
 for a guard from another lock instead of panicking, so Blitz can read the
 declarations behind a computed style without trusting where its rule node came from.
+SUB-1561 also enables `stop-color`, `stop-opacity`, `paint-order`, `text-anchor`,
+`marker-start`, `marker-mid`, `marker-end` and the `marker` shorthand for servo
+(`properties/longhands.toml`, `properties/shorthands.toml` and the `marker` module
+in `properties/shorthands.rs`), so SVG stylesheets and `style` attributes reach
+computed style.

@@ -5,17 +5,22 @@
 //! draws content but none of the paint property nodes below it: transforms
 //! (`<use>` offsets and nested viewports included), opacity, filters, clips
 //! and masks are all left out. It culls that picture to the element's visual
-//! rectangle *with* the transforms. One [`plan`] therefore writes two markups:
-//! the painted one, and a placed one with the transforms that only measures
-//! the bounds.
+//! rectangle *with* the transforms. [`plan`] decides what to serialize and
+//! [`markup`] writes it twice: the painted markup, and a placed one with the
+//! transforms that only measures the bounds.
 //!
 //! Each element carries its computed paint styles, since the parser sees no
-//! stylesheet. `<use>` targets and paint servers outside the subtree become
-//! numbered copies in `<defs>`; a `<use>` copy keeps only its declared styles
-//! so that it inherits from the `<use>`, as Blink's instance trees do.
+//! stylesheet. Every element a kept reference names (a `<use>` target, paint
+//! server, marker or text path) becomes a numbered copy in `<defs>`, as
+//! elements keep no IDs of their own; a `<use>` copy keeps only its declared
+//! styles so that it inherits from the `<use>`, as Blink's instance trees do.
+//! Patterns paint their content through `PaintResourceSubtree` too, so every
+//! copy leaves transforms and effects out alike.
 
+mod elements;
 mod markup;
 mod plan;
+mod scc;
 mod style;
 mod viewport;
 
@@ -25,11 +30,16 @@ use crate::{BaseDocument, NodeId};
 
 /// Elements of one reference: the subtree and its copies.
 const MAX_ELEMENT_NODES: usize = 1024;
-/// Elements the parser may build once `<use>` instances expand, so a few
-/// nested `<use>`s cannot multiply into a huge tree.
-const MAX_EXPANDED_NODES: usize = 8 * 1024;
+/// What the parser may build once `<use>` instances expand, so that a few
+/// nested `<use>`s cannot multiply into a huge tree: each element counts once,
+/// plus once per [`WEIGHT_BYTES`] of its attribute and text content.
+const MAX_EXPANDED_WEIGHT: usize = 8 * 1024;
+const WEIGHT_BYTES: usize = 256;
 /// Markup of one reference.
 const MAX_ELEMENT_MARKUP: usize = 256 * 1024;
+/// Attribute values read as references or lengths; longer ones are ignored,
+/// as the filter snapshot ignores them.
+const MAX_ATTRIBUTE_LEN: usize = 4096;
 
 /// Containers Blink lays out without painting (`LayoutSVGHiddenContainer`):
 /// a reference to one draws nothing, and lengths inside never make a

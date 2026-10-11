@@ -9,6 +9,16 @@ use style::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use style_traits::ParsingMode;
 
 impl Node {
+    /// The URL presentation attributes resolve against: the owner document's.
+    pub(crate) fn svg_presentation_base(&self) -> url::Url {
+        let document = self.with(self.owner_document);
+        match &document.data {
+            NodeData::Document(data) => data.metadata.url.clone(),
+            _ => None,
+        }
+        .unwrap_or_else(|| url::Url::parse("about:blank").expect("static parser base"))
+    }
+
     pub(crate) fn svg_presentation_hints(&self) -> Vec<PropertyDeclaration> {
         let Some(element) = self.element_data() else {
             return Vec::new();
@@ -16,15 +26,9 @@ impl Node {
         if element.name.ns.as_ref() != "http://www.w3.org/2000/svg" {
             return Vec::new();
         }
-        let document = self.with(self.owner_document);
-        let url = match &document.data {
-            NodeData::Document(data) => data.metadata.url.clone(),
-            _ => None,
-        }
-        .unwrap_or_else(|| url::Url::parse("about:blank").expect("static parser base"));
-        let base = UrlExtraData(Arc::new(url));
+        let base = UrlExtraData(Arc::new(self.svg_presentation_base()));
         let mut result = Vec::new();
-        for property in PROPERTIES {
+        for property in PRESENTATION_PROPERTIES {
             let Some(value) = element.attr_dom(markup5ever::LocalName::from(property)) else {
                 continue;
             };
@@ -42,7 +46,8 @@ impl Node {
                 Origin::Author,
                 &base,
                 None,
-                ParsingMode::DEFAULT,
+                // SVG attributes take unitless lengths (`font-size="8"`).
+                ParsingMode::ALLOW_UNITLESS_LENGTH,
                 selectors::matching::QuirksMode::NoQuirks,
                 CssRuleType::Style,
             )
@@ -58,7 +63,7 @@ impl Node {
 }
 
 /// The presentation attributes mapped to CSS.
-const PROPERTIES: [&str; 22] = [
+pub(crate) const PRESENTATION_PROPERTIES: [&str; 29] = [
     "color",
     "flood-color",
     "flood-opacity",
@@ -75,6 +80,13 @@ const PROPERTIES: [&str; 22] = [
     "stroke-linecap",
     "stroke-linejoin",
     "stroke-miterlimit",
+    "stop-color",
+    "stop-opacity",
+    "paint-order",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "text-anchor",
     "display",
     "visibility",
     "font-family",
