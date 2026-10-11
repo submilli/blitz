@@ -127,6 +127,7 @@ enum HeldImage {
         intrinsic_dimensions: crate::node::SvgIntrinsicDimensions,
         origin_clean: bool,
         retained_bytes: usize,
+        subresources: crate::svg_subresources::SvgSubresources,
     },
 }
 impl HeldImage {
@@ -144,6 +145,7 @@ impl HeldImage {
                 intrinsic_dimensions: svg.intrinsic_dimensions,
                 origin_clean: svg.origin_clean,
                 retained_bytes: svg.retained_bytes,
+                subresources: svg.subresources.clone(),
             }),
             ImageData::None => None,
         }
@@ -168,11 +170,13 @@ impl HeldImage {
                 intrinsic_dimensions,
                 origin_clean,
                 retained_bytes,
+                subresources,
             } => Some(ImageData::Svg(crate::node::SvgImageData {
                 tree: tree.upgrade()?,
                 intrinsic_dimensions: *intrinsic_dimensions,
                 origin_clean: *origin_clean,
                 retained_bytes: *retained_bytes,
+                subresources: subresources.clone(),
             })),
         }
     }

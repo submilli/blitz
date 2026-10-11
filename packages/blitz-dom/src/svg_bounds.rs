@@ -6,6 +6,7 @@
 use crate::DecodedImageBudget;
 use crate::image_budget::Reservation;
 use crate::node::SvgImageData;
+use crate::svg_subresources::{BodyDigest, NestedImages, SubresourceRecorder};
 use std::sync::Arc;
 
 /// The SVG source an SVGZ image may inflate to, and that the documents one SVG
@@ -42,6 +43,17 @@ pub(crate) fn parse_svg_image(
     fonts: &crate::SvgFontDb,
     budget: &DecodedImageBudget,
 ) -> Result<SvgImageData, SvgRefusal> {
+    parse_svg_image_showing(source, fonts, budget, NestedImages::All)
+}
+
+/// [`parse_svg_image`], showing only the `shown` images of its `<image>`
+/// elements (see [`crate::svg_subresources`]).
+pub(crate) fn parse_svg_image_showing(
+    source: &[u8],
+    fonts: &crate::SvgFontDb,
+    budget: &DecodedImageBudget,
+    shown: NestedImages,
+) -> Result<SvgImageData, SvgRefusal> {
     let inflated;
     let source = if is_svgz(source) {
         inflated = inflate_svgz_once(source).ok_or(SvgRefusal::Invalid)?;
@@ -51,8 +63,8 @@ pub(crate) fn parse_svg_image(
     };
     let svg = {
         let _parsing = reserve_parse(budget, source).ok_or(SvgRefusal::Budget)?;
-        SvgImageData::from_data(source, &svg_options(fonts, budget))
-            .map_err(|_| SvgRefusal::Invalid)?
+        let options = |recorder: &SubresourceRecorder| svg_options(fonts, budget, recorder);
+        SvgImageData::parse_recording(source, shown, options).map_err(|_| SvgRefusal::Invalid)?
     };
     if !budget.admit_svg(&svg) {
         return Err(SvgRefusal::Budget);
@@ -65,18 +77,28 @@ pub(crate) fn parse_svg_image(
 /// resolver, so its bounds cover every nesting level: the number of nested
 /// images, their source bytes, what parsing one allocates up front, and the
 /// decoded size of rasters, which stay encoded until a renderer decodes them.
-fn svg_options(fonts: &crate::SvgFontDb, budget: &DecodedImageBudget) -> usvg::Options<'static> {
+/// The resolver refuses, and notes as omitted, the `<image>` bodies `recorder`
+/// does not admit, and scans each nested document with it.
+fn svg_options(
+    fonts: &crate::SvgFontDb,
+    budget: &DecodedImageBudget,
+    recorder: &SubresourceRecorder,
+) -> usvg::Options<'static> {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     let nested = Arc::new(AtomicUsize::new(0));
     let sources = Arc::new(AtomicU64::new(0));
     let bytes = Arc::new(AtomicU64::new(0));
     let budget = budget.clone();
+    let recorder = recorder.clone();
     let decode = usvg::ImageHrefResolver::default_data_resolver();
     usvg::Options {
         fontdb: Arc::clone(fonts),
         image_href_resolver: usvg::ImageHrefResolver {
             resolve_data: Box::new(move |mime, data, options| {
-                if nested.fetch_add(1, Ordering::Relaxed) >= MAX_NESTED_SVG_IMAGES {
+                let body = BodyDigest::of(&data);
+                if !recorder.admits(body)
+                    || nested.fetch_add(1, Ordering::Relaxed) >= MAX_NESTED_SVG_IMAGES
+                {
                     return None;
                 }
                 // usvg would inflate a nested SVGZ document without a bound.
@@ -91,6 +113,9 @@ fn svg_options(fonts: &crate::SvgFontDb, budget: &DecodedImageBudget) -> usvg::O
                 }
                 let kind = {
                     let _parsing = reserve_parse(&budget, &data)?;
+                    // Before usvg parses a nested document and resolves its
+                    // images, so they are known to be `<image>` elements.
+                    recorder.scan_nested(&data);
                     decode(mime, data, options)?
                 };
                 let encoded = match &kind {

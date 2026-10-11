@@ -7,13 +7,16 @@
 //! No CORS through the document's image fetches (host policy and readback
 //! provenance) and draw nothing until they arrive, while `data:` URLs decode in
 //! the engine: a draw before the queued update decodes them itself, within a
-//! per-draw budget, as Chrome shows them on the first synchronous draw. Equal
-//! URLs share one decode through the document's image cache, and every decode
-//! is charged to the document's decoded image budget. A same-document fragment
-//! names an element instead and fetches nothing.
+//! per-draw budget, as Chrome shows them on the first synchronous draw. A
+//! `data:` SVG image shows at once without the `<image>` images the document
+//! has not loaded, and with them a task later ([`crate::svg_image_loads`]).
+//! Equal URLs share one decode through the document's image cache, and every
+//! decode is charged to the document's decoded image budget. A same-document
+//! fragment names an element instead and fetches nothing.
 use crate::image_request::{ImageKey, PendingImage};
 use crate::net::ResourceHandler;
 use crate::node::ImageData;
+use crate::svg_subresources::NestedImages;
 use crate::util::ImageType;
 use crate::{BaseDocument, DocumentMutator, NodeId};
 use blitz_traits::net::{CorsSettings, ResourceInitiator};
@@ -40,10 +43,12 @@ impl FeImages {
 
 /// An element's current request: the resolved URL it is for and, once loaded,
 /// the decoded image. A failed or unsupported image, or one past the decoded
-/// image budget, stays `None`.
+/// image budget, stays `None`. Until the request is `complete`, a `data:` SVG
+/// image may show without its `<image>` images.
 struct FeImageRequest {
     url: String,
     image: Option<ImageData>,
+    complete: bool,
 }
 
 /// What an `href` names.
@@ -89,10 +94,9 @@ impl BaseDocument {
         let key = ImageKey::no_cors(url.as_str());
         let image = match self.fe_images.requests.get(&node) {
             Some(request) if request.url == url.as_str() => request.image.clone(),
-            _ if url.scheme() == "data" => self
-                .image_cache
-                .get(&key)
-                .or_else(|| self.decode_data_url(&url, Some(inline))),
+            _ if url.scheme() == "data" => self.image_cache.get(&key).or_else(|| {
+                self.decode_data_url(url.as_str(), self.shown_nested_images(), Some(inline))
+            }),
             _ => None,
         };
         FeImageTarget::Fetched(image)
@@ -131,7 +135,7 @@ impl BaseDocument {
         // one is fetched again.
         let standing = self.fe_images.requests.get(&node).is_some_and(|request| {
             url.as_ref().is_some_and(|url| request.url == url.as_str())
-                && (request.image.is_some()
+                && (request.complete && request.image.is_some()
                     || self
                         .pending_images
                         .get(&ImageKey::no_cors(&request.url))
@@ -147,21 +151,54 @@ impl BaseDocument {
             return;
         };
         let key = ImageKey::no_cors(url.as_str());
-        let cached = self.image_cache.get(&key);
-        let data = url.scheme() == "data";
-        let image = match cached {
-            Some(image) => Some(image),
-            None if data => self.decode_stored_data_url(&key, &url),
-            None => None,
-        };
-        let loaded = data || image.is_some();
+        let image = self.image_cache.get(&key);
+        let complete = image.is_some();
         let request = FeImageRequest {
             url: key.url.clone(),
             image,
+            complete,
         };
         self.fe_images.requests.insert(node, request);
-        if !loaded {
+        if complete {
+            return;
+        }
+        if url.scheme() == "data" {
+            self.load_data_fe_image(node, key);
+        } else {
             self.start_fe_image_fetch(node, key, url);
+        }
+    }
+
+    /// Decode `node`'s `data:` image now. Unless it is an SVG image that left
+    /// out `<image>` images not loaded yet, it is complete and stored in the
+    /// image cache under `key`: the URL is its own body, with nothing
+    /// forbidding storage. Otherwise it shows as decoded and completes with
+    /// the full image a task later, or with a fetch of the URL already
+    /// pending. A failed decode leaves the request without an image, which a
+    /// later update decodes again (a request stands only with an image).
+    fn load_data_fe_image(&mut self, node: NodeId, key: ImageKey) {
+        let image = self.decode_data_url(&key.url, self.shown_nested_images(), None);
+        // Unless it left images out, it is complete whatever else is fetching
+        // the URL: a `data:` URL is its own body.
+        let complete =
+            !matches!(&image, Some(ImageData::Svg(svg)) if svg.subresources.omits_images);
+        if complete && let Some(image) = &image {
+            self.note_image_loaded(&key.url, image, true);
+            let retention = crate::ImageRetention::Store;
+            self.image_cache
+                .insert(key.clone(), image, retention, &self.image_budget);
+        }
+        if let Some(request) = self.fe_images.requests.get_mut(&node) {
+            request.image = image;
+            request.complete = complete;
+        }
+        if complete {
+            return;
+        }
+        let waiter = (node, ImageType::FilterImage);
+        match self.pending_images.get_mut(&key) {
+            Some(pending) => pending.waiters.insert(waiter),
+            None => self.defer_data_image(key, waiter),
         }
     }
 
@@ -192,41 +229,29 @@ impl BaseDocument {
         if key.mode != CorsSettings::NoCors {
             return;
         }
-        let current = self
-            .fe_images
-            .requests
-            .get(&node)
-            .is_some_and(|request| request.url == key.url && request.image.is_none());
-        let Some(image) = image.filter(|_| current) else {
+        let Some(request) = self.fe_images.requests.get_mut(&node) else {
             return;
         };
-        if let Some(request) = self.fe_images.requests.get_mut(&node) {
-            request.image = Some(image);
+        // A failed load leaves the request incomplete, so updating it again
+        // retries.
+        if request.url != key.url || request.complete || image.is_none() {
+            return;
         }
+        request.complete = true;
+        request.image = image;
     }
 
-    /// Decode a `data:` `url` and store it in the image cache under `key`: the
-    /// URL is its own body, with nothing forbidding storage.
-    fn decode_stored_data_url(&mut self, key: &ImageKey, url: &url::Url) -> Option<ImageData> {
-        let image = self.decode_data_url(url, None)?;
-        self.image_cache.insert(
-            key.clone(),
-            &image,
-            crate::ImageRetention::Store,
-            &self.image_budget,
-        );
-        Some(image)
-    }
-
-    /// A `data:` image, decoded like a fetched one and always readable. `None`
-    /// when the URL or image is invalid, or a raster would pass the decoded
-    /// image budget or what an `inline` draw may still decode.
-    fn decode_data_url(
+    /// A `data:` image, decoded like a fetched one and always readable, showing
+    /// the `shown` images of an SVG image's `<image>` elements. `None` when the
+    /// URL or image is invalid, or a raster would pass the decoded image budget
+    /// or what an `inline` draw may still decode.
+    pub(crate) fn decode_data_url(
         &self,
-        url: &url::Url,
+        url: &str,
+        shown: NestedImages,
         inline: Option<&mut InlineDecodes>,
     ) -> Option<ImageData> {
-        let data = data_url::DataUrl::process(url.as_str()).ok()?;
+        let data = data_url::DataUrl::process(url).ok()?;
         let (body, _) = data.decode_to_vec().ok()?;
         if let (Some(inline), Some(bytes)) =
             (inline, crate::image_decode::bounded_rgba_bytes(&body))
@@ -234,7 +259,8 @@ impl BaseDocument {
             inline.0 = inline.0.checked_sub(bytes)?;
         }
         let body = blitz_traits::net::Bytes::from(body);
-        crate::image_decode::decode_image(&body, true, &self.svg_fonts, &self.image_budget).ok()
+        let (fonts, budget) = (&self.svg_fonts, &self.image_budget);
+        crate::image_decode::decode_image_showing(&body, true, fonts, budget, shown).ok()
     }
 
     fn start_fe_image_fetch(&mut self, node: NodeId, key: ImageKey, url: url::Url) {

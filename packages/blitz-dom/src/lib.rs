@@ -136,6 +136,12 @@ mod reclamation;
 mod resource_roots;
 #[cfg(feature = "svg")]
 mod svg_bounds;
+#[cfg(feature = "svg")]
+mod svg_image_loads;
+#[cfg(feature = "svg")]
+pub use svg_image_loads::SvgImageLoad;
+#[cfg(feature = "svg")]
+mod svg_subresources;
 mod validation;
 pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
 pub use reclamation::NodeReachability;

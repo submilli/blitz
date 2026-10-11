@@ -34,6 +34,10 @@ impl ImageKey {
 pub(crate) struct PendingImage {
     pub request_id: usize,
     pub waiters: Waiters,
+    /// An SVG image that arrived but waits for its own images; the embedder
+    /// completes the fetch with it (see [`crate::svg_image_loads`]).
+    #[cfg(feature = "svg")]
+    pub deferred: Option<crate::svg_image_loads::Deferred>,
 }
 impl PendingImage {
     pub fn new(request_id: usize, node: NodeId, kind: ImageType) -> Self {
@@ -42,6 +46,8 @@ impl PendingImage {
         Self {
             request_id,
             waiters,
+            #[cfg(feature = "svg")]
+            deferred: None,
         }
     }
 }
@@ -148,16 +154,21 @@ impl BaseDocument {
         url: &str,
         request_id: usize,
     ) -> Option<(ImageKey, Vec<(NodeId, ImageType)>)> {
-        let key = CorsSettings::ALL
+        let key = self.pending_image_key(url, request_id)?;
+        let waiters = self.pending_images.remove(&key)?.waiters.into_ordered();
+        Some((key, waiters))
+    }
+
+    /// The key of the pending fetch `request_id` started for `url`.
+    pub(crate) fn pending_image_key(&self, url: &str, request_id: usize) -> Option<ImageKey> {
+        CorsSettings::ALL
             .into_iter()
             .map(|mode| ImageKey::new(url, mode))
             .find(|key| {
                 self.pending_images
                     .get(key)
                     .is_some_and(|pending| pending.request_id == request_id)
-            })?;
-        let waiters = self.pending_images.remove(&key)?.waiters.into_ordered();
-        Some((key, waiters))
+            })
     }
 
     /// A failed fetch, including a CORS failure, leaves its current `<img>`

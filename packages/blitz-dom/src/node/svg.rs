@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::svg_subresources::SubresourceRecorder;
 use usvg::roxmltree;
 
 /// Dimensions declared on the root `<svg>` element, before any resolution.
@@ -84,6 +85,8 @@ pub struct SvgImageData {
     /// What keeping the document costs the decoded image budget, estimated
     /// once at parse (see [`crate::svg_bounds::retained_bytes`]).
     pub(crate) retained_bytes: usize,
+    /// What the SVG image loads itself (see [`crate::svg_subresources`]).
+    pub(crate) subresources: crate::svg_subresources::SvgSubresources,
 }
 
 impl SvgImageData {
@@ -95,6 +98,26 @@ impl SvgImageData {
     /// is parsed through `svg_bounds::parse_svg_image`, which inflates SVGZ within
     /// its bounds first.
     pub fn from_data(data: &[u8], options: &usvg::Options) -> Result<Self, usvg::Error> {
+        Self::parse(data, options, None)
+    }
+
+    /// [`Self::from_data`] with the options `options_for` builds around a
+    /// recorder of the document's own images (see [`crate::svg_subresources`]),
+    /// whose resolver must consult it (`admits`, `scan_nested`).
+    pub(crate) fn parse_recording(
+        data: &[u8],
+        shown: crate::svg_subresources::NestedImages,
+        options_for: impl FnOnce(&SubresourceRecorder) -> usvg::Options<'static>,
+    ) -> Result<Self, usvg::Error> {
+        let recorder = SubresourceRecorder::new(shown);
+        Self::parse(data, &options_for(&recorder), Some(&recorder))
+    }
+
+    fn parse(
+        data: &[u8],
+        options: &usvg::Options,
+        recorder: Option<&SubresourceRecorder>,
+    ) -> Result<Self, usvg::Error> {
         let text = std::str::from_utf8(data).map_err(|_| usvg::Error::NotAnUtf8Str)?;
         let xml_options = roxmltree::ParsingOptions {
             allow_dtd: true,
@@ -102,12 +125,21 @@ impl SvgImageData {
         };
         let doc = roxmltree::Document::parse_with_options(text, xml_options)
             .map_err(usvg::Error::ParsingFailed)?;
+        if let Some(recorder) = recorder {
+            recorder.scan_document(&doc);
+        }
         let tree = usvg::Tree::from_xmltree(&doc, options)?;
+        let subresources: crate::svg_subresources::SvgSubresources = recorder
+            .map(|recorder| recorder.finish())
+            .unwrap_or_default();
+        let retained_bytes =
+            crate::svg_bounds::retained_bytes(&tree).saturating_add(subresources.retained_bytes());
         Ok(Self {
-            retained_bytes: crate::svg_bounds::retained_bytes(&tree),
+            retained_bytes,
             tree: Arc::new(tree),
             intrinsic_dimensions: SvgIntrinsicDimensions::from_xmltree(&doc),
             origin_clean: false,
+            subresources,
         })
     }
 

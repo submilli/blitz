@@ -66,6 +66,13 @@ pub enum Resource {
     None,
 }
 
+/// A request identity no other request of this process has: completions
+/// find their pending entry by it.
+pub(crate) fn next_request_id() -> usize {
+    static REQUEST_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    REQUEST_ID_COUNTER.fetch_add(1, Ao::Relaxed)
+}
+
 pub(crate) struct ResourceHandler<T: Send + Sync + 'static> {
     doc_id: usize,
     request_id: usize,
@@ -83,9 +90,8 @@ impl<T: Send + Sync + 'static> ResourceHandler<T> {
         shell_provider: Arc<dyn ShellProvider>,
         data: T,
     ) -> Self {
-        static REQUEST_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
         Self {
-            request_id: REQUEST_ID_COUNTER.fetch_add(1, Ao::Relaxed),
+            request_id: next_request_id(),
             doc_id,
             node_id,
             tx,

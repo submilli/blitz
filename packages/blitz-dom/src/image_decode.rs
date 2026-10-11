@@ -16,32 +16,70 @@ pub(crate) fn decode_image(
     svg_fonts: &crate::util::SvgFonts,
     budget: &DecodedImageBudget,
 ) -> Result<ImageData, String> {
-    const BUDGET_EXHAUSTED: &str = "Decoded image budget exhausted";
-    let image_err = match decode_charged(bytes, budget) {
-        Ok(mut raster) => {
-            raster.origin_clean = origin_clean;
-            return Ok(ImageData::Raster(raster));
-        }
-        Err(DecodeRefusal::Budget) => return Err(BUDGET_EXHAUSTED.into()),
-        Err(DecodeRefusal::Image(e)) => e.to_string(),
-    };
-
     #[cfg(feature = "svg")]
-    let svg_err = match crate::svg_bounds::parse_svg_image(bytes, svg_fonts, budget) {
+    return decode_image_showing(
+        bytes,
+        origin_clean,
+        svg_fonts,
+        budget,
+        crate::svg_subresources::NestedImages::All,
+    );
+    #[cfg(not(feature = "svg"))]
+    match decode_raster(bytes, origin_clean, budget)? {
+        Ok(image) => Ok(image),
+        Err(image_err) => Err(undecodable(bytes, &image_err, "svg feature disabled")),
+    }
+}
+
+/// [`decode_image`], showing the `shown` images of an SVG document's `<image>`
+/// elements (see [`crate::svg_subresources`]).
+#[cfg(feature = "svg")]
+pub(crate) fn decode_image_showing(
+    bytes: &Bytes,
+    origin_clean: bool,
+    svg_fonts: &crate::util::SvgFonts,
+    budget: &DecodedImageBudget,
+    shown: crate::svg_subresources::NestedImages,
+) -> Result<ImageData, String> {
+    use crate::svg_bounds::{SvgRefusal, parse_svg_image_showing};
+    let image_err = match decode_raster(bytes, origin_clean, budget)? {
+        Ok(image) => return Ok(image),
+        Err(image_err) => image_err,
+    };
+    match parse_svg_image_showing(bytes, svg_fonts, budget, shown) {
         Ok(mut svg) => {
             svg.origin_clean = origin_clean;
-            return Ok(ImageData::Svg(svg));
+            Ok(ImageData::Svg(svg))
         }
-        Err(crate::svg_bounds::SvgRefusal::Budget) => return Err(BUDGET_EXHAUSTED.into()),
-        Err(crate::svg_bounds::SvgRefusal::Invalid) => "not an SVG document",
-    };
-    #[cfg(not(feature = "svg"))]
-    let svg_err = "svg feature disabled";
+        Err(SvgRefusal::Budget) => Err(BUDGET_EXHAUSTED.into()),
+        Err(SvgRefusal::Invalid) => Err(undecodable(bytes, &image_err, "not an SVG document")),
+    }
+}
 
-    Err(format!(
+const BUDGET_EXHAUSTED: &str = "Decoded image budget exhausted";
+
+/// The raster image, or why `bytes` are not one. The outer error refuses the
+/// image outright: decoding it would pass the budget.
+fn decode_raster(
+    bytes: &Bytes,
+    origin_clean: bool,
+    budget: &DecodedImageBudget,
+) -> Result<Result<ImageData, String>, String> {
+    match decode_charged(bytes, budget) {
+        Ok(mut raster) => {
+            raster.origin_clean = origin_clean;
+            Ok(Ok(ImageData::Raster(raster)))
+        }
+        Err(DecodeRefusal::Budget) => Err(BUDGET_EXHAUSTED.into()),
+        Err(DecodeRefusal::Image(e)) => Ok(Err(e.to_string())),
+    }
+}
+
+fn undecodable(bytes: &Bytes, image_err: &str, svg_err: &str) -> String {
+    format!(
         "Could not parse image ({} bytes): image-crate error: {image_err}; svg fallback error: {svg_err}",
         bytes.len()
-    ))
+    )
 }
 
 /// A few bytes of compressed image can declare a huge bitmap. Decoding

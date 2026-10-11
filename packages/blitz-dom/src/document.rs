@@ -340,7 +340,9 @@ pub struct BaseDocument {
     /// scripts); Blitz does not fetch them.
     pub embedder_loads_iframes: bool,
     /// The embedder runs `<img>` updates itself, at the times HTML gives
-    /// (see [`crate::image_state`]); mutators do not.
+    /// (see [`crate::image_state`]); mutators do not. It also runs the
+    /// completions of SVG images waiting for their own images as tasks
+    /// (`take_svg_image_loads`); without them those fetches never end.
     pub embedder_updates_images: bool,
     /// `<img>` request states, queued updates and events.
     pub(crate) images: crate::image_state::ImageElements,
@@ -377,6 +379,9 @@ pub struct BaseDocument {
     /// SVG `feImage` requests and their queued updates.
     #[cfg(feature = "svg")]
     pub(crate) fe_images: crate::fe_image::FeImages,
+    /// SVG images waiting for their own images, and the bodies loaded.
+    #[cfg(feature = "svg")]
+    pub(crate) svg_image_loads: crate::svg_image_loads::SvgImageLoads,
     pub(crate) failed_image_inputs: HashMap<NodeId, String>,
 
     /// Tracks in-flight image requests. When an image is being fetched, additional
@@ -582,6 +587,8 @@ impl BaseDocument {
             image_budget: config.decoded_image_budget.unwrap_or_default(),
             #[cfg(feature = "svg")]
             fe_images: Default::default(),
+            #[cfg(feature = "svg")]
+            svg_image_loads: Default::default(),
             failed_image_inputs: HashMap::new(),
             pending_images: HashMap::new(),
             current_image_requests: HashMap::new(),
@@ -1478,6 +1485,10 @@ impl BaseDocument {
                 let Some(url) = res.resolved_url.as_ref() else {
                     return;
                 };
+                #[cfg(feature = "svg")]
+                if self.defer_svg_image(url, res.request_id, &image, retention) {
+                    return;
+                }
                 self.apply_loaded_image(url, res.request_id, image, retention);
             }
             Resource::DocumentSrc(html) => {
@@ -1533,13 +1544,15 @@ impl BaseDocument {
 
     /// Cache a loaded image and apply it to all nodes waiting on it
     /// (`<img>` elements, `background-image` layers and `mask-image` layers).
-    fn apply_loaded_image(
+    pub(crate) fn apply_loaded_image(
         &mut self,
         url: &str,
         request_id: usize,
         image: ImageData,
         retention: crate::ImageRetention,
     ) {
+        #[cfg(feature = "svg")]
+        self.note_image_loaded(url, &image, false);
         // Get all nodes waiting for this image
         let Some((key, waiting_nodes)) = self.take_image_waiters(url, request_id) else {
             return;
