@@ -228,7 +228,7 @@ struct Walked {
     /// [`Walked::decorated_paints`] with the context paint too.
     context_decorator: bool,
     /// Paints of decorations on text, which take their paint from the
-    /// element declaring them.
+    /// nearest element declaring them up to and including the `<text>`.
     decorated_paints: usize,
 }
 
@@ -320,7 +320,8 @@ impl Builder<'_> {
             let text = text_content(tag, in_text);
             // Any value counts, `none` included: the charge only grows.
             // Decorations take their paint from the nearest element declaring
-            // them, or else the nearest `<text>` (usvg `resolve_decoration`).
+            // them up to and including the `<text>` (usvg
+            // `resolve_decoration`), so text below a declaration decorates.
             let declares = element
                 .attr(markup5ever::LocalName::from("text-decoration"))
                 .is_some();

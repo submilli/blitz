@@ -107,7 +107,7 @@ impl Builder<'_> {
             }
             totals[source] = total;
             for found in &mut self.walked[source].found {
-                charge_hidden(found, &totals, total[3]);
+                charge_hidden_paint(found, &totals, total[3]);
             }
             let walked = &self.walked[source];
             for found in walked
@@ -184,7 +184,7 @@ impl Builder<'_> {
 /// Charge `found` for what is built from it out of its element's sight: per
 /// paint, marked element or vertex of the content of the `<use>` it is on,
 /// and per decoration in its source when its element decorates text.
-fn charge_hidden(found: &mut Found, totals: &[[usize; 4]], decorations: usize) {
+fn charge_hidden_paint(found: &mut Found, totals: &[[usize; 4]], decorations: usize) {
     if !found.multiplies {
         return;
     }
