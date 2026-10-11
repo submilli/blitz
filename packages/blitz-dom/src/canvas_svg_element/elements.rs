@@ -4,6 +4,7 @@
 use super::MAX_ATTRIBUTE_LEN;
 use crate::node::ElementData;
 use crate::{BaseDocument, NodeId};
+use std::str::FromStr;
 
 /// Containers Blink lays out without painting (`LayoutSVGHiddenContainer`):
 /// a reference to one draws nothing, and lengths inside never make a
@@ -103,14 +104,33 @@ pub(super) fn fragment(id: &str) -> Option<String> {
 /// and attributes whose names would break the serialized markup, or name
 /// prefixes it never declares.
 pub(super) fn xml_name(name: &str) -> bool {
-    let start = |ch: char| ch.is_alphabetic() || ch == '_';
     let mut chars = name.chars();
-    chars.next().is_some_and(start)
-        && chars.all(|ch| start(ch) || ch.is_alphanumeric() || matches!(ch, '-' | '.'))
+    chars.next().is_some_and(name_start) && chars.all(|ch| name_start(ch) || name_char(ch))
+}
+
+/// XML 1.0's `NameStartChar`, without `:`.
+fn name_start(ch: char) -> bool {
+    matches!(ch,
+        'A'..='Z' | '_' | 'a'..='z'
+        | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}'
+        | '\u{370}'..='\u{37D}' | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}'
+        | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}' | '\u{3001}'..='\u{D7FF}'
+        | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}' | '\u{10000}'..='\u{EFFFF}')
+}
+
+/// XML 1.0's `NameChar` beyond `NameStartChar`.
+fn name_char(ch: char) -> bool {
+    matches!(ch,
+        '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
+}
+
+/// Shapes the parser draws markers on but Blink does not.
+pub(super) fn unmarked_shape(tag: &str) -> bool {
+    matches!(tag, "rect" | "circle" | "ellipse")
 }
 
 /// Whether the parser paints `tag` with a fill or stroke paint server.
-pub(super) fn painted(tag: &str) -> bool {
+pub(super) fn takes_paint(tag: &str) -> bool {
     matches!(
         tag,
         "rect" | "circle" | "ellipse" | "line" | "path" | "polyline" | "polygon" | "text"
@@ -122,33 +142,79 @@ pub(super) fn markable(tag: &str) -> bool {
     matches!(tag, "line" | "path" | "polyline" | "polygon")
 }
 
-/// How many middle vertices a marker may be drawn at on `element`: at most
-/// half its path's numbers.
-pub(super) fn middle_vertices(tag: &str, element: &crate::node::ElementData) -> usize {
-    let numbers = |name: &str| {
+/// How many vertices a marker may be drawn at on `element`, read with the
+/// parser's own path and point grammars: an arc counts as the curves it
+/// becomes.
+pub(super) fn middle_vertices(tag: &str, element: &ElementData) -> usize {
+    let data = |name: &str| {
         element
             .attr(markup5ever::LocalName::from(name))
-            .map_or(0, count_numbers)
+            .unwrap_or("")
     };
     match tag {
-        "path" => numbers("d") / 2,
-        "polyline" | "polygon" => numbers("points") / 2,
+        "path" => svgtypes::PathParser::from(data("d"))
+            .map_while(Result::ok)
+            .map(|segment| match segment {
+                svgtypes::PathSegment::EllipticalArc { rx, ry, .. } => arc_curves(rx.max(ry)),
+                _ => 1,
+            })
+            .fold(0usize, usize::saturating_add),
+        "polyline" | "polygon" => svgtypes::PointsParser::from(data("points")).count(),
         _ => 0,
     }
 }
 
-/// The numbers in path or point data: runs of digits and points.
-fn count_numbers(data: &str) -> usize {
-    let mut count = 0;
-    let mut in_number = false;
-    for byte in data.bytes() {
-        let digit = byte.is_ascii_digit() || byte == b'.';
-        if digit && !in_number {
-            count += 1;
-        }
-        in_number = digit;
+/// The largest radius an arc may have, in user units: the parser splits arcs
+/// into a number of curves that grows with the radius (kurbo's
+/// `Arc::to_cubic_beziers`), so `<circle r="3e38">` alone would build
+/// millions.
+pub(super) const MAX_RADIUS: f64 = 1e9;
+
+/// How many cubic curves the parser makes of a full arc of `radius`
+/// (kurbo's subdivision for an accuracy of 0.1).
+fn arc_curves(radius: f64) -> usize {
+    let per_quarter = (radius.abs() / 0.1).powf(1.0 / 6.0).ceil();
+    // A bounded radius makes a small count; others are refused by
+    // `bounded_radii`.
+    if per_quarter.is_finite() && per_quarter < 1e6 {
+        4 * (per_quarter as usize).max(1)
+    } else {
+        usize::MAX
     }
-    count
+}
+
+/// Whether `element`'s arcs and rounded corners have radii the parser can
+/// subdivide within bounds. Percentages count against the largest viewport
+/// a capture accepts and font units against the largest font size.
+pub(super) fn bounded_radii(tag: &str, element: &ElementData) -> bool {
+    let attr = |name: &str| element.attr(markup5ever::LocalName::from(name));
+    let bounded = |name: &str| {
+        attr(name).is_none_or(|value| {
+            svgtypes::Length::from_str(value.trim()).map_or(true, |length| {
+                use svgtypes::LengthUnit;
+                let scale = match length.unit {
+                    LengthUnit::None | LengthUnit::Px => 1.0,
+                    LengthUnit::Percent => MAX_RADIUS / 100.0,
+                    LengthUnit::Em | LengthUnit::Ex => 10_000.0,
+                    _ => 100.0,
+                };
+                (length.number * scale).abs() <= MAX_RADIUS
+            })
+        })
+    };
+    match tag {
+        "circle" => bounded("r"),
+        "ellipse" | "rect" => bounded("rx") && bounded("ry"),
+        "path" => svgtypes::PathParser::from(attr("d").unwrap_or(""))
+            .map_while(Result::ok)
+            .all(|segment| match segment {
+                svgtypes::PathSegment::EllipticalArc { rx, ry, .. } => {
+                    rx.abs() <= MAX_RADIUS && ry.abs() <= MAX_RADIUS
+                }
+                _ => true,
+            }),
+        _ => true,
+    }
 }
 
 #[cfg(test)]

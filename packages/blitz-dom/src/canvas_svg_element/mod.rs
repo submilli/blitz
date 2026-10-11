@@ -61,6 +61,14 @@ impl BaseDocument {
         }
         let plan = plan::Plan::new(self, target)?;
         let viewport = self.svg_viewport(target)?;
+        // Percentage radii resolve against the viewport (see `bounded_radii`).
+        let huge = |size: [f32; 2]| {
+            size.iter()
+                .any(|side| f64::from(*side) > elements::MAX_RADIUS)
+        };
+        if viewport.is_some_and(huge) {
+            return Err(CanvasSvgLimit);
+        }
         let markup = markup::write(self, &plan, viewport)?;
         let expanded = plan
             .builds

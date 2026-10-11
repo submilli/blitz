@@ -313,35 +313,19 @@ fn duplicate_ids_take_the_first_in_tree_order() {
     let group = add(&mut m, svg, "g", &[]);
     add(&mut m, group, "use", &[("href", "#dup")]);
     let first = add(&mut m, svg, "g", &[]);
-    add(
-        &mut m,
-        first,
-        "rect",
-        &[
-            ("id", "dup"),
-            ("width", "1"),
-            ("height", "1"),
-            ("fill", "rgb(0,0,255)"),
-        ],
-    );
-    add(
-        &mut m,
-        svg,
-        "rect",
-        &[
-            ("id", "dup"),
-            ("width", "1"),
-            ("height", "1"),
-            ("fill", "rgb(255,0,0)"),
-        ],
-    );
+    let size = [("width", "1"), ("height", "1")];
+    // The later rect gets its ID first, so tree order decides, not insertion.
+    let later = [("id", "dup"), ("fill", "rgb(255,0,0)"), size[0], size[1]];
+    add(&mut m, svg, "rect", &later);
+    let earlier = [("id", "dup"), ("fill", "rgb(0,0,255)"), size[0], size[1]];
+    add(&mut m, first, "rect", &earlier);
     drop(m);
     let element = capture(&mut doc, group).unwrap();
     assert_eq!(fill_color(&paths(&element)[0]), Some((0, 0, 255)));
 }
 
 /// A reference the plan cannot read never reaches the parser, which would
-/// resolve it itself: padded past the attribute bound, it is left out.
+/// resolve it itself: like a missing one, it paints nothing.
 #[test]
 fn unread_references_are_left_out() {
     let (mut doc, svg) = page("");
@@ -363,5 +347,39 @@ fn unread_references_are_left_out() {
     add(&mut m, group, "use", &[("href", "#icon")]);
     drop(m);
     let markup = painted(&mut doc, group);
-    assert!(markup.contains("<path d=\"M0 0 L1 1 L2 0\">"), "{markup}");
+    let path = "<path d=\"M0 0 L1 1 L2 0\" marker-mid=\"none\" fill=\"none\">";
+    assert!(markup.contains(path), "{markup}");
+}
+
+/// An unstyled paint's fallback is rewritten from the color it parses as:
+/// a second reference in its place paints nothing rather than naming a copy.
+#[test]
+fn unstyled_fallbacks_cannot_name_copies() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let sprites = add(&mut m, svg, "svg", &[("style", "display:none")]);
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "p")]);
+    add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    let symbol = add(&mut m, sprites, "symbol", &[("id", "icon")]);
+    add(
+        &mut m,
+        symbol,
+        "rect",
+        &[("fill", "url(#p)"), ("width", "1"), ("height", "1")],
+    );
+    let named = [
+        ("fill", "url(#nope) url(#c2)"),
+        ("width", "1"),
+        ("height", "1"),
+    ];
+    add(&mut m, symbol, "rect", &named);
+    let colored = [("fill", "url(#nope) #00f"), ("width", "1"), ("height", "1")];
+    add(&mut m, symbol, "rect", &colored);
+    let group = add(&mut m, svg, "g", &[]);
+    add(&mut m, group, "use", &[("href", "#icon")]);
+    drop(m);
+    let markup = painted(&mut doc, group);
+    assert_eq!(markup.matches("url(#c2)").count(), 1, "{markup}");
+    assert!(markup.contains("fill=\"none\""), "{markup}");
+    assert!(markup.contains("fill=\"rgba(0,0,255,1)\""), "{markup}");
 }

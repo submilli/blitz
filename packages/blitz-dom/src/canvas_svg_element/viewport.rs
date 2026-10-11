@@ -3,6 +3,7 @@
 
 use super::MAX_ATTRIBUTE_LEN;
 use crate::canvas_svg_filter::CanvasSvgLimit;
+use crate::node::ElementData;
 use crate::{BaseDocument, NodeId};
 use std::str::FromStr;
 use style::properties::ComputedValues;
@@ -97,7 +98,7 @@ fn finite(size: [f32; 2]) -> Option<[f32; 2]> {
 }
 
 /// A valid `viewBox`'s size.
-pub(super) fn view_box_size(element: &crate::node::ElementData) -> Option<[f32; 2]> {
+pub(super) fn view_box_size(element: &ElementData) -> Option<[f32; 2]> {
     let value = element.attr(markup5ever::local_name!("viewBox"))?;
     if value.len() > MAX_ATTRIBUTE_LEN {
         return None;
@@ -139,7 +140,7 @@ fn resolve_length(value: &str, around: f32, font_size: f32) -> Option<f32> {
 /// (`SelfHasRelativeLengths`), and all text.
 pub(super) fn self_dependent(
     tag: &str,
-    element: &crate::node::ElementData,
+    element: &ElementData,
     style: Option<&ComputedValues>,
 ) -> bool {
     let attr = |name: &str| {

@@ -234,3 +234,15 @@ fn characters_xml_forbids_are_replaced() {
     drop(m);
     assert!(capture(&mut doc, group).is_some());
 }
+
+/// Names the HTML parser accepts but XML does not stay out of the markup,
+/// which would otherwise not parse at all.
+#[test]
+fn names_outside_xml_stay_out() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let group = add(&mut m, svg, "g", &[("data\u{B5}", "1"), ("\u{B2}x", "1")]);
+    add(&mut m, group, "rect", &[("width", "1"), ("height", "1")]);
+    drop(m);
+    assert!(capture(&mut doc, group).is_some());
+}

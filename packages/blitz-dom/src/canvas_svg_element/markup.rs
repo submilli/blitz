@@ -2,13 +2,15 @@
 
 use super::MAX_ATTRIBUTE_LEN;
 use super::MAX_ELEMENT_MARKUP;
+use super::elements::unmarked_shape;
 use super::elements::{attribute_reference, image_href, included, xml_name};
 use super::plan::{Kind, Plan, Slot};
-use super::style::{StyleWriter, Values, from_style, unmarked_shape};
+use super::style::{StyleWriter, Values, from_style};
 use super::viewport::view_box_size;
 use crate::canvas_svg_filter::{CanvasSvgLimit, push_bounded, push_escaped_bounded};
 use crate::node::ElementData;
 use crate::{BaseDocument, NodeId};
+use std::str::FromStr;
 
 /// Serialized markup of one reference.
 pub(super) struct Markup {
@@ -26,7 +28,8 @@ pub(super) struct Markup {
 const EMPTY_VIEWPORT: f32 = 1e-6;
 
 /// Attributes Blink applies through paint property nodes, which
-/// `PaintResourceSubtree` leaves out. `overflow` is written as `visible`.
+/// `PaintResourceSubtree` leaves out. `overflow` is written as `visible` on
+/// viewports, and on markers that ask for it.
 const EFFECTS: [&str; 8] = [
     "opacity",
     "filter",
@@ -251,24 +254,35 @@ impl Writer<'_> {
         value: &str,
     ) -> Result<(), CanvasSvgLimit> {
         let slot = Slot::of_attribute(local);
-        // A value the plan could not read, or markers Blink would not draw,
-        // must not reach the parser, which would resolve them itself.
-        let unread =
-            slot.is_some() && value.contains("url(") && attribute_reference(value).is_none();
-        let marker = local.starts_with("marker") && unmarked_shape(tag);
-        if value.len() > MAX_ATTRIBUTE_LEN || unread || marker {
+        // Markers Blink would not draw are written as `none` elsewhere.
+        if local.starts_with("marker") && unmarked_shape(tag) {
+            return Ok(());
+        }
+        // A reference the plan could not read must not reach the parser,
+        // which would resolve it itself: like a missing one, it paints
+        // nothing.
+        let unread = slot.is_some()
+            && value.contains("url(")
+            && (value.len() > MAX_ATTRIBUTE_LEN || attribute_reference(value).is_none());
+        if unread {
+            self.push(&format!(" {local}=\"none\""))?;
+            return Ok(());
+        }
+        if value.len() > MAX_ATTRIBUTE_LEN {
             return Ok(());
         }
         let reference = slot.zip(attribute_reference(value));
         let written = match reference {
-            Some((slot, (_, fallback))) => match self.plan.reference(id, slot) {
-                Some(copy) if matches!(slot, Slot::Fill | Slot::Stroke) => {
-                    format!("url(#{}) {fallback}", copy_id(copy))
+            Some((slot, (_, fallback))) => {
+                let paint = matches!(slot, Slot::Fill | Slot::Stroke);
+                let fallback = paint_fallback(&fallback);
+                match self.plan.reference(id, slot) {
+                    Some(copy) if paint => format!("url(#{}) {fallback}", copy_id(copy)),
+                    Some(copy) => format!("url(#{})", copy_id(copy)),
+                    None if paint => fallback,
+                    None => "none".to_owned(),
                 }
-                Some(copy) => format!("url(#{})", copy_id(copy)),
-                None if matches!(slot, Slot::Fill | Slot::Stroke) => fallback,
-                None => "none".to_owned(),
-            },
+            }
             None => value.to_owned(),
         };
         self.push(&format!(" {local}=\""))?;
@@ -313,6 +327,25 @@ impl Writer<'_> {
 
     fn push_placed_escaped(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
         push_escaped_bounded(&mut self.placed, text, MAX_ELEMENT_MARKUP)
+    }
+}
+
+/// A paint's fallback rewritten from what it parses as: a color, or
+/// `currentColor`. Anything else, another reference included, paints nothing.
+fn paint_fallback(fallback: &str) -> String {
+    let fallback = fallback.trim();
+    if fallback.eq_ignore_ascii_case("currentcolor") {
+        return "currentColor".to_owned();
+    }
+    match svgtypes::Color::from_str(fallback) {
+        Ok(color) => format!(
+            "rgba({},{},{},{})",
+            color.red,
+            color.green,
+            color.blue,
+            f32::from(color.alpha) / 255.0
+        ),
+        Err(_) => "none".to_owned(),
     }
 }
 

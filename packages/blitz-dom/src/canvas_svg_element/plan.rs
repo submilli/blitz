@@ -10,13 +10,14 @@
 //! marker for each vertex of the path it marks.
 
 use super::elements::{
-    HIDDEN_CONTAINERS, attribute_reference, fragment, href, included, markable, middle_vertices,
-    painted,
+    HIDDEN_CONTAINERS, attribute_reference, bounded_radii, fragment, href, included, markable,
+    middle_vertices, takes_paint, unmarked_shape,
 };
 use super::lookup::local_urls;
 use super::scc::components;
 use super::{MAX_ATTRIBUTE_LEN, MAX_ELEMENT_NODES, MAX_EXPANDED_WEIGHT, WEIGHT_BYTES};
 use crate::canvas_svg_filter::CanvasSvgLimit;
+use crate::node::ElementData;
 use crate::{BaseDocument, NodeId};
 use std::collections::{HashMap, HashSet};
 use style::properties::ComputedValues;
@@ -59,6 +60,13 @@ impl Slot {
             .iter()
             .find(|(attribute, _)| *attribute == name)
             .map(|(_, slot)| *slot)
+    }
+
+    /// The slot's place in [`Slot::ATTRIBUTES`].
+    fn attribute_index(slot: Slot) -> Option<usize> {
+        Self::ATTRIBUTES
+            .iter()
+            .position(|(_, other)| *other == slot)
     }
 
     fn is_marker(self) -> bool {
@@ -153,11 +161,14 @@ struct Walked {
     /// Its deepest element.
     depth: usize,
     self_dependent: bool,
-    /// What a paint or marker inherited from a `<use>` is built for: its
-    /// painted elements, its markable elements, and their middle vertices.
-    painted: usize,
-    marked: usize,
-    middles: usize,
+    /// Elements taking paint, which a paint inherited from a `<use>` is
+    /// built for.
+    painted_elements: usize,
+    /// Elements taking markers, which an inherited start or end marker is
+    /// built for.
+    marked_elements: usize,
+    /// Their middle vertices, which an inherited middle marker is built for.
+    middle_vertices: usize,
 }
 
 struct Builder<'a> {
@@ -183,13 +194,15 @@ impl Builder<'_> {
             weight: 0,
             depth: 0,
             self_dependent: false,
-            painted: 0,
-            marked: 0,
-            middles: 0,
+            painted_elements: 0,
+            marked_elements: 0,
+            middle_vertices: 0,
         };
         // A resource never paints where it stands; an instanced symbol does.
-        let mut pending = vec![(root, kind == Kind::Resource, 1)];
-        while let Some((id, hidden, depth)) = pending.pop() {
+        // Elements without styles inherit references from their ancestors'
+        // attributes, as the parser resolves them (`Slot::ATTRIBUTES` order).
+        let mut pending = vec![(root, kind == Kind::Resource, 1, [None; 5])];
+        while let Some((id, hidden, depth, inherited)) = pending.pop() {
             let Some(tag) = included(self.doc, id) else {
                 continue;
             };
@@ -216,26 +229,35 @@ impl Builder<'_> {
             if let Some(style) = style {
                 bound_dashes(style)?;
             }
+            if !bounded_radii(tag, element) {
+                return Err(CanvasSvgLimit);
+            }
             walked.weight = walked.weight.saturating_add(self.weight(id));
             walked.depth = walked.depth.max(depth);
             walked.self_dependent |=
                 !hidden && super::viewport::self_dependent(tag, element, style);
-            if painted(tag) {
-                walked.painted += 1;
+            if takes_paint(tag) {
+                walked.painted_elements += 1;
             }
             if markable(tag) {
-                walked.marked += 1;
-                walked.middles = walked.middles.saturating_add(middle_vertices(tag, element));
+                walked.marked_elements += 1;
+                walked.middle_vertices = walked
+                    .middle_vertices
+                    .saturating_add(middle_vertices(tag, element));
             }
             // A `<use>`'s target comes first: its other references are
             // inherited by the target's content.
             let mut instance = None;
+            let mut own = [None; 5];
             for (slot, id_ref, target_kind) in self.references(tag, element, style) {
                 let Some(target) = self.target(&id_ref, target_kind)? else {
                     continue;
                 };
                 if target_kind == Kind::Instance {
                     instance = Some(target);
+                }
+                if let Some(index) = Slot::attribute_index(slot) {
+                    own[index] = Some(target);
                 }
                 walked.found.push(Found {
                     element: id,
@@ -248,18 +270,65 @@ impl Builder<'_> {
                     visible_instance: !hidden && target_kind == Kind::Instance,
                 });
             }
+            let inherited = if style.is_some() {
+                [None; 5]
+            } else {
+                self.inherit_attributes(&mut walked, id, tag, depth, own, inherited)
+            };
             pending.extend(
                 node.children
                     .iter()
                     .rev()
-                    .map(|child| (*child, hidden, depth + 1)),
+                    .map(|child| (*child, hidden, depth + 1, inherited)),
             );
         }
         Ok(walked)
     }
 
-    /// One for the element, and one per `WEIGHT_BYTES` of its attributes and
-    /// text, which the parser copies into every build.
+    /// The attribute references an element without styles passes to its
+    /// children: its own, else its ancestors'. Those it takes from ancestors
+    /// are built for it too, as the parser inherits them.
+    fn inherit_attributes(
+        &self,
+        walked: &mut Walked,
+        id: NodeId,
+        tag: &str,
+        depth: usize,
+        own: [Option<usize>; 5],
+        inherited: [Option<usize>; 5],
+    ) -> [Option<usize>; 5] {
+        let element = self.doc.nodes[id]
+            .element_data()
+            .expect("included nodes are elements");
+        let mut passed = inherited;
+        for (index, (_, slot)) in Slot::ATTRIBUTES.iter().enumerate() {
+            if own[index].is_some() {
+                passed[index] = own[index];
+                continue;
+            }
+            let Some(target) = inherited[index] else {
+                continue;
+            };
+            let builds = self.builds(tag, element, *slot, target);
+            if builds > 0 {
+                walked.found.push(Found {
+                    element: id,
+                    slot: *slot,
+                    target,
+                    builds,
+                    through: None,
+                    multiplies: true,
+                    depth,
+                    visible_instance: false,
+                });
+            }
+        }
+        passed
+    }
+
+    /// One for the element, one per `WEIGHT_BYTES` of its attributes, which
+    /// the parser copies into every build, and one per two bytes of its text,
+    /// whose glyphs it flattens.
     fn weight(&self, id: NodeId) -> usize {
         let node = &self.doc.nodes[id];
         let attributes = node.element_data().map_or(0, |element| {
@@ -275,28 +344,19 @@ impl Builder<'_> {
             .filter_map(|child| self.doc.nodes[*child].text_data())
             .map(|text| text.content.utf16_len_bound())
             .sum();
-        1 + attributes.saturating_add(text) / WEIGHT_BYTES
+        // The parser shapes and flattens every character of text.
+        1 + attributes / WEIGHT_BYTES + text / 2
     }
 
     /// How many times the parser builds `target` for one reference: once per
     /// `<use>`, once per element a pattern paints, once for a start or end
     /// marker and once per middle vertex (bounded by the path's numbers).
     /// Gradients and text paths add none: they are built once where defined.
-    fn builds(
-        &self,
-        tag: &str,
-        element: &crate::node::ElementData,
-        slot: Slot,
-        target: usize,
-    ) -> usize {
-        let Source { node, kind } = self.sources[target];
-        if kind == Kind::Instance {
+    fn builds(&self, tag: &str, element: &ElementData, slot: Slot, target: usize) -> usize {
+        if self.sources[target].kind == Kind::Instance {
             return 1;
         }
-        let target_tag = self.doc.nodes[node]
-            .element_data()
-            .map_or("", |target| target.name.local.as_ref());
-        match (target_tag, slot) {
+        match (self.target_tag(target), slot) {
             ("pattern", _) => 1,
             ("marker", Slot::MarkerMid) => middle_vertices(tag, element),
             ("marker", Slot::MarkerStart | Slot::MarkerEnd) => usize::from(markable(tag)),
@@ -306,10 +366,14 @@ impl Builder<'_> {
 
     /// Whether `target` is a pattern or marker, built per element or vertex.
     fn multiplies(&self, target: usize) -> bool {
+        matches!(self.target_tag(target), "pattern" | "marker")
+    }
+
+    fn target_tag(&self, target: usize) -> &str {
         let node = self.sources[target].node;
         self.doc.nodes[node]
             .element_data()
-            .is_some_and(|target| matches!(target.name.local.as_ref(), "pattern" | "marker"))
+            .map_or("", |target| target.name.local.as_ref())
     }
 
     /// The elements `element` names, with how each is used: from computed
@@ -318,7 +382,7 @@ impl Builder<'_> {
     fn references(
         &self,
         tag: &str,
-        element: &crate::node::ElementData,
+        element: &ElementData,
         style: Option<&ComputedValues>,
     ) -> Vec<(Slot, String, Kind)> {
         let mut found = Vec::new();
@@ -354,9 +418,9 @@ impl Builder<'_> {
                 })
                 .collect(),
         };
-        // Blink draws markers on paths, lines and polylines only; usvg would
-        // draw them on every shape, so other shapes are written without them.
-        let marks = markable(tag) || !painted(tag);
+        // Blink draws markers on paths, lines, polylines and polygons only;
+        // other shapes are written without them, and containers pass them on.
+        let marks = !unmarked_shape(tag);
         for (slot, id) in named {
             if let Some(id) = id
                 && (marks || !slot.is_marker())
@@ -488,15 +552,21 @@ impl Builder<'_> {
         let mut middles = vec![0usize; count];
         for &source in order {
             let walked = &self.walked[source];
-            let (mut p, mut m, mut v) = (walked.painted, walked.marked, walked.middles);
+            let mut totals = [
+                walked.painted_elements,
+                walked.marked_elements,
+                walked.middle_vertices,
+            ];
             for found in walked.found.iter().filter(|found| kept(found)) {
                 if found.slot == Slot::Href && self.sources[found.target].kind == Kind::Instance {
-                    p = p.saturating_add(painted[found.target]);
-                    m = m.saturating_add(marked[found.target]);
-                    v = v.saturating_add(middles[found.target]);
+                    let target = found.target;
+                    let nested = [painted[target], marked[target], middles[target]];
+                    for (total, nested) in totals.iter_mut().zip(nested) {
+                        *total = total.saturating_add(nested);
+                    }
                 }
             }
-            (painted[source], marked[source], middles[source]) = (p, m, v);
+            [painted[source], marked[source], middles[source]] = totals;
         }
         for walked in &mut self.walked {
             for found in walked.found.iter_mut().filter(|found| found.multiplies) {

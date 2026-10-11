@@ -333,3 +333,107 @@ fn ordinary_markers_fit() {
     drop(m);
     assert!(capture(&mut doc, chart).is_some());
 }
+
+/// Vertices are counted with the parser's grammar: numbers packed as
+/// `.1.1.1.1` are separate coordinates, each pair a vertex.
+#[test]
+fn packed_path_numbers_count_as_vertices() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let marker = add(&mut m, svg, "marker", &[("id", "m")]);
+    for _ in 0..100 {
+        add(&mut m, marker, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let data = format!("M0 0L{}", ".1.1".repeat(2000));
+    let path = add(
+        &mut m,
+        svg,
+        "path",
+        &[("d", &data), ("marker-mid", "url(#m)")],
+    );
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(path).is_err());
+}
+
+/// Elements without styles inherit marker and pattern attributes from their
+/// containers in the parser: each painted or marked descendant counts.
+#[test]
+fn references_unstyled_containers_pass_on_are_counted() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let vertices = format!("M0 0{}", " L1 1".repeat(200));
+    for level in 0..2 {
+        let marker = add(&mut m, sprites, "marker", &[("id", &format!("m{level}"))]);
+        let next = format!("url(#m{})", level + 1);
+        let group = add(&mut m, marker, "g", &[("marker-mid", &next)]);
+        add(&mut m, group, "path", &[("d", &vertices)]);
+    }
+    let last = add(&mut m, sprites, "marker", &[("id", "m2")]);
+    for _ in 0..300 {
+        add(&mut m, last, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "p")]);
+    for _ in 0..100 {
+        add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let painters = add(
+        &mut m,
+        sprites,
+        "g",
+        &[("id", "icons"), ("fill", "url(#p)")],
+    );
+    for _ in 0..200 {
+        add(&mut m, painters, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let marked = add(
+        &mut m,
+        svg,
+        "path",
+        &[("d", &vertices), ("marker-mid", "url(#m0)")],
+    );
+    let patterned = add(&mut m, svg, "g", &[]);
+    add(&mut m, patterned, "use", &[("href", "#icons")]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(marked).is_err());
+    assert!(doc.capture_svg_element(patterned).is_err());
+}
+
+/// The parser splits arcs into curves by their radius: radii it could not
+/// subdivide within bounds are refused, in shapes and in path data.
+#[test]
+fn huge_arc_radii_are_refused() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let circle = add(&mut m, svg, "circle", &[("r", "3e38")]);
+    let rounded = add(
+        &mut m,
+        svg,
+        "rect",
+        &[("width", "1"), ("height", "1"), ("rx", "1e30")],
+    );
+    let arc = add(&mut m, svg, "path", &[("d", "M0 0A1e30 1e30 0 1 1 2e30 0")]);
+    let ordinary = add(&mut m, svg, "circle", &[("r", "1e6"), ("fill", "red")]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    for target in [circle, rounded, arc] {
+        assert!(doc.capture_svg_element(target).is_err(), "{target}");
+    }
+    assert!(doc.capture_svg_element(ordinary).is_ok());
+}
+
+/// Text is shaped and flattened per character, so it weighs per character.
+#[test]
+fn text_weighs_per_character() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let text = add(&mut m, svg, "text", &[]);
+    let content = m.create_text_node("x".repeat(20_000));
+    m.append_children(text, &[content]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(text).is_err());
+}

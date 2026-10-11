@@ -7,6 +7,7 @@
 //! `PaintResourceSubtree` leaves them out.
 
 use super::MAX_ATTRIBUTE_LEN;
+use super::elements::unmarked_shape;
 use super::plan::Slot;
 use crate::canvas_svg_filter::{CanvasSvgLimit, svg_color};
 use style::properties::{ComputedValues, LonghandId, LonghandIdSet, PropertyDeclarationId};
@@ -72,11 +73,6 @@ const MARKERS: [LonghandId; 3] = [
     LonghandId::MarkerMid,
     LonghandId::MarkerEnd,
 ];
-
-/// Shapes the parser draws markers on but Blink does not.
-pub(super) fn unmarked_shape(tag: &str) -> bool {
-    matches!(tag, "rect" | "circle" | "ellipse")
-}
 
 /// Whether an attribute is a presentation attribute written from style.
 pub(super) fn from_style(name: &str) -> bool {

@@ -94,6 +94,7 @@ impl BaseDocument {
         Err(CanvasSvgLimit)
     }
 }
+
 /// The URLs, without fragments, a local `url(#id)` may be resolved against:
 /// the document's, its base, the presentation attributes' and the document's
 /// stylesheets'. Longer ones than an attribute the snapshot reads are left
