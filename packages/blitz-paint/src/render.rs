@@ -693,7 +693,7 @@ struct ElementCx<'dom, 'a> {
     element: &'dom ElementData,
     transform: Affine,
     #[cfg(feature = "svg")]
-    svg: Option<&'dom usvg::Tree>,
+    svg: Option<&'dom blitz_dom::node::SvgImageData>,
     text_input: Option<&'dom TextInputData>,
     list_item: Option<&'dom ListItemLayout>,
     devtools: &'dom DevtoolSettings,
@@ -1065,6 +1065,19 @@ impl ElementCx<'_, '_> {
         let Some(svg) = self.svg else {
             return;
         };
+        // Without a viewBox, user units are CSS pixels from the viewport's
+        // origin, whatever size the box was given (an SVG without declared
+        // dimensions lays out at the default 300x150).
+        if svg.intrinsic_dimensions.view_box_size.is_none() {
+            let origin = self.frame.content_box.origin();
+            let transform = self.transform.then_translate(Vec2 {
+                x: origin.x,
+                y: origin.y,
+            });
+            anyrender_svg::render_svg_tree(scene, &svg.tree, transform);
+            return;
+        }
+        let svg = &*svg.tree;
 
         let width = self.frame.content_box.width() as u32;
         let height = self.frame.content_box.height() as u32;

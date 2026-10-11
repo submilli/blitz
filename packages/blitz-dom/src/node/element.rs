@@ -674,9 +674,9 @@ impl ElementData {
     }
 
     #[cfg(feature = "svg")]
-    pub fn svg_data(&self) -> Option<&usvg::Tree> {
+    pub fn svg_data(&self) -> Option<&crate::node::SvgImageData> {
         match self.image_data()? {
-            ImageData::Svg(data) => Some(&data.tree),
+            ImageData::Svg(data) => Some(data),
             _ => None,
         }
     }

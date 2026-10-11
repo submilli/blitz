@@ -15,3 +15,6 @@ The selector admission walk allows at most two combinator-bearing search levels,
 also consume a search level. Rejected DOM raw queries return no match; Blitz's
 string queries return a parse error. Rejected stylesheet rules/scopes do not
 participate in matching, including their nested children.
+SUB-1561 adds `Locked::try_read_with` to `shared_lock.rs`, which returns `None`
+for a guard from another lock instead of panicking, so Blitz can read the
+declarations behind a computed style without trusting where its rule node came from.

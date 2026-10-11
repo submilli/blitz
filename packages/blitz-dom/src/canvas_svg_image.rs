@@ -3,15 +3,11 @@
 //! A snapshot holds no DOM handles: fetched images are shared decoded data, and
 //! a referenced element is serialized into its own parsed tree.
 
-use crate::canvas_svg_filter::{CanvasSvgLimit, push_bounded, push_escaped_bounded, svg_color};
+use crate::canvas_svg_filter::CanvasSvgLimit;
 use crate::fe_image::FeImageTarget;
 use crate::node::{ImageData, RasterImageData, SvgImageData};
 use crate::{BaseDocument, NodeId};
 use std::sync::Arc;
-
-/// Nodes and markup of one referenced element's subtree.
-const MAX_ELEMENT_NODES: usize = 1024;
-const MAX_ELEMENT_MARKUP: usize = 256 * 1024;
 
 /// An `feImage` primitive's source and placement.
 #[derive(Clone, Debug)]
@@ -35,14 +31,18 @@ pub enum CanvasSvgImageSource {
 }
 
 /// A referenced element as Chrome paints it (Blink's
-/// `FEImage::CreateImageFilterForLayoutObject`): its subtree without the
-/// element's own `transform`, culled to its visual rectangle with that
-/// transform applied.
+/// `FEImage::CreateImageFilterForLayoutObject`): its subtree's content with
+/// computed styles but without transforms or effects, culled to its visual
+/// rectangle with the transforms applied.
 #[derive(Clone, Debug)]
 pub struct CanvasSvgElement {
     pub tree: Arc<usvg::Tree>,
     /// The painted bounds, stroke included, in the parent's user space.
     pub bounds: usvg::NonZeroRect,
+    /// The viewport Chrome maps onto the primitive subregion, when the
+    /// element's visible content depends on it (Blink's
+    /// `FEImage::SourceToDestinationTransform`).
+    pub viewport: Option<[f32; 2]>,
 }
 
 impl BaseDocument {
@@ -98,123 +98,11 @@ impl BaseDocument {
         if !svg || style.clone_display().is_none() {
             return Ok(CanvasSvgImageSource::None);
         }
-        let mut markup = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" color=\"{}\">",
-            svg_color(&style.clone_color())
-        );
         // Past the serialization bounds the reference draws nothing (it still
         // taints), rather than failing the whole draw.
-        if self.serialize_subtree(target, &mut markup).is_err() {
-            return Ok(CanvasSvgImageSource::None);
-        }
-        markup.push_str("</svg>");
-        // Parsed within the decoded image budget, which charges the tree
-        // while a snapshot holds it.
-        let parsed = crate::svg_bounds::parse_svg_image(
-            markup.as_bytes(),
-            &self.svg_fonts,
-            &self.image_budget,
-        );
-        let Ok(svg) = parsed else {
-            return Ok(CanvasSvgImageSource::None);
-        };
-        let tree = svg.tree;
-        let transform = node
-            .attr(crate::local_name!("transform"))
-            .and_then(|value| value.parse::<svgtypes::Transform>().ok())
-            .map_or(usvg::Transform::identity(), |t| {
-                usvg::Transform::from_row(
-                    t.a as f32, t.b as f32, t.c as f32, t.d as f32, t.e as f32, t.f as f32,
-                )
-            });
-        let bounds = tree
-            .root()
-            .abs_stroke_bounding_box()
-            .to_non_zero_rect()
-            .and_then(|bounds| bounds.transform(transform));
-        Ok(bounds.map_or(CanvasSvgImageSource::None, |bounds| {
-            CanvasSvgImageSource::Element(CanvasSvgElement { tree, bounds })
-        }))
+        Ok(match self.capture_svg_element(target) {
+            Ok(Some(element)) => CanvasSvgImageSource::Element(element),
+            Ok(None) | Err(CanvasSvgLimit) => CanvasSvgImageSource::None,
+        })
     }
-
-    /// Serialize SVG elements and text below `root` iteratively, within the
-    /// node and markup bounds, without `root`'s own transform. Scripts, `<use>`
-    /// and event handlers never enter it.
-    fn serialize_subtree(&self, root: NodeId, out: &mut String) -> Result<(), CanvasSvgLimit> {
-        let mut pending = vec![(root, false)];
-        let mut nodes = 0;
-        while let Some((id, closing)) = pending.pop() {
-            let node = &self.nodes[id];
-            if let Some(text) = node.text_data() {
-                push_escaped(out, text.content.as_str_lossy())?;
-                continue;
-            }
-            let Some(element) = node.element_data() else {
-                continue;
-            };
-            let tag = element.name.local.as_ref();
-            // `<use>` can expand to a huge tree in the parser, and names the
-            // HTML parser accepts may not be XML: neither enters the markup.
-            if element.name.ns != markup5ever::ns!(svg)
-                || matches!(tag, "script" | "use")
-                || !xml_name(tag)
-            {
-                continue;
-            }
-            if closing {
-                push(out, &format!("</{tag}>"))?;
-                continue;
-            }
-            nodes += 1;
-            if nodes > MAX_ELEMENT_NODES
-                || pending.len() + node.children.len() > MAX_ELEMENT_NODES * 2
-            {
-                return Err(CanvasSvgLimit);
-            }
-            push(out, &format!("<{tag}"))?;
-            for attr in element.attrs() {
-                let local = attr.name.local.as_ref();
-                if id == root && local == "transform" && attr.name.ns == markup5ever::ns!() {
-                    continue;
-                }
-                let ns = &attr.name.ns;
-                let name =
-                    if *ns == markup5ever::ns!() && !local.starts_with("on") && local != "xmlns" {
-                        local.to_owned()
-                    } else if *ns == markup5ever::ns!(xlink) && local == "href" {
-                        "xlink:href".to_owned()
-                    } else {
-                        continue;
-                    };
-                if name != "xlink:href" && !xml_name(&name) {
-                    continue;
-                }
-                push(out, &format!(" {name}=\""))?;
-                push_escaped(out, attr.value.as_str_lossy())?;
-                push(out, "\"")?;
-            }
-            push(out, ">")?;
-            pending.push((id, true));
-            pending.extend(node.children.iter().rev().map(|child| (*child, false)));
-        }
-        Ok(())
-    }
-}
-
-/// Whether `name` is an XML name without a prefix: a page may create elements
-/// and attributes whose names would break the serialized markup, or name
-/// prefixes it never declares.
-fn xml_name(name: &str) -> bool {
-    let start = |ch: char| ch.is_alphabetic() || ch == '_';
-    let mut chars = name.chars();
-    chars.next().is_some_and(start)
-        && chars.all(|ch| start(ch) || ch.is_alphanumeric() || matches!(ch, '-' | '.'))
-}
-
-fn push(out: &mut String, text: &str) -> Result<(), CanvasSvgLimit> {
-    push_bounded(out, text, MAX_ELEMENT_MARKUP)
-}
-
-fn push_escaped(out: &mut String, text: &str) -> Result<(), CanvasSvgLimit> {
-    push_escaped_bounded(out, text, MAX_ELEMENT_MARKUP)
 }

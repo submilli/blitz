@@ -60,6 +60,8 @@ mod canvas_filter;
 #[cfg(feature = "svg")]
 mod canvas_svg_attributes;
 #[cfg(feature = "svg")]
+mod canvas_svg_element;
+#[cfg(feature = "svg")]
 mod canvas_svg_filter;
 #[cfg(feature = "svg")]
 mod canvas_svg_image;

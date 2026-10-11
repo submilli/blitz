@@ -367,24 +367,21 @@ impl BaseDocument {
                             }
                             #[cfg(feature = "svg")]
                             ImageData::Svg(svg) => {
-                                let mut width = svg.intrinsic_width();
-                                let mut height = svg.intrinsic_height();
-                                // An SVG with no declared dimensions and no viewBox has no
-                                // intrinsic dimensions per CSS, but usvg still resolves a
-                                // concrete size; use it in place of the default object size.
-                                if width.is_none()
-                                    && height.is_none()
-                                    && svg.viewbox_aspect_ratio().is_none()
-                                {
-                                    let size = svg.tree.size();
-                                    width = Some(size.width());
-                                    height = Some(size.height());
+                                // An SVG without declared dimensions or a viewBox has no
+                                // natural size or ratio, so it takes the default object
+                                // size (300x150), as in Chrome, whatever its content.
+                                let width = svg.intrinsic_width();
+                                let height = svg.intrinsic_height();
+                                let ratio = match (width, height) {
+                                    (Some(width), Some(height)) => Some(width / height),
+                                    _ => svg.viewbox_aspect_ratio(),
                                 }
+                                .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
                                 (
                                     IntrinsicSizes {
                                         width,
                                         height,
-                                        ratio: Some(svg.aspect_ratio()),
+                                        ratio,
                                     },
                                     DEFAULT_OBJECT_SIZE,
                                 )

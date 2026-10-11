@@ -554,7 +554,7 @@ fn empty_sizes_empty_primitives_and_ignore_filters() {
 }
 
 #[test]
-fn element_references_leave_out_use_and_non_xml_names() {
+fn element_references_leave_out_cyclic_use_and_non_xml_names() {
     use crate::canvas_svg_image::CanvasSvgImageSource as Source;
     let (mut document, canvas, filter, matrix) = self::document();
     let mut mutation = document.mutate();

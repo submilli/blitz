@@ -154,6 +154,15 @@ impl<T> Locked<T> {
         unsafe { &*ptr }
     }
 
+    /// Access the data for reading, or `None` when `guard` is from another lock
+    /// (a rule node may still hold blocks of a document a node was adopted from).
+    pub fn try_read_with<'a>(&'a self, guard: &'a SharedRwLockReadGuard) -> Option<&'a T> {
+        if !self.is_read_only_lock() && !self.same_lock_as(guard.ptr()) {
+            return None;
+        }
+        Some(self.read_with(guard))
+    }
+
     /// Access the data for reading without verifying the lock. Use with caution.
     pub unsafe fn read_unchecked<'a>(&'a self) -> &'a T {
         let ptr = self.data.get();

@@ -1,4 +1,5 @@
-//! SVG filter presentation attributes participate below author declarations.
+//! SVG presentation attributes participate below author declarations
+//! (<https://svgwg.org/svg2-draft/styling.html#PresentationAttributes>).
 use crate::{Node, node::NodeData};
 use style::properties::{
     PropertyDeclaration, PropertyId, SourcePropertyDeclaration, parse_one_declaration_into,
@@ -8,7 +9,7 @@ use style::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use style_traits::ParsingMode;
 
 impl Node {
-    pub(crate) fn svg_filter_presentation_hints(&self) -> Vec<PropertyDeclaration> {
+    pub(crate) fn svg_presentation_hints(&self) -> Vec<PropertyDeclaration> {
         let Some(element) = self.element_data() else {
             return Vec::new();
         };
@@ -23,13 +24,7 @@ impl Node {
         .unwrap_or_else(|| url::Url::parse("about:blank").expect("static parser base"));
         let base = UrlExtraData(Arc::new(url));
         let mut result = Vec::new();
-        for property in [
-            "color",
-            "flood-color",
-            "flood-opacity",
-            "lighting-color",
-            "color-interpolation-filters",
-        ] {
+        for property in PROPERTIES {
             let Some(value) = element.attr_dom(markup5ever::LocalName::from(property)) else {
                 continue;
             };
@@ -61,3 +56,29 @@ impl Node {
         result
     }
 }
+
+/// The presentation attributes mapped to CSS.
+const PROPERTIES: [&str; 22] = [
+    "color",
+    "flood-color",
+    "flood-opacity",
+    "lighting-color",
+    "color-interpolation-filters",
+    "fill",
+    "fill-opacity",
+    "fill-rule",
+    "stroke",
+    "stroke-width",
+    "stroke-opacity",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-miterlimit",
+    "display",
+    "visibility",
+    "font-family",
+    "font-size",
+    "font-style",
+    "font-weight",
+];

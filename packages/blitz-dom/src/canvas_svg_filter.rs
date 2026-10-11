@@ -187,6 +187,38 @@ impl BaseDocument {
         owner: NodeId,
         id: &str,
     ) -> Result<Option<NodeId>, CanvasSvgLimit> {
+        let mut found = None;
+        self.scan_svg_ids(owner, |id_value, node| {
+            if found.is_none() && id_value == id {
+                found = Some(node);
+            }
+            found.is_some()
+        })?;
+        Ok(found)
+    }
+
+    /// The first element with each ID in `owner`'s tree, as
+    /// [`Self::find_svg_reference`] finds them.
+    pub(crate) fn svg_ids(
+        &self,
+        owner: NodeId,
+    ) -> Result<std::collections::HashMap<String, NodeId>, CanvasSvgLimit> {
+        let mut ids = std::collections::HashMap::new();
+        self.scan_svg_ids(owner, |id, node| {
+            ids.entry(id.to_owned()).or_insert(node);
+            false
+        })?;
+        Ok(ids)
+    }
+
+    /// Visit the IDs of `owner`'s tree (its shadow tree, or its document) in
+    /// tree order until `visit` returns true, charging the owner's ancestry,
+    /// the nodes and the attributes inspected.
+    fn scan_svg_ids(
+        &self,
+        owner: NodeId,
+        mut visit: impl FnMut(&str, NodeId) -> bool,
+    ) -> Result<(), CanvasSvgLimit> {
         let mut visits = 0;
         let mut tree = owner;
         while let Some(parent) = self.nodes[tree].parent {
@@ -217,9 +249,9 @@ impl BaseDocument {
                     if attr.name.ns.as_ref().is_empty()
                         && attr.name.local.as_ref() == "id"
                         && attr.value.utf16_len_bound() <= 4096
-                        && attr.value.as_str_lossy() == id
+                        && visit(attr.value.as_str_lossy(), node_id)
                     {
-                        return Ok(Some(node_id));
+                        return Ok(());
                     }
                 }
             }
@@ -228,7 +260,7 @@ impl BaseDocument {
             }
             pending.extend(node.children.iter().rev().copied());
         }
-        Ok(None)
+        Ok(())
     }
 
     fn snapshot_canvas_filter(

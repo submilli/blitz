@@ -937,7 +937,7 @@ impl<'a> TElement for BlitzNode<'a> {
             ));
         };
 
-        for declaration in self.svg_filter_presentation_hints() {
+        for declaration in self.svg_presentation_hints() {
             push_style(declaration);
         }
 
