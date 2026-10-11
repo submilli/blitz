@@ -211,3 +211,62 @@ fn context_painted_text_is_counted_per_character() {
     doc.flush_style_and_layout(0.0);
     assert!(doc.capture_svg_element(path).is_err());
 }
+
+/// Decorations declared above text take the text's paint: its pattern is
+/// charged for every decorated span.
+#[test]
+fn decorations_above_text_charge_the_text_paint() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "p")]);
+    for _ in 0..10 {
+        add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let decorations = [("text-decoration", "underline overline line-through")];
+    let group = add(&mut m, svg, "g", &decorations);
+    let text = add(&mut m, group, "text", &[("fill", "url(#p)")]);
+    for _ in 0..200 {
+        let span = add(&mut m, text, "tspan", &[("fill", "red")]);
+        let content = m.create_text_node("x");
+        m.append_children(span, &[content]);
+    }
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(group).is_err());
+}
+
+/// A context-painted element passes its context paint on to the markers it
+/// inherits from an unstyled ancestor too.
+#[test]
+fn inherited_markers_of_context_paints_are_counted() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "p")]);
+    for _ in 0..50 {
+        add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let inner = add(&mut m, sprites, "marker", &[("id", "m2")]);
+    for _ in 0..40 {
+        let attrs = [("fill", "context-fill"), ("width", "1"), ("height", "1")];
+        add(&mut m, inner, "rect", &attrs);
+    }
+    let outer = add(&mut m, sprites, "marker", &[("id", "m1")]);
+    let group = add(&mut m, outer, "g", &[("marker-start", "url(#m2)")]);
+    for _ in 0..4 {
+        let attrs = [("d", "M0 0 L1 1"), ("fill", "context-fill")];
+        add(&mut m, group, "path", &attrs);
+    }
+    let attrs = [
+        ("d", "M0 0 L1 1"),
+        ("fill", "url(#p)"),
+        ("marker-start", "url(#m1)"),
+    ];
+    let path = add(&mut m, svg, "path", &attrs);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(path).is_err());
+}

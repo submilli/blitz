@@ -44,9 +44,8 @@ impl Builder<'_> {
 
     /// How many times the parser paints `tag` with a paint server: once per
     /// shape, and for text up to three times per character of its own text
-    /// (per chunk, span and outline the parser fills), twelve when it may be
-    /// decorated (each of three decorations adds as many).
-    pub(super) fn paints(&self, id: NodeId, tag: &str, text: bool, decorated: bool) -> usize {
+    /// (per chunk, span and outline the parser fills).
+    pub(super) fn paints(&self, id: NodeId, tag: &str, text: bool) -> usize {
         if text {
             let characters: usize = self.doc.nodes[id]
                 .children
@@ -54,8 +53,7 @@ impl Builder<'_> {
                 .filter_map(|child| self.doc.nodes[*child].text_data())
                 .map(|text| text.content.utf16_len_bound())
                 .sum();
-            let per_character = if decorated { 12 } else { 3 };
-            return characters.saturating_add(1).saturating_mul(per_character);
+            return characters.saturating_add(1).saturating_mul(3);
         }
         usize::from(takes_paint(tag))
     }
@@ -83,7 +81,7 @@ impl Builder<'_> {
     /// A source's context paints come to include its instances', all of an
     /// instance's paints when its `<use>` passes a context paint down, and
     /// those of the markers its context-painted elements pass it on to.
-    pub(super) fn inherit_through_uses(&mut self, order: &[usize], kept: &impl Fn(&Found) -> bool) {
+    pub(super) fn charge_hidden_paints(&mut self, order: &[usize], kept: &impl Fn(&Found) -> bool) {
         let mut totals = vec![[0usize; 4]; self.sources.len()];
         for &source in order {
             let walked = &self.walked[source];
@@ -109,20 +107,7 @@ impl Builder<'_> {
             }
             totals[source] = total;
             for found in &mut self.walked[source].found {
-                if let Some(instance) = found.through.filter(|_| found.multiplies) {
-                    let [painted, marked, middles, _] = totals[instance];
-                    let inherited = match found.slot {
-                        Slot::Fill | Slot::Stroke => painted,
-                        Slot::MarkerMid => middles,
-                        Slot::MarkerStart | Slot::MarkerEnd => marked,
-                        Slot::Href => 0,
-                    };
-                    found.builds = found.builds.max(inherited);
-                }
-                let paint = matches!(found.slot, Slot::Fill | Slot::Stroke);
-                if found.decorator && paint && found.multiplies {
-                    found.builds = found.builds.saturating_add(total[3]);
-                }
+                charge_hidden(found, &totals, total[3]);
             }
             let walked = &self.walked[source];
             for found in walked
@@ -193,6 +178,28 @@ impl Builder<'_> {
             }
         }
         builds
+    }
+}
+
+/// Charge `found` for what is built from it out of its element's sight: per
+/// paint, marked element or vertex of the content of the `<use>` it is on,
+/// and per decoration in its source when its element decorates text.
+fn charge_hidden(found: &mut Found, totals: &[[usize; 4]], decorations: usize) {
+    if !found.multiplies {
+        return;
+    }
+    if let Some(instance) = found.through {
+        let [painted, marked, middles, _] = totals[instance];
+        let inherited = match found.slot {
+            Slot::Fill | Slot::Stroke => painted,
+            Slot::MarkerMid => middles,
+            Slot::MarkerStart | Slot::MarkerEnd => marked,
+            Slot::Href => 0,
+        };
+        found.builds = found.builds.max(inherited);
+    }
+    if found.decorator && matches!(found.slot, Slot::Fill | Slot::Stroke) {
+        found.builds = found.builds.saturating_add(decorations);
     }
 }
 

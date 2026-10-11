@@ -173,6 +173,10 @@ struct Passing<'a> {
     instance: Option<usize>,
     /// How many times the parser paints it (see [`Builder::paints`]).
     paints: usize,
+    /// Whether it paints with its context paint (see [`Found::context`]).
+    context: bool,
+    /// Whether it decorates text (see [`Found::decorator`]).
+    decorator: bool,
 }
 
 /// A reference found while walking one source.
@@ -195,8 +199,9 @@ struct Found {
     /// Whether the element paints with its context paint, which a `<use>`
     /// passes to its content and a marker to its own markers' content.
     context: bool,
-    /// Whether the element has a `text-decoration` attribute: text below it
-    /// paints decorations with its fill and stroke.
+    /// Whether the element declares `text-decoration`, or is text below a
+    /// declaration: text below it paints decorations with its fill and
+    /// stroke.
     decorator: bool,
 }
 
@@ -314,18 +319,26 @@ impl Builder<'_> {
                 !hidden && super::viewport::self_dependent(tag, element, style);
             let text = text_content(tag, in_text);
             // Any value counts, `none` included: the charge only grows.
-            let decorator = element
+            // Decorations take their paint from the nearest element declaring
+            // them, or else the nearest `<text>` (usvg `resolve_decoration`).
+            let declares = element
                 .attr(markup5ever::LocalName::from("text-decoration"))
                 .is_some();
-            let decorated = decorated || decorator;
+            let decorator = declares || (tag == "text" && decorated);
+            let decorated = decorated || declares;
             // Without styles, the parser inherits a context paint as the
             // attributes are written.
             let context = context_painted(element, style) || (style.is_none() && context);
-            let paints = self.paints(id, tag, text, decorated);
+            // Each of three decorations paints text as often as its glyphs.
+            let shapes = self.paints(id, tag, text);
+            let decorations = if text && decorated {
+                shapes.saturating_mul(3)
+            } else {
+                0
+            };
+            let paints = shapes.saturating_add(decorations);
             self.account(&mut walked, id, tag, element, text, paints);
-            walked.decorated_paints = walked
-                .decorated_paints
-                .saturating_add(paints - self.paints(id, tag, text, false));
+            walked.decorated_paints = walked.decorated_paints.saturating_add(decorations);
             if context {
                 walked.context_painted = walked.context_painted.saturating_add(paints.max(1));
                 walked.context_decorator |= decorator;
@@ -367,6 +380,8 @@ impl Builder<'_> {
                     depth,
                     instance,
                     paints,
+                    context,
+                    decorator,
                 };
                 self.inherit_attributes(&mut walked, &passing, own, inherited)
             };
@@ -414,8 +429,8 @@ impl Builder<'_> {
                     multiplies: self.multiplies(target),
                     depth: passing.depth,
                     visible_instance: false,
-                    context: false,
-                    decorator: false,
+                    context: passing.context,
+                    decorator: passing.decorator,
                 });
             }
         }
@@ -577,7 +592,7 @@ impl Builder<'_> {
         // reaches.
         let (_, order) = components(&kept_edges);
         let order: Vec<usize> = order.into_iter().flatten().collect();
-        self.inherit_through_uses(&order, &kept);
+        self.charge_hidden_paints(&order, &kept);
         self.charge_context_paints(&kept);
         let builds = self.builds_of_sources(&order, &kept);
         let weight = builds
