@@ -42,9 +42,14 @@ pub trait EventHandler {
         event_state: &mut EventState,
     );
 
-    /// Where `node` lives now that an event's listeners have returned. The
-    /// event's activation and default action follow its target there.
-    fn placement(&mut self, node: NodeId) -> crate::Placement {
+    /// Keep track of `node`, which a click's activation uses after the
+    /// listeners although it is not on the event's chain (the radio that was
+    /// checked before), so [`Self::placement`] can find it after a move.
+    fn follow(&mut self, _node: NodeId) {}
+
+    /// Where `node` lives now that an event's listeners have returned. A
+    /// click's activation and default action follow its target there.
+    fn placement(&self, node: NodeId) -> crate::Placement {
         crate::Placement::Here(node)
     }
 
@@ -354,7 +359,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             }
         }
 
-        self.follow_target(super::ListenedEvent {
+        self.finish(super::ListenedEvent {
             event: ptr_event,
             activation: None,
             canceled: event_state.is_cancelled(),
@@ -371,7 +376,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         self.process_queue();
     }
 
-    /// Finish `event` where its target lives now: here, perhaps under a new
+    /// Finish a click where its target lives now: here, perhaps under a new
     /// ID, or in another document through the handler.
     fn follow_target(&mut self, event: super::ListenedEvent) {
         if self.handler.placement(event.target()) == crate::Placement::Elsewhere {
@@ -380,7 +385,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         }
         let event = {
             let doc = self.doc.inner();
-            let handler = &mut self.handler;
+            let handler = &self.handler;
             event.relocate(&doc, |id| handler.placement(id).here())
         };
         if let Some(event) = event {
@@ -436,12 +441,27 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             } else {
                 None
             };
+            if let Some(previous) = activation
+                .as_ref()
+                .and_then(crate::CheckableActivation::previous)
+            {
+                self.handler.follow(previous);
+            }
+            let click = matches!(event.data, DomEventData::Click(_));
             let event_state = self.run_handler_event(&mut event, EventState::default());
-            self.follow_target(super::ListenedEvent {
+            let listened = super::ListenedEvent {
                 event,
                 activation,
                 canceled: event_state.is_cancelled(),
-            });
+            };
+            // A click's activation behaviour belongs to its target node.
+            // Other defaults (text input, focus, selection, drags) keep to
+            // this document, whose input state they read and update.
+            if click {
+                self.follow_target(listened);
+            } else {
+                self.finish(listened);
+            }
         }
     }
 

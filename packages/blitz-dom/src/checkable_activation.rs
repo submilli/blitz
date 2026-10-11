@@ -134,6 +134,15 @@ impl CheckableActivation {
         self.target
     }
 
+    /// The other radio of the target's group that was checked before the
+    /// click: a canceled click checks it again.
+    pub fn previous(&self) -> Option<NodeId> {
+        match self.previous {
+            Previous::Node { id, .. } if id != self.target => Some(id),
+            _ => None,
+        }
+    }
+
     /// This activation in `doc`, the document a listener moved its target
     /// into. `map` gives a node's ID in `doc`, or `None` when the node is not
     /// there; `None` when the target is not.

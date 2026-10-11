@@ -234,8 +234,13 @@ pub trait DispatchHost {
             .event_listeners
             .remove_entry(target, listener);
     }
-    /// Where a path node lives now that the listeners have returned. A
-    /// click's activation follows its node there.
+    /// Keep track of `node`, which a click's activation uses after the
+    /// listeners although it is not on the path (the radio that was checked
+    /// before), so [`Self::placement`] can find it after a move.
+    fn follow(&mut self, _node: NodeId) {}
+    /// Where a path node, or one [followed](Self::follow), lives now that
+    /// the listeners have returned. A click's activation follows its node
+    /// there.
     fn placement(&self, node: NodeId) -> crate::Placement {
         crate::Placement::Here(node)
     }
@@ -457,6 +462,12 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     } else {
         None
     };
+    if let Some(previous) = activation
+        .as_ref()
+        .and_then(crate::CheckableActivation::previous)
+    {
+        host.follow(previous);
+    }
     host.set_target(Some(target));
     for entry in path.iter().skip(1).rev() {
         if host.propagation_stopped() {

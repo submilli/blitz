@@ -16,9 +16,16 @@ use crate::{
 };
 
 fn checkbox(doc: &mut BaseDocument) -> NodeId {
+    input(doc, "checkbox", None)
+}
+
+fn input(doc: &mut BaseDocument, kind: &str, name: Option<&str>) -> NodeId {
     let mut mutator = doc.mutate();
     let input = mutator.create_element(QualName::new(None, ns!(html), "input".into()), vec![]);
-    mutator.set_attribute(input, QualName::new(None, ns!(), "type".into()), "checkbox");
+    mutator.set_attribute(input, QualName::new(None, ns!(), "type".into()), kind);
+    if let Some(name) = name {
+        mutator.set_attribute(input, QualName::new(None, ns!(), "name".into()), name);
+    }
     let root = mutator.doc.root_node_id;
     mutator.append_children(root, &[input]);
     input
@@ -52,6 +59,7 @@ struct ScriptClick {
     moved: Cell<Option<NodeId>>,
     activated_here: Vec<NodeId>,
     handed_off: Option<ClickActivation>,
+    followed: Vec<NodeId>,
 }
 
 impl ScriptClick {
@@ -73,6 +81,7 @@ impl ScriptClick {
             moved: Cell::new(None),
             activated_here: Vec::new(),
             handed_off: None,
+            followed: Vec::new(),
         }
     }
 }
@@ -117,6 +126,9 @@ impl DispatchHost for ScriptClick {
             moved = transfer(&mut elsewhere, moved, &mut document);
         }
         self.moved.set(Some(moved));
+    }
+    fn follow(&mut self, node: NodeId) {
+        self.followed.push(node);
     }
     fn placement(&self, node: NodeId) -> Placement {
         match self.moved.get() {
@@ -170,6 +182,26 @@ fn a_script_click_activates_a_checkbox_moved_away_and_back_under_its_new_id() {
     assert!(host.document.borrow().checkedness(moved));
 }
 
+#[test]
+fn a_script_click_follows_the_radio_that_was_checked_before() {
+    let mut host = ScriptClick::new(false, false);
+    let (previous, radio) = {
+        let mut document = host.document.borrow_mut();
+        let previous = input(&mut document, "radio", Some("r"));
+        document.mutate().set_checkedness(previous, true);
+        (previous, input(&mut document, "radio", Some("r")))
+    };
+    host.target = radio;
+    host.document.borrow_mut().event_listeners.add(
+        EventTargetId::Node(radio),
+        "click",
+        1,
+        ListenerOptions::default(),
+    );
+    dispatch(&mut host, EventTargetId::Node(radio));
+    assert_eq!(host.followed, [previous]);
+}
+
 /// The native driver's handler for a click whose listener moves the
 /// checkbox into `elsewhere`.
 struct NativeClick {
@@ -196,7 +228,7 @@ impl EventHandler for NativeClick {
             self.moved.set(Some(moved));
         }
     }
-    fn placement(&mut self, node: NodeId) -> Placement {
+    fn placement(&self, node: NodeId) -> Placement {
         if node == self.target && self.moved.get().is_some() {
             return Placement::Elsewhere;
         }
