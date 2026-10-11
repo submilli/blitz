@@ -1,6 +1,7 @@
 //! Element reference tests, by concern, with shared document builders.
 
 mod bounds;
+mod paints;
 mod references;
 mod styles;
 mod viewport;

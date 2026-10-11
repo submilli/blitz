@@ -193,8 +193,11 @@ struct Found {
     /// A `<use>` that Blink lays out, whose content's lengths count.
     visible_instance: bool,
     /// Whether the element paints with its context paint, which a `<use>`
-    /// passes to its content.
+    /// passes to its content and a marker to its own markers' content.
     context: bool,
+    /// Whether the element has a `text-decoration` attribute: text below it
+    /// paints decorations with its fill and stroke.
+    decorator: bool,
 }
 
 /// What walking one source found.
@@ -213,9 +216,15 @@ struct Walked {
     marked_elements: usize,
     /// Their middle vertices, which an inherited middle marker is built for.
     middle_vertices: usize,
-    /// Elements painted with `context-fill` or `context-stroke`, which build
-    /// the marked element's paint server once per marker build.
+    /// Paints of elements painted with `context-fill` or `context-stroke`,
+    /// which build the marked element's paint server once per marker build.
     context_painted: usize,
+    /// Whether a context-painted element decorates text, painting
+    /// [`Walked::decorated_paints`] with the context paint too.
+    context_decorator: bool,
+    /// Paints of decorations on text, which take their paint from the
+    /// element declaring them.
+    decorated_paints: usize,
 }
 
 struct Builder<'a> {
@@ -245,6 +254,8 @@ impl Builder<'_> {
             marked_elements: 0,
             middle_vertices: 0,
             context_painted: 0,
+            context_decorator: false,
+            decorated_paints: 0,
         };
         // A resource never paints where it stands; an instanced symbol does.
         // Elements without styles inherit references from their ancestors'
@@ -298,28 +309,26 @@ impl Builder<'_> {
             if !bounded_numbers(tag, element, style.is_none(), outermost) {
                 return Err(CanvasSvgLimit);
             }
-            let text = text_content(tag, in_text);
-            let decorated = decorated
-                || element
-                    .attr(markup5ever::LocalName::from("text-decoration"))
-                    .is_some();
-            walked.weight = walked.weight.saturating_add(self.weight(id, text));
             walked.depth = walked.depth.max(depth);
             walked.self_dependent |=
                 !hidden && super::viewport::self_dependent(tag, element, style);
-            let paints = self.paints(id, tag, text, decorated);
-            walked.painted_elements = walked.painted_elements.saturating_add(paints);
+            let text = text_content(tag, in_text);
+            // Any value counts, `none` included: the charge only grows.
+            let decorator = element
+                .attr(markup5ever::LocalName::from("text-decoration"))
+                .is_some();
+            let decorated = decorated || decorator;
             // Without styles, the parser inherits a context paint as the
             // attributes are written.
             let context = context_painted(element, style) || (style.is_none() && context);
+            let paints = self.paints(id, tag, text, decorated);
+            self.account(&mut walked, id, tag, element, text, paints);
+            walked.decorated_paints = walked
+                .decorated_paints
+                .saturating_add(paints - self.paints(id, tag, text, false));
             if context {
-                walked.context_painted += 1;
-            }
-            if markable(tag) {
-                walked.marked_elements += 1;
-                walked.middle_vertices = walked
-                    .middle_vertices
-                    .saturating_add(middle_vertices(tag, element));
+                walked.context_painted = walked.context_painted.saturating_add(paints.max(1));
+                walked.context_decorator |= decorator;
             }
             // A `<use>`'s target comes first: its other references are
             // inherited by the target's content.
@@ -345,6 +354,7 @@ impl Builder<'_> {
                     depth,
                     visible_instance: !hidden && target_kind == Kind::Instance,
                     context,
+                    decorator,
                 });
             }
             let inherited = if style.is_some() {
@@ -405,10 +415,31 @@ impl Builder<'_> {
                     depth: passing.depth,
                     visible_instance: false,
                     context: false,
+                    decorator: false,
                 });
             }
         }
         passed
+    }
+
+    /// Add an element's weight, paints and marked vertices to its source's.
+    fn account(
+        &self,
+        walked: &mut Walked,
+        id: NodeId,
+        tag: &str,
+        element: &ElementData,
+        text: bool,
+        paints: usize,
+    ) {
+        walked.weight = walked.weight.saturating_add(self.weight(id, text));
+        walked.painted_elements = walked.painted_elements.saturating_add(paints);
+        if markable(tag) {
+            walked.marked_elements += 1;
+            walked.middle_vertices = walked
+                .middle_vertices
+                .saturating_add(middle_vertices(tag, element));
+        }
     }
 
     /// One for the element, one per `WEIGHT_BYTES` of its attributes, which

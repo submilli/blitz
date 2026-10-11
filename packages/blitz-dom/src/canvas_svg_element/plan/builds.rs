@@ -27,11 +27,12 @@ impl Builder<'_> {
         target: usize,
         paints: usize,
     ) -> usize {
-        if self.sources[target].kind == Kind::Instance || (tag == "textPath" && slot == Slot::Href)
-        {
+        if self.sources[target].kind == Kind::Instance {
             return 1;
         }
         match (self.target_tag(target), slot) {
+            // A text path converts the shape it follows each time.
+            _ if tag == "textPath" && slot == Slot::Href => 1,
             // A pattern's template is built once per build of the pattern.
             ("pattern", Slot::Href) => 1,
             ("pattern", _) => paints,
@@ -71,54 +72,71 @@ impl Builder<'_> {
             .map_or("", |target| target.name.local.as_ref())
     }
 
-    /// Charge paint and marker references on `<use>`s for what the
-    /// instanced content builds from them: each painted element, marked
-    /// element or middle vertex, its nested instances' included. A source's
-    /// context-painted elements come to include its instances', and all of
-    /// an instance's painted elements when its `<use>` passes a context paint
-    /// down. Targets come first in `order`.
+    /// Charge paint and marker references for what is built from them out
+    /// of sight of the element naming them, in `order` (targets first):
+    ///
+    /// - a `<use>`'s, once per element, marked element or middle vertex of
+    ///   the instanced content, which inherits them;
+    /// - a `text-decoration` element's paint, once per decoration painted on
+    ///   text in its source.
+    ///
+    /// A source's context paints come to include its instances', all of an
+    /// instance's paints when its `<use>` passes a context paint down, and
+    /// those of the markers its context-painted elements pass it on to.
     pub(super) fn inherit_through_uses(&mut self, order: &[usize], kept: &impl Fn(&Found) -> bool) {
-        let count = self.sources.len();
-        let mut painted = vec![0usize; count];
-        let mut marked = vec![0usize; count];
-        let mut middles = vec![0usize; count];
+        let mut totals = vec![[0usize; 4]; self.sources.len()];
         for &source in order {
             let walked = &self.walked[source];
-            let mut totals = [
+            let mut total = [
                 walked.painted_elements,
                 walked.marked_elements,
                 walked.middle_vertices,
+                walked.decorated_paints,
             ];
             let mut context = walked.context_painted;
             for found in walked.found.iter().filter(|found| kept(found)) {
-                if found.slot == Slot::Href && self.sources[found.target].kind == Kind::Instance {
-                    let target = found.target;
-                    let nested = [painted[target], marked[target], middles[target]];
-                    for (total, nested) in totals.iter_mut().zip(nested) {
-                        *total = total.saturating_add(nested);
-                    }
-                    context = context.saturating_add(self.walked[target].context_painted);
-                    if found.context {
-                        context = context.saturating_add(painted[target]);
-                    }
+                if found.slot != Slot::Href || self.sources[found.target].kind != Kind::Instance {
+                    continue;
+                }
+                let nested = &totals[found.target];
+                for (total, nested) in total.iter_mut().zip(nested) {
+                    *total = total.saturating_add(*nested);
+                }
+                context = context.saturating_add(self.walked[found.target].context_painted);
+                if found.context {
+                    context = context.saturating_add(nested[0]);
                 }
             }
-            [painted[source], marked[source], middles[source]] = totals;
-            self.walked[source].context_painted = context;
-        }
-        for walked in &mut self.walked {
-            for found in walked.found.iter_mut().filter(|found| found.multiplies) {
-                let Some(instance) = found.through else {
-                    continue;
-                };
-                let inherited = match found.slot {
-                    Slot::Fill | Slot::Stroke => painted[instance],
-                    Slot::MarkerMid => middles[instance],
-                    Slot::MarkerStart | Slot::MarkerEnd => marked[instance],
-                    Slot::Href => 0,
-                };
-                found.builds = found.builds.max(inherited);
+            totals[source] = total;
+            for found in &mut self.walked[source].found {
+                if let Some(instance) = found.through.filter(|_| found.multiplies) {
+                    let [painted, marked, middles, _] = totals[instance];
+                    let inherited = match found.slot {
+                        Slot::Fill | Slot::Stroke => painted,
+                        Slot::MarkerMid => middles,
+                        Slot::MarkerStart | Slot::MarkerEnd => marked,
+                        Slot::Href => 0,
+                    };
+                    found.builds = found.builds.max(inherited);
+                }
+                let paint = matches!(found.slot, Slot::Fill | Slot::Stroke);
+                if found.decorator && paint && found.multiplies {
+                    found.builds = found.builds.saturating_add(total[3]);
+                }
             }
+            let walked = &self.walked[source];
+            for found in walked
+                .found
+                .iter()
+                .filter(|found| kept(found) && found.context && found.slot.is_marker())
+            {
+                let passed = self.walked[found.target].context_painted;
+                context = context.saturating_add(found.builds.saturating_mul(passed));
+            }
+            if walked.context_decorator {
+                context = context.saturating_add(total[3]);
+            }
+            self.walked[source].context_painted = context;
         }
     }
 
