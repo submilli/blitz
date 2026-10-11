@@ -16,23 +16,25 @@ impl Builder<'_> {
     /// `<use>`, once per paint of the element a pattern paints (see
     /// [`Self::paints`]) and once per build of a pattern using it as its
     /// template, once for a start or end marker and once per middle vertex
-    /// (bounded by the path's numbers). Gradients and text paths add none:
-    /// they are built once where defined.
+    /// (bounded by the path's numbers), and once per text path, which
+    /// converts the shape it follows each time it is built. Gradients add
+    /// none: they are built once where defined.
     pub(super) fn builds(
         &self,
-        id: NodeId,
         tag: &str,
         element: &ElementData,
         slot: Slot,
         target: usize,
+        paints: usize,
     ) -> usize {
-        if self.sources[target].kind == Kind::Instance {
+        if self.sources[target].kind == Kind::Instance || (tag == "textPath" && slot == Slot::Href)
+        {
             return 1;
         }
         match (self.target_tag(target), slot) {
             // A pattern's template is built once per build of the pattern.
             ("pattern", Slot::Href) => 1,
-            ("pattern", _) => self.paints(id, tag),
+            ("pattern", _) => paints,
             ("marker", Slot::MarkerMid) => middle_vertices(tag, element),
             ("marker", Slot::MarkerStart | Slot::MarkerEnd) => usize::from(markable(tag)),
             _ => 0,
@@ -41,16 +43,18 @@ impl Builder<'_> {
 
     /// How many times the parser paints `tag` with a paint server: once per
     /// shape, and for text up to three times per character of its own text
-    /// (per chunk, span and outline the parser fills).
-    pub(super) fn paints(&self, id: NodeId, tag: &str) -> usize {
-        if self.text_content(id, tag) {
+    /// (per chunk, span and outline the parser fills), twelve when it may be
+    /// decorated (each of three decorations adds as many).
+    pub(super) fn paints(&self, id: NodeId, tag: &str, text: bool, decorated: bool) -> usize {
+        if text {
             let characters: usize = self.doc.nodes[id]
                 .children
                 .iter()
                 .filter_map(|child| self.doc.nodes[*child].text_data())
                 .map(|text| text.content.utf16_len_bound())
                 .sum();
-            return characters.saturating_add(1).saturating_mul(3);
+            let per_character = if decorated { 12 } else { 3 };
+            return characters.saturating_add(1).saturating_mul(per_character);
         }
         usize::from(takes_paint(tag))
     }
@@ -67,40 +71,12 @@ impl Builder<'_> {
             .map_or("", |target| target.name.local.as_ref())
     }
 
-    /// Whether the parser shapes `id`'s text: text, its spans and paths, and
-    /// links within text (elsewhere a link is a group).
-    pub(super) fn text_content(&self, id: NodeId, tag: &str) -> bool {
-        const TEXT: [&str; 3] = ["text", "tspan", "textPath"];
-        if TEXT.contains(&tag) {
-            return true;
-        }
-        if tag != "a" {
-            return false;
-        }
-        let mut current = self.doc.nodes[id].parent;
-        // Text and its spans are shallow; a deeper link is not in text.
-        for _ in 0..64 {
-            let Some(parent) = current else {
-                return false;
-            };
-            let Some(element) = self.doc.nodes[parent].element_data() else {
-                return false;
-            };
-            if element.name.ns != markup5ever::ns!(svg) {
-                return false;
-            }
-            if TEXT.contains(&element.name.local.as_ref()) {
-                return true;
-            }
-            current = self.doc.nodes[parent].parent;
-        }
-        false
-    }
-
     /// Charge paint and marker references on `<use>`s for what the
     /// instanced content builds from them: each painted element, marked
-    /// element or middle vertex, its nested instances' included. Targets
-    /// come first in `order`.
+    /// element or middle vertex, its nested instances' included. A source's
+    /// context-painted elements come to include its instances', and all of
+    /// an instance's painted elements when its `<use>` passes a context paint
+    /// down. Targets come first in `order`.
     pub(super) fn inherit_through_uses(&mut self, order: &[usize], kept: &impl Fn(&Found) -> bool) {
         let count = self.sources.len();
         let mut painted = vec![0usize; count];
@@ -113,6 +89,7 @@ impl Builder<'_> {
                 walked.marked_elements,
                 walked.middle_vertices,
             ];
+            let mut context = walked.context_painted;
             for found in walked.found.iter().filter(|found| kept(found)) {
                 if found.slot == Slot::Href && self.sources[found.target].kind == Kind::Instance {
                     let target = found.target;
@@ -120,9 +97,14 @@ impl Builder<'_> {
                     for (total, nested) in totals.iter_mut().zip(nested) {
                         *total = total.saturating_add(nested);
                     }
+                    context = context.saturating_add(self.walked[target].context_painted);
+                    if found.context {
+                        context = context.saturating_add(painted[target]);
+                    }
                 }
             }
             [painted[source], marked[source], middles[source]] = totals;
+            self.walked[source].context_painted = context;
         }
         for walked in &mut self.walked {
             for found in walked.found.iter_mut().filter(|found| found.multiplies) {
@@ -194,6 +176,12 @@ impl Builder<'_> {
         }
         builds
     }
+}
+
+/// Whether the parser shapes `tag`'s text: text, its spans and paths, and
+/// links `in_text` (elsewhere a link is a group).
+pub(super) fn text_content(tag: &str, in_text: bool) -> bool {
+    matches!(tag, "text" | "tspan" | "textPath") || (tag == "a" && in_text)
 }
 
 /// Whether an element paints with its context element's fill or stroke.

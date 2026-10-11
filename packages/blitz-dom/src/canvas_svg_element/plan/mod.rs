@@ -11,7 +11,7 @@
 
 mod builds;
 
-use builds::context_painted;
+use builds::{context_painted, text_content};
 
 use super::elements::{
     HIDDEN_CONTAINERS, attribute_reference, fragment, href, included, markable, middle_vertices,
@@ -144,6 +144,25 @@ impl Plan {
 type AttributeReferences = [Option<usize>; Slot::ATTRIBUTES.len()];
 const NO_REFERENCES: AttributeReferences = [None; Slot::ATTRIBUTES.len()];
 
+/// An element waiting to be walked, with what it inherits from its ancestors.
+#[derive(Clone, Copy)]
+struct Pending {
+    id: NodeId,
+    /// Below a resource or an element Blink does not lay out.
+    hidden: bool,
+    depth: usize,
+    /// Attribute references inherited from ancestors without styles.
+    inherited: AttributeReferences,
+    /// Below text the parser shapes, where links are text too.
+    in_text: bool,
+    /// Below a `text-decoration` attribute the parser may read: the parser
+    /// decorates text with any ancestor's, and an instance's ancestors
+    /// include each `<use>`.
+    decorated: bool,
+    /// Without styles, below an element painted with its context paint.
+    context: bool,
+}
+
 /// The element whose attribute references are being passed on.
 struct Passing<'a> {
     id: NodeId,
@@ -152,6 +171,8 @@ struct Passing<'a> {
     depth: usize,
     /// The source it instances, for a `<use>`.
     instance: Option<usize>,
+    /// How many times the parser paints it (see [`Builder::paints`]).
+    paints: usize,
 }
 
 /// A reference found while walking one source.
@@ -171,6 +192,9 @@ struct Found {
     depth: usize,
     /// A `<use>` that Blink lays out, whose content's lengths count.
     visible_instance: bool,
+    /// Whether the element paints with its context paint, which a `<use>`
+    /// passes to its content.
+    context: bool,
 }
 
 /// What walking one source found.
@@ -225,8 +249,25 @@ impl Builder<'_> {
         // A resource never paints where it stands; an instanced symbol does.
         // Elements without styles inherit references from their ancestors'
         // attributes, as the parser resolves them (`Slot::ATTRIBUTES` order).
-        let mut pending = vec![(root, kind == Kind::Resource, 1, NO_REFERENCES)];
-        while let Some((id, hidden, depth, inherited)) = pending.pop() {
+        let mut pending = vec![Pending {
+            id: root,
+            hidden: kind == Kind::Resource,
+            depth: 1,
+            inherited: NO_REFERENCES,
+            in_text: false,
+            decorated: kind == Kind::Instance,
+            context: false,
+        }];
+        while let Some(Pending {
+            id,
+            hidden,
+            depth,
+            inherited,
+            in_text,
+            decorated,
+            context,
+        }) = pending.pop()
+        {
             let Some(tag) = included(self.doc, id) else {
                 continue;
             };
@@ -257,12 +298,21 @@ impl Builder<'_> {
             if !bounded_numbers(tag, element, style.is_none(), outermost) {
                 return Err(CanvasSvgLimit);
             }
-            walked.weight = walked.weight.saturating_add(self.weight(id));
+            let text = text_content(tag, in_text);
+            let decorated = decorated
+                || element
+                    .attr(markup5ever::LocalName::from("text-decoration"))
+                    .is_some();
+            walked.weight = walked.weight.saturating_add(self.weight(id, text));
             walked.depth = walked.depth.max(depth);
             walked.self_dependent |=
                 !hidden && super::viewport::self_dependent(tag, element, style);
-            walked.painted_elements = walked.painted_elements.saturating_add(self.paints(id, tag));
-            if context_painted(element, style) {
+            let paints = self.paints(id, tag, text, decorated);
+            walked.painted_elements = walked.painted_elements.saturating_add(paints);
+            // Without styles, the parser inherits a context paint as the
+            // attributes are written.
+            let context = context_painted(element, style) || (style.is_none() && context);
+            if context {
                 walked.context_painted += 1;
             }
             if markable(tag) {
@@ -289,11 +339,12 @@ impl Builder<'_> {
                     element: id,
                     slot,
                     target,
-                    builds: self.builds(id, tag, element, slot, target),
+                    builds: self.builds(tag, element, slot, target, paints),
                     through: instance.filter(|_| slot != Slot::Href),
                     multiplies: self.multiplies(target),
                     depth,
                     visible_instance: !hidden && target_kind == Kind::Instance,
+                    context,
                 });
             }
             let inherited = if style.is_some() {
@@ -305,15 +356,19 @@ impl Builder<'_> {
                     element,
                     depth,
                     instance,
+                    paints,
                 };
                 self.inherit_attributes(&mut walked, &passing, own, inherited)
             };
-            pending.extend(
-                node.children
-                    .iter()
-                    .rev()
-                    .map(|child| (*child, hidden, depth + 1, inherited)),
-            );
+            pending.extend(node.children.iter().rev().map(|child| Pending {
+                id: *child,
+                hidden,
+                depth: depth + 1,
+                inherited,
+                in_text: text,
+                decorated,
+                context,
+            }));
         }
         Ok(walked)
     }
@@ -337,7 +392,7 @@ impl Builder<'_> {
             let Some(target) = inherited[index] else {
                 continue;
             };
-            let builds = self.builds(passing.id, passing.tag, passing.element, *slot, target);
+            let builds = self.builds(passing.tag, passing.element, *slot, target, passing.paints);
             // A `<use>` passes it on to its content, charged later.
             if builds > 0 || passing.instance.is_some() {
                 walked.found.push(Found {
@@ -349,6 +404,7 @@ impl Builder<'_> {
                     multiplies: self.multiplies(target),
                     depth: passing.depth,
                     visible_instance: false,
+                    context: false,
                 });
             }
         }
@@ -358,7 +414,7 @@ impl Builder<'_> {
     /// One for the element, one per `WEIGHT_BYTES` of its attributes, which
     /// the parser copies into every build, and one per two bytes of its text,
     /// whose glyphs it flattens.
-    fn weight(&self, id: NodeId) -> usize {
+    fn weight(&self, id: NodeId, shaped: bool) -> usize {
         let node = &self.doc.nodes[id];
         let attributes = node.element_data().map_or(0, |element| {
             element
@@ -375,9 +431,6 @@ impl Builder<'_> {
             .sum();
         // The parser shapes and flattens every character of text content;
         // other text is whitespace it skips.
-        let shaped = node
-            .element_data()
-            .is_some_and(|element| self.text_content(id, element.name.local.as_ref()));
         let text_weight = if shaped {
             text / 2
         } else {
