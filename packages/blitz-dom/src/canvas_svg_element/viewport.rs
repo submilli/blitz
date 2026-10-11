@@ -78,7 +78,7 @@ impl BaseDocument {
     }
 
     /// Whether `node` is an `<svg>` element whose parent is not SVG content.
-    fn outermost_svg(&self, node: NodeId) -> bool {
+    pub(super) fn outermost_svg(&self, node: NodeId) -> bool {
         let node = &self.nodes[node];
         let svg = node.element_data().is_some_and(|element| {
             element.name.ns == markup5ever::ns!(svg) && element.name.local.as_ref() == "svg"

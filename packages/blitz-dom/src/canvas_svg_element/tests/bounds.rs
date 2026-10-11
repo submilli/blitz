@@ -640,3 +640,26 @@ fn context_paints_in_markers_are_counted() {
     doc.flush_style_and_layout(0.0);
     assert!(doc.capture_svg_element(path).is_err());
 }
+
+/// Outside text a link is a group: indented links around shapes filled with
+/// a pattern are charged as shapes, not as text.
+#[test]
+fn links_outside_text_are_groups() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "hatch")]);
+    add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    let map = add(&mut m, svg, "g", &[("fill", "url(#hatch)")]);
+    for _ in 0..100 {
+        let link = add(&mut m, map, "a", &[]);
+        let indent = m.create_text_node("\n            ");
+        m.append_children(link, &[indent]);
+        add(&mut m, link, "path", &[("d", "M0 0 L1 1 L1 0 Z")]);
+    }
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(map).unwrap().is_some());
+}

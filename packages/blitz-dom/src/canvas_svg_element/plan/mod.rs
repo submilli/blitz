@@ -9,9 +9,13 @@
 //! target again, a pattern is built again for each element it paints, and a
 //! marker for each vertex of the path it marks.
 
+mod builds;
+
+use builds::context_painted;
+
 use super::elements::{
     HIDDEN_CONTAINERS, attribute_reference, fragment, href, included, markable, middle_vertices,
-    takes_paint, unmarked_shape,
+    unmarked_shape,
 };
 use super::lookup::local_urls;
 use super::numbers::bounded_numbers;
@@ -249,7 +253,7 @@ impl Builder<'_> {
             if let Some(style) = style {
                 bound_dashes(style)?;
             }
-            let outermost = id == root && kind == Kind::Root && tag == "svg";
+            let outermost = id == root && kind == Kind::Root && self.doc.outermost_svg(id);
             if !bounded_numbers(tag, element, style.is_none(), outermost) {
                 return Err(CanvasSvgLimit);
             }
@@ -373,66 +377,13 @@ impl Builder<'_> {
         // other text is whitespace it skips.
         let shaped = node
             .element_data()
-            .is_some_and(|element| text_content(element.name.local.as_ref()));
+            .is_some_and(|element| self.text_content(id, element.name.local.as_ref()));
         let text_weight = if shaped {
             text / 2
         } else {
             text / WEIGHT_BYTES
         };
         1 + attributes / WEIGHT_BYTES + text_weight
-    }
-
-    /// How many times the parser builds `target` for one reference: once per
-    /// `<use>`, once per element a pattern paints, once for a start or end
-    /// marker and once per middle vertex (bounded by the path's numbers).
-    /// Gradients and text paths add none: they are built once where defined.
-    fn builds(
-        &self,
-        id: NodeId,
-        tag: &str,
-        element: &ElementData,
-        slot: Slot,
-        target: usize,
-    ) -> usize {
-        if self.sources[target].kind == Kind::Instance {
-            return 1;
-        }
-        match (self.target_tag(target), slot) {
-            // A pattern's template is built once per build of the pattern.
-            ("pattern", Slot::Href) => 1,
-            ("pattern", _) => self.paints(id, tag),
-            ("marker", Slot::MarkerMid) => middle_vertices(tag, element),
-            ("marker", Slot::MarkerStart | Slot::MarkerEnd) => usize::from(markable(tag)),
-            _ => 0,
-        }
-    }
-
-    /// How many times the parser paints `tag` with a paint server: once per
-    /// shape, and for text up to three times per character of its own text
-    /// (per chunk, span and outline the parser fills).
-    fn paints(&self, id: NodeId, tag: &str) -> usize {
-        if text_content(tag) {
-            let characters: usize = self.doc.nodes[id]
-                .children
-                .iter()
-                .filter_map(|child| self.doc.nodes[*child].text_data())
-                .map(|text| text.content.utf16_len_bound())
-                .sum();
-            return characters.saturating_add(1).saturating_mul(3);
-        }
-        usize::from(takes_paint(tag))
-    }
-
-    /// Whether `target` is a pattern or marker, built per element or vertex.
-    fn multiplies(&self, target: usize) -> bool {
-        matches!(self.target_tag(target), "pattern" | "marker")
-    }
-
-    fn target_tag(&self, target: usize) -> &str {
-        let node = self.sources[target].node;
-        self.doc.nodes[node]
-            .element_data()
-            .map_or("", |target| target.name.local.as_ref())
     }
 
     /// The elements `element` names, with how each is used: from computed
@@ -601,100 +552,6 @@ impl Builder<'_> {
         cyclic
     }
 
-    /// Charge paint and marker references on `<use>`s for what the
-    /// instanced content builds from them: each painted element, marked
-    /// element or middle vertex, its nested instances' included. Targets
-    /// come first in `order`.
-    fn inherit_through_uses(&mut self, order: &[usize], kept: &impl Fn(&Found) -> bool) {
-        let count = self.sources.len();
-        let mut painted = vec![0usize; count];
-        let mut marked = vec![0usize; count];
-        let mut middles = vec![0usize; count];
-        for &source in order {
-            let walked = &self.walked[source];
-            let mut totals = [
-                walked.painted_elements,
-                walked.marked_elements,
-                walked.middle_vertices,
-            ];
-            for found in walked.found.iter().filter(|found| kept(found)) {
-                if found.slot == Slot::Href && self.sources[found.target].kind == Kind::Instance {
-                    let target = found.target;
-                    let nested = [painted[target], marked[target], middles[target]];
-                    for (total, nested) in totals.iter_mut().zip(nested) {
-                        *total = total.saturating_add(nested);
-                    }
-                }
-            }
-            [painted[source], marked[source], middles[source]] = totals;
-        }
-        for walked in &mut self.walked {
-            for found in walked.found.iter_mut().filter(|found| found.multiplies) {
-                let Some(instance) = found.through else {
-                    continue;
-                };
-                let inherited = match found.slot {
-                    Slot::Fill | Slot::Stroke => painted[instance],
-                    Slot::MarkerMid => middles[instance],
-                    Slot::MarkerStart | Slot::MarkerEnd => marked[instance],
-                    Slot::Href => 0,
-                };
-                found.builds = found.builds.max(inherited);
-            }
-        }
-    }
-
-    /// Charge a marked element's pattern for the marker content that paints
-    /// with it (`context-fill`, `context-stroke`): once per marker build and
-    /// context-painted element.
-    fn charge_context_paints(&mut self, kept: &impl Fn(&Found) -> bool) {
-        let context: Vec<usize> = self
-            .walked
-            .iter()
-            .map(|walked| walked.context_painted)
-            .collect();
-        for walked in &mut self.walked {
-            let mut extra: HashMap<NodeId, usize> = HashMap::new();
-            for found in walked
-                .found
-                .iter()
-                .filter(|found| kept(found) && found.slot.is_marker())
-            {
-                let builds = found.builds.saturating_mul(context[found.target]);
-                let total = extra.entry(found.element).or_default();
-                *total = total.saturating_add(builds);
-            }
-            for found in &mut walked.found {
-                let paint = matches!(found.slot, Slot::Fill | Slot::Stroke) && found.multiplies;
-                if let Some(extra) = extra.get(&found.element).filter(|_| paint) {
-                    found.builds = found.builds.saturating_add(*extra);
-                }
-            }
-        }
-    }
-
-    /// How many times the parser builds each source: the root once, every
-    /// other source reached once where it is defined, plus its builds through
-    /// each kept reference. Sources come before their targets in reverse
-    /// `order`.
-    fn builds_of_sources(&self, order: &[usize], kept: &impl Fn(&Found) -> bool) -> Vec<usize> {
-        let mut builds = vec![0usize; self.sources.len()];
-        builds[0] = 1;
-        for &source in order.iter().rev() {
-            if builds[source] == 0 {
-                continue;
-            }
-            for found in self.walked[source].found.iter().filter(|found| kept(found)) {
-                let through = builds[source].saturating_mul(found.builds);
-                let defined = usize::from(builds[found.target] == 0);
-                builds[found.target] = builds[found.target]
-                    .saturating_add(through)
-                    .saturating_add(defined);
-            }
-        }
-        builds
-    }
-
     /// The deepest nesting the parser recurses through: elements within a
     /// source, then on into each kept reference's target.
     fn nesting(&self, order: &[usize], kept: &impl Fn(&Found) -> bool) -> usize {
@@ -732,32 +589,6 @@ impl Builder<'_> {
         }
         dependent
     }
-}
-
-/// Whether an element paints with its context element's fill or stroke.
-fn context_painted(element: &ElementData, style: Option<&ComputedValues>) -> bool {
-    match style {
-        Some(style) => {
-            let svg = style.get_inherited_svg();
-            [&svg.fill.kind, &svg.stroke.kind].iter().any(|kind| {
-                matches!(
-                    kind,
-                    SVGPaintKind::ContextFill | SVGPaintKind::ContextStroke
-                )
-            })
-        }
-        None => ["fill", "stroke"].iter().any(|name| {
-            element
-                .attr(markup5ever::LocalName::from(*name))
-                .is_some_and(|value| value.trim_start().starts_with("context-"))
-        }),
-    }
-}
-
-/// Elements whose text the parser shapes: `<a>` within text included (and
-/// over-counted elsewhere only by its whitespace).
-fn text_content(tag: &str) -> bool {
-    matches!(tag, "text" | "tspan" | "textPath" | "a")
 }
 
 /// Bound a computed `stroke-dasharray`: every element walked compares and
