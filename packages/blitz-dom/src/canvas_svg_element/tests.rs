@@ -468,8 +468,8 @@ fn unitless_presentation_lengths_apply() {
     );
     drop(m);
     let markup = painted(&mut doc, text);
-    assert!(markup.contains("font-size:20px"), "{markup}");
-    assert!(markup.contains("stroke-width:3px"), "{markup}");
+    assert!(markup.contains("font-size=\"20px\""), "{markup}");
+    assert!(markup.contains("stroke-width=\"3px\""), "{markup}");
 }
 
 /// Stop colors, text anchors and markers reach computed style from
@@ -495,17 +495,14 @@ fn stops_anchors_and_markers_come_from_style() {
     drop(m);
     let markup = painted(&mut doc, path);
     assert!(
-        markup.contains("stop-color:rgba(0,255,0,1);stop-opacity:0.5"),
+        markup.contains("stop-color=\"rgba(0,255,0,1)\" stop-opacity=\"0.5\""),
         "{markup}"
     );
     // The marker comes from the group outside the subtree, through style.
-    assert!(
-        markup.contains("marker-end:url(#c2)") || markup.contains("marker-end:url(#c1)"),
-        "{markup}"
-    );
+    assert!(markup.contains("marker-end=\"url(#c"), "{markup}");
     let element = capture(&mut doc, path).unwrap();
     assert!(element.tree.root().has_children());
-    assert!(painted(&mut doc, text).contains("text-anchor:middle"));
+    assert!(painted(&mut doc, text).contains("text-anchor=\"middle\""));
 }
 
 /// A `<use>` may instance a sprite below `display: none`, which has no
@@ -665,4 +662,251 @@ fn use_nesting_is_bounded() {
     doc.flush_style_and_layout(0.0);
     assert!(doc.capture_svg_element(shallow).is_ok());
     assert!(doc.capture_svg_element(deep).is_err());
+}
+
+/// Styles are written as presentation attributes, parsed one value each: a
+/// family name with escapes and semicolons cannot add a `fill` naming a copy.
+#[test]
+fn style_values_cannot_inject_declarations() {
+    let css = r#".x{font-family:"a\\", "x;fill:url(#c1);y"}"#;
+    let (mut doc, svg) = page(css);
+    let mut m = doc.mutate();
+    let gradient = add(&mut m, svg, "linearGradient", &[("id", "g")]);
+    add(&mut m, gradient, "stop", &[("stop-color", "lime")]);
+    let group = add(&mut m, svg, "g", &[]);
+    add(
+        &mut m,
+        group,
+        "rect",
+        &[("fill", "url(#g)"), ("width", "1"), ("height", "1")],
+    );
+    let attrs = [
+        ("class", "x"),
+        ("fill", "rgb(255,0,0)"),
+        ("width", "1"),
+        ("height", "1"),
+    ];
+    add(&mut m, group, "rect", &attrs);
+    drop(m);
+    let markup = painted(&mut doc, group);
+    assert!(!markup.contains(" style="), "{markup}");
+    let element = capture(&mut doc, group).unwrap();
+    assert_eq!(fill_color(&paths(&element)[1]), Some((255, 0, 0)));
+}
+
+/// Markers are built once per vertex and patterns once per element they
+/// paint: chains of them multiply, and are refused before parsing.
+#[test]
+fn nested_markers_and_patterns_are_bounded() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let vertices = format!("M0 0{}", " L1 1".repeat(200));
+    for level in 0..3 {
+        let marker = add(&mut m, sprites, "marker", &[("id", &format!("m{level}"))]);
+        let path = [
+            ("d", vertices.as_str()),
+            ("marker-mid", &format!("url(#m{})", level + 1)),
+        ];
+        add(&mut m, marker, "path", &path);
+    }
+    add(&mut m, sprites, "marker", &[("id", "m3")]);
+    for level in 0..20 {
+        let pattern = add(&mut m, sprites, "pattern", &[("id", &format!("p{level}"))]);
+        for _ in 0..2 {
+            let fill = [
+                ("fill", &*format!("url(#p{})", level + 1)),
+                ("width", "1"),
+                ("height", "1"),
+            ];
+            add(&mut m, pattern, "rect", &fill);
+        }
+    }
+    add(&mut m, sprites, "pattern", &[("id", "p20")]);
+    let marked = add(
+        &mut m,
+        svg,
+        "path",
+        &[("d", &vertices), ("marker-mid", "url(#m0)")],
+    );
+    let patterned = add(
+        &mut m,
+        svg,
+        "rect",
+        &[("fill", "url(#p0)"), ("width", "1"), ("height", "1")],
+    );
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(marked).is_err());
+    assert!(doc.capture_svg_element(patterned).is_err());
+}
+
+/// The bytes each copy writes, styles included, count once per build: a
+/// stylesheet can give a light element long values.
+#[test]
+fn expanded_markup_is_bounded() {
+    let family = "f".repeat(4000);
+    let dashes = vec!["1"; 800].join(",");
+    let css = format!(".d{{font-family:{family};stroke-dasharray:{dashes}}}");
+    let (mut doc, svg) = page(&css);
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let dashed = add(&mut m, svg, "g", &[("id", "t")]);
+    add(
+        &mut m,
+        dashed,
+        "line",
+        &[("class", "d"), ("x2", "1"), ("stroke", "red")],
+    );
+    // 5^4 builds of the line weigh about 2200, within the weight bound, but
+    // write about 5 MB of styles.
+    for level in 0..4 {
+        let group = add(&mut m, sprites, "g", &[("id", &format!("f{level}"))]);
+        let target = if level == 0 {
+            "#t".to_owned()
+        } else {
+            format!("#f{}", level - 1)
+        };
+        for _ in 0..5 {
+            add(&mut m, group, "use", &[("href", &target)]);
+        }
+    }
+    let fanned = add(&mut m, svg, "g", &[]);
+    add(&mut m, fanned, "use", &[("href", "#f3")]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    let markup = painted(&mut doc, dashed);
+    assert!(markup.len() > 8000, "{}", markup.len());
+    assert!(doc.capture_svg_element(fanned).is_err());
+}
+
+/// Elements nested deeper than the parser's recursion allows are refused.
+#[test]
+fn element_nesting_is_bounded() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    // A hidden SVG of its own, which layout never parses (SUB-1570).
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let root = add(&mut m, sprites, "g", &[]);
+    let mut parent = root;
+    for _ in 0..130 {
+        parent = add(&mut m, parent, "g", &[]);
+    }
+    add(&mut m, parent, "rect", &[("width", "1"), ("height", "1")]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(root).is_err());
+}
+
+/// IDs resolve through the document's index, wherever they are and whether
+/// or not they exist.
+#[test]
+fn late_and_missing_references_resolve_in_large_documents() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let group = add(&mut m, svg, "g", &[]);
+    add(&mut m, group, "use", &[("href", "#late")]);
+    let fallback = [
+        ("fill", "url(#missing) rgb(255,0,0)"),
+        ("width", "1"),
+        ("height", "1"),
+    ];
+    add(&mut m, group, "rect", &fallback);
+    let filler = add(&mut m, svg, "g", &[]);
+    for _ in 0..6000 {
+        add(&mut m, filler, "g", &[]);
+    }
+    add(
+        &mut m,
+        svg,
+        "rect",
+        &[("id", "late"), ("width", "1"), ("height", "1")],
+    );
+    drop(m);
+    let element = capture(&mut doc, group).unwrap();
+    let paths = paths(&element);
+    assert_eq!(paths.len(), 2);
+    assert_eq!(fill_color(&paths[1]), Some((255, 0, 0)));
+}
+
+/// Undisplayed content has no layout in Blink, so its lengths never make a
+/// reference viewport-dependent (`hiddenText` in `element-images.js`).
+#[test]
+fn undisplayed_content_is_not_viewport_dependent() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let group = add(&mut m, svg, "g", &[]);
+    add(&mut m, group, "rect", &[("width", "4"), ("height", "4")]);
+    add(&mut m, group, "text", &[("style", "display:none")]);
+    add(
+        &mut m,
+        group,
+        "rect",
+        &[("style", "display:none"), ("width", "50%")],
+    );
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    let plan = super::plan::Plan::new(&doc, group).unwrap();
+    assert!(!plan.viewport_dependent);
+}
+
+/// Embedded images keep their `data:` URLs, however long: the markup bound
+/// limits them.
+#[test]
+fn long_image_urls_are_kept() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let group = add(&mut m, svg, "g", &[]);
+    let href = format!("data:image/png;base64,{}", "A".repeat(10_000));
+    add(
+        &mut m,
+        group,
+        "image",
+        &[("href", &href), ("width", "1"), ("height", "1")],
+    );
+    drop(m);
+    assert!(painted(&mut doc, group).contains(&href));
+}
+
+/// An unstyled sprite's paint reference falls back as a paint does.
+#[test]
+fn unstyled_references_fall_back() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let sprites = add(&mut m, svg, "svg", &[("style", "display:none")]);
+    let symbol = add(&mut m, sprites, "symbol", &[("id", "icon")]);
+    let fill = [
+        ("fill", "url(#missing) rgb(255,0,0)"),
+        ("width", "2"),
+        ("height", "2"),
+    ];
+    add(&mut m, symbol, "rect", &fill);
+    let group = add(&mut m, svg, "g", &[]);
+    add(
+        &mut m,
+        group,
+        "use",
+        &[("href", "#icon"), ("width", "2"), ("height", "2")],
+    );
+    drop(m);
+    let element = capture(&mut doc, group).unwrap();
+    assert_eq!(fill_color(&paths(&element)[0]), Some((255, 0, 0)));
+}
+
+/// Percentages of an empty viewport resolve to (next to) nothing, as in
+/// Chrome (`zeroViewport`), while absolute content paints.
+#[test]
+fn empty_viewports_resolve_percentages_to_nothing() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    m.set_attribute(svg, qual_name!("width"), "0");
+    m.set_attribute(svg, qual_name!("height"), "0");
+    let percent = add(&mut m, svg, "rect", &[("width", "50%"), ("height", "4")]);
+    let absolute = add(&mut m, svg, "rect", &[("width", "4"), ("height", "4")]);
+    drop(m);
+    assert!(capture(&mut doc, percent).unwrap().bounds.width() < 1e-3);
+    assert!(capture(&mut doc, absolute).is_some());
 }

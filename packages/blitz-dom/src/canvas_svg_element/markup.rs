@@ -1,7 +1,7 @@
 //! The painted and placed markups of a [`Plan`].
 
 use super::MAX_ELEMENT_MARKUP;
-use super::elements::{href, included, xml_name};
+use super::elements::{attribute_reference, image_href, included, xml_name};
 use super::plan::{Kind, Plan, Slot};
 use super::style::{StyleWriter, Values, from_style};
 use super::viewport::view_box_size;
@@ -16,7 +16,13 @@ pub(super) struct Markup {
     /// The same with them, to measure the bounds; `None` when no element had
     /// any, so the painted markup measures them.
     pub placed: Option<String>,
+    /// Bytes of painted markup each source wrote, which the parser copies
+    /// into every build of it.
+    pub bytes: Vec<usize>,
 }
+
+/// The size written for an empty or missing viewport.
+const EMPTY_VIEWPORT: f32 = 1e-6;
 
 /// Attributes Blink applies through paint property nodes, which
 /// `PaintResourceSubtree` leaves out. `overflow` is written as `visible`.
@@ -46,20 +52,29 @@ pub(super) fn write(
         placed: String::new(),
         transformed: false,
     };
-    writer.push("<svg xmlns=\"http://www.w3.org/2000/svg\"")?;
-    if let Some([width, height]) = viewport {
-        writer.push(&format!(" width=\"{width}\" height=\"{height}\""))?;
-    }
-    writer.push(">")?;
-    writer.source(0)?;
-    writer.push("<defs>")?;
-    for index in 1..plan.sources.len() {
+    // An empty viewport resolves percentages to nothing, as in Blink; the
+    // parser needs a positive size.
+    let [width, height] = viewport.unwrap_or([EMPTY_VIEWPORT; 2]);
+    writer.push(&format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\">"
+    ))?;
+    let mut bytes = Vec::with_capacity(plan.sources.len());
+    for index in 0..plan.sources.len() {
+        if index == 1 {
+            writer.push("<defs>")?;
+        }
+        let start = writer.painted.len();
         writer.source(index)?;
+        bytes.push(writer.painted.len() - start);
     }
-    writer.push("</defs></svg>")?;
+    if plan.sources.len() > 1 {
+        writer.push("</defs>")?;
+    }
+    writer.push("</svg>")?;
     Ok(Markup {
         placed: writer.transformed.then_some(writer.placed),
         painted: writer.painted,
+        bytes,
     })
 }
 
@@ -113,16 +128,15 @@ impl Writer<'_> {
                 };
                 let plan = self.plan;
                 let copy = |slot| plan.reference(id, slot).map(copy_id);
-                let mut declarations = self.style.write(&style, tag, values, copy)?;
-                // Blink does not clip to nested viewports while painting.
-                if matches!(tag, "svg" | "symbol") {
-                    declarations.push_str("overflow:visible;");
-                }
-                if !declarations.is_empty() {
-                    self.push(" style=\"")?;
-                    self.push_escaped(&declarations)?;
+                for (name, value) in self.style.write(&style, tag, values, copy)? {
+                    self.push(&format!(" {name}=\""))?;
+                    self.push_escaped(&value)?;
                     self.push("\"")?;
                 }
+            }
+            // Blink does not clip to nested viewports while painting.
+            if matches!(tag, "svg" | "symbol") {
+                self.push(" overflow=\"visible\"")?;
             }
             self.push(">")?;
             pending.push((id, true, parent));
@@ -219,41 +233,35 @@ impl Writer<'_> {
     }
 
     /// A presentation attribute of an element without styles: written as it
-    /// stands, but for a reference, which names its copy or is left out.
+    /// stands, but for a reference, which names its copy or falls back as a
+    /// paint does.
     fn unstyled_presentation(
         &mut self,
         id: NodeId,
         local: &str,
         value: &str,
     ) -> Result<(), CanvasSvgLimit> {
-        let slot = match local {
-            "fill" => Some(Slot::Fill),
-            "stroke" => Some(Slot::Stroke),
-            _ => Slot::MARKERS
-                .iter()
-                .find(|(name, _)| *name == local)
-                .map(|(_, slot)| *slot),
-        };
-        let reference = value.trim_start().starts_with("url(");
-        match slot.filter(|_| reference) {
-            Some(slot) => {
-                if let Some(copy) = self.plan.reference(id, slot) {
-                    self.push(&format!(" {local}=\"url(#{})\"", copy_id(copy)))?;
+        let reference = Slot::of_attribute(local).zip(attribute_reference(value));
+        let written = match reference {
+            Some((slot, (_, fallback))) => match self.plan.reference(id, slot) {
+                Some(copy) if matches!(slot, Slot::Fill | Slot::Stroke) => {
+                    format!("url(#{}) {fallback}", copy_id(copy))
                 }
-            }
-            None => {
-                self.push(&format!(" {local}=\""))?;
-                self.push_escaped(value)?;
-                self.push("\"")?;
-            }
-        }
-        Ok(())
+                Some(copy) => format!("url(#{})", copy_id(copy)),
+                None if matches!(slot, Slot::Fill | Slot::Stroke) => fallback,
+                None => "none".to_owned(),
+            },
+            None => value.to_owned(),
+        };
+        self.push(&format!(" {local}=\""))?;
+        self.push_escaped(&written)?;
+        self.push("\"")
     }
 
     /// References name their copies; images keep their own `href`.
     fn href(&mut self, id: NodeId, tag: &str, element: &ElementData) -> Result<(), CanvasSvgLimit> {
         if tag == "image" {
-            if let Some(href) = href(element) {
+            if let Some(href) = image_href(element) {
                 self.push(" href=\"")?;
                 self.push_escaped(href)?;
                 self.push("\"")?;

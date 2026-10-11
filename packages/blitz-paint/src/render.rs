@@ -1070,11 +1070,8 @@ impl ElementCx<'_, '_> {
         // dimensions lays out at the default 300x150), clipped to the box as
         // replaced content is.
         if svg.intrinsic_dimensions.view_box_size.is_none() {
-            let origin = self.frame.content_box.origin();
-            let transform = self.transform.pre_scale(self.scale).then_translate(Vec2 {
-                x: origin.x,
-                y: origin.y,
-            });
+            let origin = self.frame.content_box.origin().to_vec2();
+            let transform = self.transform.pre_translate(origin).pre_scale(self.scale);
             scene.push_clip_layer(self.transform, &self.frame.content_box);
             anyrender_svg::render_svg_tree(scene, &svg.tree, transform);
             scene.pop_layer();

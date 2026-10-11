@@ -37,24 +37,12 @@ const MAX_EXPANDED_WEIGHT: usize = 8 * 1024;
 const WEIGHT_BYTES: usize = 256;
 /// Markup of one reference.
 const MAX_ELEMENT_MARKUP: usize = 256 * 1024;
+/// Painted markup the parser may copy once every source is built as many
+/// times as the plan counts.
+const MAX_EXPANDED_BYTES: usize = 4 * 1024 * 1024;
 /// Attribute values read as references or lengths; longer ones are ignored,
 /// as the filter snapshot ignores them.
 const MAX_ATTRIBUTE_LEN: usize = 4096;
-
-/// Containers Blink lays out without painting (`LayoutSVGHiddenContainer`):
-/// a reference to one draws nothing, and lengths inside never make a
-/// reference viewport-dependent.
-const HIDDEN_CONTAINERS: [&str; 9] = [
-    "defs",
-    "linearGradient",
-    "radialGradient",
-    "pattern",
-    "clipPath",
-    "mask",
-    "marker",
-    "filter",
-    "symbol",
-];
 
 impl BaseDocument {
     /// The SVG element `target` as an `feImage` draws it, or `None` when it
@@ -66,12 +54,22 @@ impl BaseDocument {
         let tag = self.nodes[target]
             .element_data()
             .map(|element| element.name.local.as_ref());
-        if tag.is_none_or(|tag| HIDDEN_CONTAINERS.contains(&tag)) {
+        if tag.is_none_or(|tag| elements::HIDDEN_CONTAINERS.contains(&tag)) {
             return Ok(None);
         }
         let plan = plan::Plan::new(self, target)?;
         let viewport = self.svg_viewport(target)?;
         let markup = markup::write(self, &plan, viewport)?;
+        let expanded = plan
+            .builds
+            .iter()
+            .zip(&markup.bytes)
+            .fold(0usize, |total, (builds, bytes)| {
+                total.saturating_add(builds.saturating_mul(*bytes))
+            });
+        if expanded > MAX_EXPANDED_BYTES {
+            return Err(CanvasSvgLimit);
+        }
         let Some(tree) = self.parse_element_markup(&markup.painted) else {
             return Ok(None);
         };

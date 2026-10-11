@@ -1,10 +1,12 @@
-//! Computed styles written as `style` attributes, for a parser that sees no
-//! stylesheet.
+//! Computed styles written as presentation attributes, for a parser that
+//! sees no stylesheet. Attributes, unlike a `style` attribute, are parsed one
+//! value each, so no value (a font family name, say) can add declarations.
 //!
 //! Only properties Blink paints with enter: those it applies through paint
 //! property nodes (opacity, filters, clips, masks, blending) are left out, as
 //! `PaintResourceSubtree` leaves them out.
 
+use super::MAX_ATTRIBUTE_LEN;
 use super::plan::Slot;
 use crate::canvas_svg_filter::{CanvasSvgLimit, svg_color};
 use style::properties::{ComputedValues, LonghandId, LonghandIdSet, PropertyDeclarationId};
@@ -80,21 +82,27 @@ impl<'a> StyleWriter<'a> {
         Self { guard, visits: 0 }
     }
 
-    /// The `style` attribute value for `tag`'s `style`. `copy` names the copy
-    /// a `url()` at a slot is written as, if any.
+    /// The presentation attributes to write for `tag`'s `style`, by name.
+    /// `copy` names the copy a `url()` at a slot is written as, if any.
+    /// Values longer than an attribute the snapshot reads are left out.
     pub(super) fn write(
         &mut self,
         style: &ComputedValues,
         tag: &str,
         values: Values<'_>,
         copy: impl Fn(Slot) -> Option<String>,
-    ) -> Result<String, CanvasSvgLimit> {
+    ) -> Result<Vec<(&'static str, String)>, CanvasSvgLimit> {
         let declared = match values {
             Values::Declared => Some(self.declared(style)?),
             Values::All | Values::BelowParent(_) => None,
         };
-        let keep_current_color = matches!(values, Values::Declared);
-        let mut out = String::new();
+        let element = Element {
+            style,
+            tag,
+            color: style.clone_color(),
+            keep_current_color: matches!(values, Values::Declared),
+        };
+        let mut out = Vec::new();
         for (name, id) in WRITTEN {
             if declared
                 .as_ref()
@@ -107,13 +115,12 @@ impl<'a> StyleWriter<'a> {
             {
                 continue;
             }
-            let Some(value) = value(id, style, tag, keep_current_color, &copy) else {
+            let Some(value) = element.value(id, &copy) else {
                 continue;
             };
-            out.push_str(name);
-            out.push(':');
-            out.push_str(&value);
-            out.push(';');
+            if value.len() <= MAX_ATTRIBUTE_LEN {
+                out.push((name, value));
+            }
         }
         Ok(out)
     }
@@ -155,56 +162,61 @@ fn charge(total: &mut usize, visits: usize) -> Result<(), CanvasSvgLimit> {
     Ok(())
 }
 
-/// Property `id`'s value as SVG syntax, or `None` when it is not written.
-fn value(
-    id: LonghandId,
-    style: &ComputedValues,
-    tag: &str,
+/// What one element's values are written from.
+struct Element<'s> {
+    style: &'s ComputedValues,
+    tag: &'s str,
+    color: style::color::AbsoluteColor,
     keep_current_color: bool,
-    copy: &impl Fn(Slot) -> Option<String>,
-) -> Option<String> {
-    let color = style.clone_color();
-    let svg = style.get_inherited_svg();
-    let value = match id {
-        LonghandId::Color => svg_color(&color),
-        LonghandId::Fill => paint(&svg.fill, &color, keep_current_color, copy(Slot::Fill)),
-        LonghandId::Stroke => paint(&svg.stroke, &color, keep_current_color, copy(Slot::Stroke)),
-        LonghandId::FillOpacity => svg.fill_opacity.to_css_string(),
-        LonghandId::FillRule => svg.fill_rule.to_css_string(),
-        LonghandId::StrokeWidth => svg.stroke_width.to_css_string(),
-        LonghandId::StrokeOpacity => svg.stroke_opacity.to_css_string(),
-        LonghandId::StrokeDasharray => svg.stroke_dasharray.to_css_string(),
-        LonghandId::StrokeDashoffset => svg.stroke_dashoffset.to_css_string(),
-        LonghandId::StrokeLinecap => svg.stroke_linecap.to_css_string(),
-        LonghandId::StrokeLinejoin => svg.stroke_linejoin.to_css_string(),
-        LonghandId::StrokeMiterlimit => svg.stroke_miterlimit.to_css_string(),
-        LonghandId::PaintOrder => svg.paint_order.to_css_string(),
-        LonghandId::MarkerStart => marker(&svg.marker_start, copy(Slot::MarkerStart)),
-        LonghandId::MarkerMid => marker(&svg.marker_mid, copy(Slot::MarkerMid)),
-        LonghandId::MarkerEnd => marker(&svg.marker_end, copy(Slot::MarkerEnd)),
-        LonghandId::TextAnchor => svg.text_anchor.to_css_string(),
-        // Only `none` matters to painting; other values lay out boxes.
-        LonghandId::Display => style.clone_display().is_none().then(|| "none".to_owned())?,
-        LonghandId::Visibility => style.clone_visibility().to_css_string(),
-        LonghandId::FontFamily => style.clone_font_family().to_css_string(),
-        LonghandId::FontSize => {
-            let size = style.clone_font_size().computed_size().px();
-            format!("{}px", size.clamp(0.0, MAX_FONT_SIZE))
-        }
-        LonghandId::FontStyle => style.clone_font_style().to_css_string(),
-        LonghandId::FontWeight => style.clone_font_weight().value().to_string(),
-        LonghandId::StopColor if tag == "stop" => {
-            let stop = style.clone_stop_color();
-            if keep_current_color && stop.is_currentcolor() {
-                "currentColor".to_owned()
-            } else {
-                svg_color(&stop.resolve_to_absolute(&color))
+}
+
+impl Element<'_> {
+    /// Property `id`'s value as SVG syntax, or `None` when it is not written.
+    fn value(&self, id: LonghandId, copy: &impl Fn(Slot) -> Option<String>) -> Option<String> {
+        let (style, color) = (self.style, &self.color);
+        let svg = style.get_inherited_svg();
+        let current = self.keep_current_color;
+        let value = match id {
+            LonghandId::Color => svg_color(color),
+            LonghandId::Fill => paint(&svg.fill, color, current, copy(Slot::Fill)),
+            LonghandId::Stroke => paint(&svg.stroke, color, current, copy(Slot::Stroke)),
+            LonghandId::FillOpacity => svg.fill_opacity.to_css_string(),
+            LonghandId::FillRule => svg.fill_rule.to_css_string(),
+            LonghandId::StrokeWidth => svg.stroke_width.to_css_string(),
+            LonghandId::StrokeOpacity => svg.stroke_opacity.to_css_string(),
+            LonghandId::StrokeDasharray => svg.stroke_dasharray.to_css_string(),
+            LonghandId::StrokeDashoffset => svg.stroke_dashoffset.to_css_string(),
+            LonghandId::StrokeLinecap => svg.stroke_linecap.to_css_string(),
+            LonghandId::StrokeLinejoin => svg.stroke_linejoin.to_css_string(),
+            LonghandId::StrokeMiterlimit => svg.stroke_miterlimit.to_css_string(),
+            LonghandId::PaintOrder => svg.paint_order.to_css_string(),
+            LonghandId::MarkerStart => marker(&svg.marker_start, copy(Slot::MarkerStart)),
+            LonghandId::MarkerMid => marker(&svg.marker_mid, copy(Slot::MarkerMid)),
+            LonghandId::MarkerEnd => marker(&svg.marker_end, copy(Slot::MarkerEnd)),
+            LonghandId::TextAnchor => svg.text_anchor.to_css_string(),
+            // Only `none` matters to painting; other values lay out boxes.
+            LonghandId::Display => style.clone_display().is_none().then(|| "none".to_owned())?,
+            LonghandId::Visibility => style.clone_visibility().to_css_string(),
+            LonghandId::FontFamily => style.clone_font_family().to_css_string(),
+            LonghandId::FontSize => {
+                let size = style.clone_font_size().computed_size().px();
+                format!("{}px", size.clamp(0.0, MAX_FONT_SIZE))
             }
-        }
-        LonghandId::StopOpacity if tag == "stop" => style.clone_stop_opacity().to_string(),
-        _ => return None,
-    };
-    Some(value)
+            LonghandId::FontStyle => style.clone_font_style().to_css_string(),
+            LonghandId::FontWeight => style.clone_font_weight().value().to_string(),
+            LonghandId::StopColor if self.tag == "stop" => {
+                let stop = style.clone_stop_color();
+                if current && stop.is_currentcolor() {
+                    "currentColor".to_owned()
+                } else {
+                    svg_color(&stop.resolve_to_absolute(color))
+                }
+            }
+            LonghandId::StopOpacity if self.tag == "stop" => style.clone_stop_opacity().to_string(),
+            _ => return None,
+        };
+        Some(value)
+    }
 }
 
 /// Whether the parser would inherit `id`'s value from `parent` unchanged.
@@ -304,8 +316,14 @@ mod tests {
         let style = ComputedValues::initial_values_with_font_override(
             style::properties::style_structs::Font::initial_values(),
         );
+        let element = Element {
+            style: &style,
+            tag: "stop",
+            color: style.clone_color(),
+            keep_current_color: false,
+        };
         for (name, id) in WRITTEN {
-            let written = value(id, &style, "stop", false, &|_| None);
+            let written = element.value(id, &|_| None);
             assert!(written.is_some() || id == LonghandId::Display, "{name}");
             let compared = inherited_unchanged(id, &style, &style);
             let not_inherited = matches!(
