@@ -7,7 +7,8 @@
 //! `PaintResourceSubtree` leaves them out.
 
 use super::MAX_ATTRIBUTE_LEN;
-use super::elements::{MAX_PERCENT, numbers_within, unmarked_shape};
+use super::elements::unmarked_shape;
+use super::numbers::{MAX_FONT_SIZE, MAX_PERCENT, numbers_within};
 use super::plan::Slot;
 use crate::canvas_svg_filter::{CanvasSvgLimit, svg_color};
 use style::properties::{ComputedValues, LonghandId, LonghandIdSet, PropertyDeclarationId};
@@ -20,8 +21,6 @@ use style_traits::ToCss;
 
 /// Declarations read while finding which properties an element declares.
 const MAX_DECLARATION_VISITS: usize = 64 * 1024;
-/// Blink's largest font size, in pixels.
-const MAX_FONT_SIZE: f32 = 10_000.0;
 
 /// Which computed values an element writes.
 #[derive(Clone, Copy, Debug)]
@@ -219,7 +218,7 @@ impl Element<'_> {
             LonghandId::FontFamily => style.clone_font_family().to_css_string(),
             LonghandId::FontSize => {
                 let size = style.clone_font_size().computed_size().px();
-                format!("{}px", size.clamp(0.0, MAX_FONT_SIZE))
+                format!("{}px", size.clamp(0.0, MAX_FONT_SIZE as f32))
             }
             LonghandId::FontStyle => style.clone_font_style().to_css_string(),
             LonghandId::FontWeight => style.clone_font_weight().value().to_string(),

@@ -20,6 +20,7 @@
 mod elements;
 mod lookup;
 mod markup;
+mod numbers;
 mod plan;
 mod scc;
 mod style;
@@ -64,7 +65,7 @@ impl BaseDocument {
         // Percentages resolve against the viewport (see `bounded_numbers`).
         let huge = |size: [f32; 2]| {
             size.iter()
-                .any(|side| f64::from(*side) > elements::MAX_COORDINATE)
+                .any(|side| f64::from(*side) > numbers::MAX_COORDINATE)
         };
         if viewport.is_some_and(huge) {
             return Err(CanvasSvgLimit);

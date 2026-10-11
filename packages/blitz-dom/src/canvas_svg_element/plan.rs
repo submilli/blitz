@@ -10,10 +10,11 @@
 //! marker for each vertex of the path it marks.
 
 use super::elements::{
-    HIDDEN_CONTAINERS, attribute_reference, bounded_numbers, fragment, href, included, markable,
-    middle_vertices, takes_paint, unmarked_shape,
+    HIDDEN_CONTAINERS, attribute_reference, fragment, href, included, markable, middle_vertices,
+    takes_paint, unmarked_shape,
 };
 use super::lookup::local_urls;
+use super::numbers::bounded_numbers;
 use super::scc::components;
 use super::{MAX_ATTRIBUTE_LEN, MAX_ELEMENT_NODES, MAX_EXPANDED_WEIGHT, WEIGHT_BYTES};
 use crate::canvas_svg_filter::CanvasSvgLimit;
@@ -184,6 +185,9 @@ struct Walked {
     marked_elements: usize,
     /// Their middle vertices, which an inherited middle marker is built for.
     middle_vertices: usize,
+    /// Elements painted with `context-fill` or `context-stroke`, which build
+    /// the marked element's paint server once per marker build.
+    context_painted: usize,
 }
 
 struct Builder<'a> {
@@ -212,6 +216,7 @@ impl Builder<'_> {
             painted_elements: 0,
             marked_elements: 0,
             middle_vertices: 0,
+            context_painted: 0,
         };
         // A resource never paints where it stands; an instanced symbol does.
         // Elements without styles inherit references from their ancestors'
@@ -244,15 +249,17 @@ impl Builder<'_> {
             if let Some(style) = style {
                 bound_dashes(style)?;
             }
-            if !bounded_numbers(tag, element, style.is_none()) {
+            let outermost = id == root && kind == Kind::Root && tag == "svg";
+            if !bounded_numbers(tag, element, style.is_none(), outermost) {
                 return Err(CanvasSvgLimit);
             }
             walked.weight = walked.weight.saturating_add(self.weight(id));
             walked.depth = walked.depth.max(depth);
             walked.self_dependent |=
                 !hidden && super::viewport::self_dependent(tag, element, style);
-            if takes_paint(tag) {
-                walked.painted_elements += 1;
+            walked.painted_elements = walked.painted_elements.saturating_add(self.paints(id, tag));
+            if context_painted(element, style) {
+                walked.context_painted += 1;
             }
             if markable(tag) {
                 walked.marked_elements += 1;
@@ -278,7 +285,7 @@ impl Builder<'_> {
                     element: id,
                     slot,
                     target,
-                    builds: self.builds(tag, element, slot, target),
+                    builds: self.builds(id, tag, element, slot, target),
                     through: instance.filter(|_| slot != Slot::Href),
                     multiplies: self.multiplies(target),
                     depth,
@@ -326,7 +333,7 @@ impl Builder<'_> {
             let Some(target) = inherited[index] else {
                 continue;
             };
-            let builds = self.builds(passing.tag, passing.element, *slot, target);
+            let builds = self.builds(passing.id, passing.tag, passing.element, *slot, target);
             // A `<use>` passes it on to its content, charged later.
             if builds > 0 || passing.instance.is_some() {
                 walked.found.push(Found {
@@ -364,12 +371,10 @@ impl Builder<'_> {
             .sum();
         // The parser shapes and flattens every character of text content;
         // other text is whitespace it skips.
-        let text_content = matches!(
-            node.element_data()
-                .map(|element| element.name.local.as_ref()),
-            Some("text" | "tspan" | "textPath")
-        );
-        let text_weight = if text_content {
+        let shaped = node
+            .element_data()
+            .is_some_and(|element| text_content(element.name.local.as_ref()));
+        let text_weight = if shaped {
             text / 2
         } else {
             text / WEIGHT_BYTES
@@ -381,16 +386,41 @@ impl Builder<'_> {
     /// `<use>`, once per element a pattern paints, once for a start or end
     /// marker and once per middle vertex (bounded by the path's numbers).
     /// Gradients and text paths add none: they are built once where defined.
-    fn builds(&self, tag: &str, element: &ElementData, slot: Slot, target: usize) -> usize {
+    fn builds(
+        &self,
+        id: NodeId,
+        tag: &str,
+        element: &ElementData,
+        slot: Slot,
+        target: usize,
+    ) -> usize {
         if self.sources[target].kind == Kind::Instance {
             return 1;
         }
         match (self.target_tag(target), slot) {
-            ("pattern", _) => usize::from(takes_paint(tag)),
+            // A pattern's template is built once per build of the pattern.
+            ("pattern", Slot::Href) => 1,
+            ("pattern", _) => self.paints(id, tag),
             ("marker", Slot::MarkerMid) => middle_vertices(tag, element),
             ("marker", Slot::MarkerStart | Slot::MarkerEnd) => usize::from(markable(tag)),
             _ => 0,
         }
+    }
+
+    /// How many times the parser paints `tag` with a paint server: once per
+    /// shape, and for text up to three times per character of its own text
+    /// (per chunk, span and outline the parser fills).
+    fn paints(&self, id: NodeId, tag: &str) -> usize {
+        if text_content(tag) {
+            let characters: usize = self.doc.nodes[id]
+                .children
+                .iter()
+                .filter_map(|child| self.doc.nodes[*child].text_data())
+                .map(|text| text.content.utf16_len_bound())
+                .sum();
+            return characters.saturating_add(1).saturating_mul(3);
+        }
+        usize::from(takes_paint(tag))
     }
 
     /// Whether `target` is a pattern or marker, built per element or vertex.
@@ -513,6 +543,7 @@ impl Builder<'_> {
         let (_, order) = components(&kept_edges);
         let order: Vec<usize> = order.into_iter().flatten().collect();
         self.inherit_through_uses(&order, &kept);
+        self.charge_context_paints(&kept);
         let builds = self.builds_of_sources(&order, &kept);
         let weight = builds
             .iter()
@@ -613,6 +644,35 @@ impl Builder<'_> {
         }
     }
 
+    /// Charge a marked element's pattern for the marker content that paints
+    /// with it (`context-fill`, `context-stroke`): once per marker build and
+    /// context-painted element.
+    fn charge_context_paints(&mut self, kept: &impl Fn(&Found) -> bool) {
+        let context: Vec<usize> = self
+            .walked
+            .iter()
+            .map(|walked| walked.context_painted)
+            .collect();
+        for walked in &mut self.walked {
+            let mut extra: HashMap<NodeId, usize> = HashMap::new();
+            for found in walked
+                .found
+                .iter()
+                .filter(|found| kept(found) && found.slot.is_marker())
+            {
+                let builds = found.builds.saturating_mul(context[found.target]);
+                let total = extra.entry(found.element).or_default();
+                *total = total.saturating_add(builds);
+            }
+            for found in &mut walked.found {
+                let paint = matches!(found.slot, Slot::Fill | Slot::Stroke) && found.multiplies;
+                if let Some(extra) = extra.get(&found.element).filter(|_| paint) {
+                    found.builds = found.builds.saturating_add(*extra);
+                }
+            }
+        }
+    }
+
     /// How many times the parser builds each source: the root once, every
     /// other source reached once where it is defined, plus its builds through
     /// each kept reference. Sources come before their targets in reverse
@@ -672,6 +732,32 @@ impl Builder<'_> {
         }
         dependent
     }
+}
+
+/// Whether an element paints with its context element's fill or stroke.
+fn context_painted(element: &ElementData, style: Option<&ComputedValues>) -> bool {
+    match style {
+        Some(style) => {
+            let svg = style.get_inherited_svg();
+            [&svg.fill.kind, &svg.stroke.kind].iter().any(|kind| {
+                matches!(
+                    kind,
+                    SVGPaintKind::ContextFill | SVGPaintKind::ContextStroke
+                )
+            })
+        }
+        None => ["fill", "stroke"].iter().any(|name| {
+            element
+                .attr(markup5ever::LocalName::from(*name))
+                .is_some_and(|value| value.trim_start().starts_with("context-"))
+        }),
+    }
+}
+
+/// Elements whose text the parser shapes: `<a>` within text included (and
+/// over-counted elsewhere only by its whitespace).
+fn text_content(tag: &str) -> bool {
+    matches!(tag, "text" | "tspan" | "textPath" | "a")
 }
 
 /// Bound a computed `stroke-dasharray`: every element walked compares and

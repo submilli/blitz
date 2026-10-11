@@ -157,3 +157,15 @@ fn outermost_svg_targets_use_their_own_box() {
     doc.flush_style_and_layout(0.0);
     assert_eq!(doc.svg_viewport(svg).unwrap(), Some([300.0, 150.0]));
 }
+
+/// An outermost `<svg>` referenced itself sizes against its own box, so its
+/// percentage sizes may pass 100%.
+#[test]
+fn outermost_svg_targets_may_size_past_their_box() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    m.set_attribute(svg, qual_name!("width"), "150%");
+    add(&mut m, svg, "rect", &[("width", "1"), ("height", "1")]);
+    drop(m);
+    assert!(capture(&mut doc, svg).is_some());
+}

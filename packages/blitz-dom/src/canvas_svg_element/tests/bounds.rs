@@ -539,3 +539,104 @@ fn indented_sprites_fit() {
     doc.flush_style_and_layout(0.0);
     assert!(doc.capture_svg_element(group).unwrap().is_some());
 }
+
+/// The parser fills text per chunk, span and outline: a pattern on text is
+/// built up to three times per character, through spans too.
+#[test]
+fn patterns_on_text_are_counted_per_character() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "p")]);
+    for _ in 0..200 {
+        add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let positioned = add(&mut m, svg, "text", &[("fill", "url(#p)")]);
+    let characters = m.create_text_node("x".repeat(500));
+    m.append_children(positioned, &[characters]);
+    let spans = add(&mut m, svg, "text", &[("fill", "url(#p)")]);
+    for _ in 0..100 {
+        let span = add(&mut m, spans, "tspan", &[]);
+        let character = m.create_text_node("x");
+        m.append_children(span, &[character]);
+    }
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(positioned).is_err());
+    assert!(doc.capture_svg_element(spans).is_err());
+}
+
+/// Text in a link within text is shaped too, so it weighs per character.
+#[test]
+fn linked_text_weighs_per_character() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let text = add(&mut m, svg, "text", &[]);
+    let link = add(&mut m, text, "a", &[]);
+    let content = m.create_text_node("x".repeat(20_000));
+    m.append_children(link, &[content]);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(text).is_err());
+}
+
+/// A pattern's template content is built once per build of the pattern
+/// using it.
+#[test]
+fn pattern_templates_are_counted_per_build() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let template = add(&mut m, sprites, "pattern", &[("id", "b")]);
+    for _ in 0..400 {
+        add(&mut m, template, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    add(&mut m, sprites, "pattern", &[("id", "a"), ("href", "#b")]);
+    let group = add(&mut m, svg, "g", &[]);
+    for _ in 0..40 {
+        add(
+            &mut m,
+            group,
+            "rect",
+            &[("fill", "url(#a)"), ("width", "1"), ("height", "1")],
+        );
+    }
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(group).is_err());
+}
+
+/// Marker content painted with `context-fill` builds the marked element's
+/// pattern once per marker build.
+#[test]
+fn context_paints_in_markers_are_counted() {
+    let (mut doc, svg) = page("");
+    let mut m = doc.mutate();
+    let html = m.doc.nodes[svg].parent.unwrap();
+    let sprites = add(&mut m, html, "svg", &[("style", "display:none")]);
+    let pattern = add(&mut m, sprites, "pattern", &[("id", "p")]);
+    for _ in 0..200 {
+        add(&mut m, pattern, "rect", &[("width", "1"), ("height", "1")]);
+    }
+    let marker = add(&mut m, sprites, "marker", &[("id", "m")]);
+    for _ in 0..5 {
+        add(
+            &mut m,
+            marker,
+            "rect",
+            &[("fill", "context-fill"), ("width", "1"), ("height", "1")],
+        );
+    }
+    let vertices = format!("M0 0{}", " L1 1".repeat(100));
+    let attrs = [
+        ("d", vertices.as_str()),
+        ("fill", "url(#p)"),
+        ("marker-mid", "url(#m)"),
+    ];
+    let path = add(&mut m, svg, "path", &attrs);
+    drop(m);
+    doc.flush_style_and_layout(0.0);
+    assert!(doc.capture_svg_element(path).is_err());
+}
