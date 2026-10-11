@@ -1,9 +1,10 @@
 //! The painted and placed markups of a [`Plan`].
 
+use super::MAX_ATTRIBUTE_LEN;
 use super::MAX_ELEMENT_MARKUP;
 use super::elements::{attribute_reference, image_href, included, xml_name};
 use super::plan::{Kind, Plan, Slot};
-use super::style::{StyleWriter, Values, from_style};
+use super::style::{StyleWriter, Values, from_style, unmarked_shape};
 use super::viewport::view_box_size;
 use crate::canvas_svg_filter::{CanvasSvgLimit, push_bounded, push_escaped_bounded};
 use crate::node::ElementData;
@@ -52,9 +53,11 @@ pub(super) fn write(
         placed: String::new(),
         transformed: false,
     };
-    // An empty viewport resolves percentages to nothing, as in Blink; the
-    // parser needs a positive size.
-    let [width, height] = viewport.unwrap_or([EMPTY_VIEWPORT; 2]);
+    // An empty side resolves percentages to nothing, as in Blink; the parser
+    // needs a positive size.
+    let [width, height] = viewport
+        .unwrap_or_default()
+        .map(|side| if side > 0.0 { side } else { EMPTY_VIEWPORT });
     writer.push(&format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\">"
     ))?;
@@ -117,7 +120,8 @@ impl Writer<'_> {
             }
             let element = node.element_data().expect("included nodes are elements");
             let styled = node.primary_styles();
-            self.attributes(id, tag, element, styled.is_none())?;
+            let unstyled = styled.is_none();
+            self.attributes(id, tag, element, unstyled)?;
             if let Some(style) = styled {
                 let parent_style =
                     parent.and_then(|parent: NodeId| self.doc.nodes[parent].primary_styles());
@@ -134,8 +138,12 @@ impl Writer<'_> {
                     self.push("\"")?;
                 }
             }
-            // Blink does not clip to nested viewports while painting.
-            if matches!(tag, "svg" | "symbol") {
+            if unstyled && unmarked_shape(tag) {
+                self.push(" marker-start=\"none\" marker-mid=\"none\" marker-end=\"none\"")?;
+            }
+            // Blink does not clip to nested viewports while painting, but
+            // clips markers as their `overflow` says (`SVGShapePainter`).
+            if matches!(tag, "svg" | "symbol") || (tag == "marker" && visible_overflow(element)) {
                 self.push(" overflow=\"visible\"")?;
             }
             self.push(">")?;
@@ -174,7 +182,7 @@ impl Writer<'_> {
             let value = attr.value.as_str_lossy();
             if from_style(local) {
                 if unstyled {
-                    self.unstyled_presentation(id, local, value)?;
+                    self.unstyled_presentation(id, tag, local, value)?;
                 }
                 continue;
             }
@@ -238,10 +246,20 @@ impl Writer<'_> {
     fn unstyled_presentation(
         &mut self,
         id: NodeId,
+        tag: &str,
         local: &str,
         value: &str,
     ) -> Result<(), CanvasSvgLimit> {
-        let reference = Slot::of_attribute(local).zip(attribute_reference(value));
+        let slot = Slot::of_attribute(local);
+        // A value the plan could not read, or markers Blink would not draw,
+        // must not reach the parser, which would resolve them itself.
+        let unread =
+            slot.is_some() && value.contains("url(") && attribute_reference(value).is_none();
+        let marker = local.starts_with("marker") && unmarked_shape(tag);
+        if value.len() > MAX_ATTRIBUTE_LEN || unread || marker {
+            return Ok(());
+        }
+        let reference = slot.zip(attribute_reference(value));
         let written = match reference {
             Some((slot, (_, fallback))) => match self.plan.reference(id, slot) {
                 Some(copy) if matches!(slot, Slot::Fill | Slot::Stroke) => {
@@ -296,6 +314,14 @@ impl Writer<'_> {
     fn push_placed_escaped(&mut self, text: &str) -> Result<(), CanvasSvgLimit> {
         push_escaped_bounded(&mut self.placed, text, MAX_ELEMENT_MARKUP)
     }
+}
+
+/// Whether a `<marker>` element's own `overflow` lets it paint past its
+/// viewport.
+fn visible_overflow(element: &ElementData) -> bool {
+    element
+        .attr(markup5ever::local_name!("overflow"))
+        .is_some_and(|value| matches!(value.trim(), "visible" | "auto"))
 }
 
 /// The ID of copy `index`. Elements keep no IDs of their own, so it is unique.

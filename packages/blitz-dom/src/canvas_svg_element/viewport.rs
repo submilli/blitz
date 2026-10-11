@@ -13,10 +13,15 @@ const MAX_ANCESTORS: usize = 4096;
 
 impl BaseDocument {
     /// The size of the viewport `target` resolves lengths against (Blink's
-    /// `SVGViewportResolver::ResolveViewport`): the nearest `<svg>`
-    /// ancestor's `viewBox` size, or else its viewport, the outermost `<svg>`'s
-    /// being its CSS content box. `None` when empty or outside any `<svg>`.
+    /// `SVGViewportResolver::ResolveViewport`): an outermost `<svg>`'s own
+    /// CSS content box; else the nearest `<svg>` ancestor's `viewBox` size, or
+    /// its viewport, the outermost `<svg>`'s being its content box. A side
+    /// may be zero; `None` outside any `<svg>`.
     pub(super) fn svg_viewport(&self, target: NodeId) -> Result<Option<[f32; 2]>, CanvasSvgLimit> {
+        if self.outermost_svg(target) {
+            let content = self.nodes[target].unrounded_layout().content_box_size();
+            return Ok(finite([content.width, content.height]));
+        }
         // The `<svg>` ancestors up to the first that fixes its viewport.
         let mut chain = Vec::new();
         let mut size = None;
@@ -42,10 +47,7 @@ impl BaseDocument {
                 size = Some(view_box);
                 break;
             }
-            let outermost = current
-                .and_then(|parent| self.nodes[parent].element_data())
-                .is_none_or(|parent| parent.name.ns != markup5ever::ns!(svg));
-            if outermost {
+            if self.outermost_svg(id) {
                 let content = node.unrounded_layout().content_box_size();
                 size = Some([content.width, content.height]);
                 break;
@@ -71,9 +73,27 @@ impl BaseDocument {
             };
             size = [length("width", size[0]), length("height", size[1])];
         }
-        let finite = size.iter().all(|side| side.is_finite() && *side > 0.0);
-        Ok(finite.then_some(size))
+        Ok(finite(size))
     }
+
+    /// Whether `node` is an `<svg>` element whose parent is not SVG content.
+    fn outermost_svg(&self, node: NodeId) -> bool {
+        let node = &self.nodes[node];
+        let svg = node.element_data().is_some_and(|element| {
+            element.name.ns == markup5ever::ns!(svg) && element.name.local.as_ref() == "svg"
+        });
+        svg && node
+            .parent
+            .and_then(|parent| self.nodes[parent].element_data())
+            .is_none_or(|parent| parent.name.ns != markup5ever::ns!(svg))
+    }
+}
+
+/// A size whose sides are finite and not negative.
+fn finite(size: [f32; 2]) -> Option<[f32; 2]> {
+    size.iter()
+        .all(|side| side.is_finite() && *side >= 0.0)
+        .then_some(size)
 }
 
 /// A valid `viewBox`'s size.

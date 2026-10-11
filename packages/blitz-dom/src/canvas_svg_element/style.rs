@@ -66,6 +66,18 @@ pub(super) const WRITTEN: [(&str, LonghandId); 25] = [
     ("stop-opacity", LonghandId::StopOpacity),
 ];
 
+/// The marker properties.
+const MARKERS: [LonghandId; 3] = [
+    LonghandId::MarkerStart,
+    LonghandId::MarkerMid,
+    LonghandId::MarkerEnd,
+];
+
+/// Shapes the parser draws markers on but Blink does not.
+pub(super) fn unmarked_shape(tag: &str) -> bool {
+    matches!(tag, "rect" | "circle" | "ellipse")
+}
+
 /// Whether an attribute is a presentation attribute written from style.
 pub(super) fn from_style(name: &str) -> bool {
     WRITTEN.iter().any(|(property, _)| *property == name)
@@ -104,6 +116,12 @@ impl<'a> StyleWriter<'a> {
         };
         let mut out = Vec::new();
         for (name, id) in WRITTEN {
+            // The parser would draw inherited markers on shapes Blink never
+            // marks.
+            if unmarked_shape(tag) && MARKERS.contains(&id) {
+                out.push((name, "none".to_owned()));
+                continue;
+            }
             if declared
                 .as_ref()
                 .is_some_and(|declared| !declared.contains(id))

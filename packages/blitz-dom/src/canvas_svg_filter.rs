@@ -558,6 +558,10 @@ fn entity(ch: char) -> Option<&'static str> {
         '<' => Some("&lt;"),
         '>' => Some("&gt;"),
         '"' => Some("&quot;"),
+        // Characters XML forbids would make the parser refuse the whole
+        // markup (XML 1.0 `Char`).
+        '\t' | '\n' | '\r' => None,
+        '\u{0}'..='\u{1F}' | '\u{FFFE}' | '\u{FFFF}' => Some("\u{FFFD}"),
         _ => None,
     }
 }

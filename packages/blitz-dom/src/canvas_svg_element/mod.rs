@@ -18,6 +18,7 @@
 //! copy leaves transforms and effects out alike.
 
 mod elements;
+mod lookup;
 mod markup;
 mod plan;
 mod scc;
@@ -30,9 +31,10 @@ use crate::{BaseDocument, NodeId};
 
 /// Elements of one reference: the subtree and its copies.
 const MAX_ELEMENT_NODES: usize = 1024;
-/// What the parser may build once `<use>` instances expand, so that a few
-/// nested `<use>`s cannot multiply into a huge tree: each element counts once,
-/// plus once per [`WEIGHT_BYTES`] of its attribute and text content.
+/// What the parser may build once every copy is built as many times as the
+/// plan counts (per `<use>`, painted element and marked vertex), so that a few
+/// nested references cannot multiply into a huge tree: each element counts
+/// once, plus once per [`WEIGHT_BYTES`] of its attribute and text content.
 const MAX_EXPANDED_WEIGHT: usize = 8 * 1024;
 const WEIGHT_BYTES: usize = 256;
 /// Markup of one reference.
@@ -82,7 +84,9 @@ impl BaseDocument {
         Ok(bounds.map(|bounds| CanvasSvgElement {
             tree,
             bounds,
-            viewport: viewport.filter(|_| plan.viewport_dependent),
+            // Blink maps only a viewport with area (an empty one scales by 1).
+            viewport: viewport
+                .filter(|size| plan.viewport_dependent && size.iter().all(|side| *side > 0.0)),
         }))
     }
 

@@ -109,6 +109,48 @@ pub(super) fn xml_name(name: &str) -> bool {
         && chars.all(|ch| start(ch) || ch.is_alphanumeric() || matches!(ch, '-' | '.'))
 }
 
+/// Whether the parser paints `tag` with a fill or stroke paint server.
+pub(super) fn painted(tag: &str) -> bool {
+    matches!(
+        tag,
+        "rect" | "circle" | "ellipse" | "line" | "path" | "polyline" | "polygon" | "text"
+    )
+}
+
+/// Whether Blink draws markers on `tag`.
+pub(super) fn markable(tag: &str) -> bool {
+    matches!(tag, "line" | "path" | "polyline" | "polygon")
+}
+
+/// How many middle vertices a marker may be drawn at on `element`: at most
+/// half its path's numbers.
+pub(super) fn middle_vertices(tag: &str, element: &crate::node::ElementData) -> usize {
+    let numbers = |name: &str| {
+        element
+            .attr(markup5ever::LocalName::from(name))
+            .map_or(0, count_numbers)
+    };
+    match tag {
+        "path" => numbers("d") / 2,
+        "polyline" | "polygon" => numbers("points") / 2,
+        _ => 0,
+    }
+}
+
+/// The numbers in path or point data: runs of digits and points.
+fn count_numbers(data: &str) -> usize {
+    let mut count = 0;
+    let mut in_number = false;
+    for byte in data.bytes() {
+        let digit = byte.is_ascii_digit() || byte == b'.';
+        if digit && !in_number {
+            count += 1;
+        }
+        in_number = digit;
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::attribute_reference;

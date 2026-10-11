@@ -9,12 +9,16 @@
 //! target again, a pattern is built again for each element it paints, and a
 //! marker for each vertex of the path it marks.
 
-use super::elements::{HIDDEN_CONTAINERS, attribute_reference, fragment, href, included};
+use super::elements::{
+    HIDDEN_CONTAINERS, attribute_reference, fragment, href, included, markable, middle_vertices,
+    painted,
+};
+use super::lookup::local_urls;
 use super::scc::components;
-use super::{MAX_ELEMENT_NODES, MAX_EXPANDED_WEIGHT, WEIGHT_BYTES};
+use super::{MAX_ATTRIBUTE_LEN, MAX_ELEMENT_NODES, MAX_EXPANDED_WEIGHT, WEIGHT_BYTES};
 use crate::canvas_svg_filter::CanvasSvgLimit;
 use crate::{BaseDocument, NodeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use style::properties::ComputedValues;
 use style::values::computed::url::ComputedUrl;
 use style::values::generics::svg::SVGPaintKind;
@@ -25,8 +29,6 @@ const MAX_ID_LOOKUPS: usize = 256;
 /// Elements nested in the subtree and through its references: the parser
 /// recurses once per level.
 const MAX_NESTING: usize = 128;
-/// Stylesheets whose URLs a local `url(#id)` may have resolved against.
-const MAX_STYLESHEET_URLS: usize = 256;
 /// Entries of a computed `stroke-dasharray`, which stylesheets do not limit.
 const MAX_DASHES: usize = 1024;
 
@@ -131,6 +133,12 @@ struct Found {
     target: usize,
     /// How many times the parser builds the target for this reference.
     builds: usize,
+    /// For a paint or marker reference on a `<use>`, the instanced source,
+    /// whose content inherits it: it is built for each of that content's
+    /// painted elements or marked vertices instead.
+    through: Option<usize>,
+    /// Whether the target is built per use (a pattern or marker).
+    multiplies: bool,
     /// The element's depth in its source.
     depth: usize,
     /// A `<use>` that Blink lays out, whose content's lengths count.
@@ -145,12 +153,17 @@ struct Walked {
     /// Its deepest element.
     depth: usize,
     self_dependent: bool,
+    /// What a paint or marker inherited from a `<use>` is built for: its
+    /// painted elements, its markable elements, and their middle vertices.
+    painted: usize,
+    marked: usize,
+    middles: usize,
 }
 
 struct Builder<'a> {
     doc: &'a BaseDocument,
-    /// The URLs a local `url(#id)` resolves against.
-    local: Vec<url::Url>,
+    /// The URLs, without fragments, a local `url(#id)` resolves against.
+    local: HashSet<String>,
     /// Elements by ID in the root's tree, looked up on first use.
     ids: HashMap<String, Option<NodeId>>,
     sources: Vec<Source>,
@@ -170,6 +183,9 @@ impl Builder<'_> {
             weight: 0,
             depth: 0,
             self_dependent: false,
+            painted: 0,
+            marked: 0,
+            middles: 0,
         };
         // A resource never paints where it stands; an instanced symbol does.
         let mut pending = vec![(root, kind == Kind::Resource, 1)];
@@ -204,15 +220,30 @@ impl Builder<'_> {
             walked.depth = walked.depth.max(depth);
             walked.self_dependent |=
                 !hidden && super::viewport::self_dependent(tag, element, style);
+            if painted(tag) {
+                walked.painted += 1;
+            }
+            if markable(tag) {
+                walked.marked += 1;
+                walked.middles = walked.middles.saturating_add(middle_vertices(tag, element));
+            }
+            // A `<use>`'s target comes first: its other references are
+            // inherited by the target's content.
+            let mut instance = None;
             for (slot, id_ref, target_kind) in self.references(tag, element, style) {
                 let Some(target) = self.target(&id_ref, target_kind)? else {
                     continue;
                 };
+                if target_kind == Kind::Instance {
+                    instance = Some(target);
+                }
                 walked.found.push(Found {
                     element: id,
                     slot,
                     target,
                     builds: self.builds(tag, element, slot, target),
+                    through: instance.filter(|_| slot != Slot::Href),
+                    multiplies: self.multiplies(target),
                     depth,
                     visible_instance: !hidden && target_kind == Kind::Instance,
                 });
@@ -248,9 +279,9 @@ impl Builder<'_> {
     }
 
     /// How many times the parser builds `target` for one reference: once per
-    /// `<use>`, once per element a pattern paints, once per vertex a marker
-    /// marks (bounded by the path's text). Gradients and text paths are
-    /// built once wherever they are used.
+    /// `<use>`, once per element a pattern paints, once for a start or end
+    /// marker and once per middle vertex (bounded by the path's numbers).
+    /// Gradients and text paths add none: they are built once where defined.
     fn builds(
         &self,
         tag: &str,
@@ -265,11 +296,20 @@ impl Builder<'_> {
         let target_tag = self.doc.nodes[node]
             .element_data()
             .map_or("", |target| target.name.local.as_ref());
-        match target_tag {
-            "pattern" => 1,
-            "marker" if slot.is_marker() => vertices(tag, element),
+        match (target_tag, slot) {
+            ("pattern", _) => 1,
+            ("marker", Slot::MarkerMid) => middle_vertices(tag, element),
+            ("marker", Slot::MarkerStart | Slot::MarkerEnd) => usize::from(markable(tag)),
             _ => 0,
         }
+    }
+
+    /// Whether `target` is a pattern or marker, built per element or vertex.
+    fn multiplies(&self, target: usize) -> bool {
+        let node = self.sources[target].node;
+        self.doc.nodes[node]
+            .element_data()
+            .is_some_and(|target| matches!(target.name.local.as_ref(), "pattern" | "marker"))
     }
 
     /// The elements `element` names, with how each is used: from computed
@@ -314,8 +354,13 @@ impl Builder<'_> {
                 })
                 .collect(),
         };
+        // Blink draws markers on paths, lines and polylines only; usvg would
+        // draw them on every shape, so other shapes are written without them.
+        let marks = markable(tag) || !painted(tag);
         for (slot, id) in named {
-            if let Some(id) = id {
+            if let Some(id) = id
+                && (marks || !slot.is_marker())
+            {
                 found.push((slot, id, Kind::Resource));
             }
         }
@@ -326,10 +371,8 @@ impl Builder<'_> {
     /// Computed URLs are absolute, so a local `url(#id)` is recognized by
     /// the URL it was resolved against.
     fn local_fragment(&self, url: &url::Url) -> Option<String> {
-        let local = self
-            .local
-            .iter()
-            .any(|local| url[..url::Position::AfterQuery] == local[..url::Position::AfterQuery]);
+        let document = &url[..url::Position::AfterQuery];
+        let local = document.len() <= MAX_ATTRIBUTE_LEN && self.local.contains(document);
         local.then(|| fragment(url.fragment()?)).flatten()
     }
 
@@ -360,7 +403,7 @@ impl Builder<'_> {
 
     /// Drop cyclic references, then bound the expansion and nesting and
     /// resolve the viewport dependence over the graph left.
-    fn finish(self) -> Result<Plan, CanvasSvgLimit> {
+    fn finish(mut self) -> Result<Plan, CanvasSvgLimit> {
         let cyclic = self.cyclic_references();
         let kept = |found: &Found| cyclic.get(&(found.element, found.slot)) == Some(&false);
         let kept_edges: Vec<Vec<usize>> = self
@@ -376,6 +419,7 @@ impl Builder<'_> {
         // reaches.
         let (_, order) = components(&kept_edges);
         let order: Vec<usize> = order.into_iter().flatten().collect();
+        self.inherit_through_uses(&order, &kept);
         let builds = self.builds_of_sources(&order, &kept);
         let weight = builds
             .iter()
@@ -433,6 +477,43 @@ impl Builder<'_> {
         cyclic
     }
 
+    /// Charge paint and marker references on `<use>`s for what the
+    /// instanced content builds from them: each painted element, marked
+    /// element or middle vertex, its nested instances' included. Targets
+    /// come first in `order`.
+    fn inherit_through_uses(&mut self, order: &[usize], kept: &impl Fn(&Found) -> bool) {
+        let count = self.sources.len();
+        let mut painted = vec![0usize; count];
+        let mut marked = vec![0usize; count];
+        let mut middles = vec![0usize; count];
+        for &source in order {
+            let walked = &self.walked[source];
+            let (mut p, mut m, mut v) = (walked.painted, walked.marked, walked.middles);
+            for found in walked.found.iter().filter(|found| kept(found)) {
+                if found.slot == Slot::Href && self.sources[found.target].kind == Kind::Instance {
+                    p = p.saturating_add(painted[found.target]);
+                    m = m.saturating_add(marked[found.target]);
+                    v = v.saturating_add(middles[found.target]);
+                }
+            }
+            (painted[source], marked[source], middles[source]) = (p, m, v);
+        }
+        for walked in &mut self.walked {
+            for found in walked.found.iter_mut().filter(|found| found.multiplies) {
+                let Some(instance) = found.through else {
+                    continue;
+                };
+                let inherited = match found.slot {
+                    Slot::Fill | Slot::Stroke => painted[instance],
+                    Slot::MarkerMid => middles[instance],
+                    Slot::MarkerStart | Slot::MarkerEnd => marked[instance],
+                    Slot::Href => 0,
+                };
+                found.builds = found.builds.max(inherited);
+            }
+        }
+    }
+
     /// How many times the parser builds each source: the root once, every
     /// other source reached once where it is defined, plus its builds through
     /// each kept reference. Sources come before their targets in reverse
@@ -465,7 +546,13 @@ impl Builder<'_> {
                 .found
                 .iter()
                 .filter(|found| kept(found))
-                .map(|found| found.depth.saturating_add(nesting[found.target]))
+                .map(|found| {
+                    let through = found.through.map_or(0, |instance| nesting[instance]);
+                    found
+                        .depth
+                        .saturating_add(through)
+                        .saturating_add(nesting[found.target])
+                })
                 .fold(walked.depth, usize::max);
         }
         nesting.into_iter().max().unwrap_or(0)
@@ -485,82 +572,6 @@ impl Builder<'_> {
             }
         }
         dependent
-    }
-}
-
-impl BaseDocument {
-    /// The first element with ID `id` in `owner`'s tree (its shadow tree, or
-    /// its document), through the document's ID index; a scan settles ties.
-    fn svg_element_by_id(&self, owner: NodeId, id: &str) -> Result<Option<NodeId>, CanvasSvgLimit> {
-        const MAX_CANDIDATES: usize = 16;
-        let Some(candidates) = self.nodes_to_id.get(id) else {
-            return Ok(None);
-        };
-        if candidates.len() > MAX_CANDIDATES {
-            return self.find_svg_reference(owner, id);
-        }
-        let tree = self.tree_scope(owner)?;
-        let mut found = None;
-        for &candidate in candidates {
-            if self.tree_scope(candidate)? == tree {
-                if found.is_some() {
-                    return self.find_svg_reference(owner, id);
-                }
-                found = Some(candidate);
-            }
-        }
-        Ok(found)
-    }
-
-    /// The root of `node`'s tree: its shadow root, else its document.
-    fn tree_scope(&self, node: NodeId) -> Result<NodeId, CanvasSvgLimit> {
-        const MAX_ANCESTORS: usize = 4096;
-        let mut top = node;
-        for _ in 0..MAX_ANCESTORS {
-            let Some(parent) = self.nodes[top].parent else {
-                return Ok(if self.nodes[top].is_shadow_root() {
-                    top
-                } else {
-                    self.node_document(node)
-                });
-            };
-            top = parent;
-        }
-        Err(CanvasSvgLimit)
-    }
-}
-
-/// The URLs a local `url(#id)` may be resolved against: the document's, its
-/// base, the presentation attributes' and the document's stylesheets'.
-fn local_urls(doc: &BaseDocument, root: NodeId) -> Vec<url::Url> {
-    let mut urls = vec![
-        doc.document_url(root),
-        doc.document_base_url(root),
-        doc.nodes[root].svg_presentation_base(),
-    ];
-    let guard = doc.guard.read();
-    let sheets = doc.nodes_to_stylesheet.values().take(MAX_STYLESHEET_URLS);
-    for sheet in sheets {
-        if let Some(contents) = sheet.0.contents.try_read_with(&guard) {
-            urls.push((*contents.url_data.0).clone());
-        }
-    }
-    urls
-}
-
-/// How many vertices a marker may be drawn at on `element`, bounded by the
-/// text of its points.
-fn vertices(tag: &str, element: &crate::node::ElementData) -> usize {
-    let points = |name: &str| {
-        element
-            .attr(markup5ever::LocalName::from(name))
-            .map_or(0, |value| value.len() / 2 + 1)
-    };
-    match tag {
-        "line" => 2,
-        "path" => points("d"),
-        "polyline" | "polygon" => points("points"),
-        _ => 0,
     }
 }
 
