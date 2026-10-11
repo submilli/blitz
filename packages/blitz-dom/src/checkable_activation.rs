@@ -9,9 +9,20 @@ pub struct CheckableActivation {
     checked: bool,
     indeterminate: bool,
     radio: bool,
-    previous: Option<NodeId>,
+    previous: Previous,
     _target_lease: NodeLease,
-    _previous_lease: Option<NodeLease>,
+}
+
+/// The radio of the target's group that was checked before activation.
+enum Previous {
+    None,
+    Node {
+        id: NodeId,
+        _lease: NodeLease,
+    },
+    /// It was checked, but listeners left it in another document than the
+    /// target, so it is in the target's group no longer.
+    Elsewhere,
 }
 
 impl BaseDocument {
@@ -100,9 +111,11 @@ impl BaseDocument {
             checked,
             indeterminate,
             radio,
-            previous,
+            previous: previous.map_or(Previous::None, |id| Previous::Node {
+                id,
+                _lease: self.lease_node(id),
+            }),
             _target_lease: self.lease_node(target),
-            _previous_lease: previous.map(|id| self.lease_node(id)),
         };
         self.mutate().set_checkedness(target, radio || !checked);
         if !radio {
@@ -116,6 +129,38 @@ impl BaseDocument {
 }
 
 impl CheckableActivation {
+    /// The checkable input the click activates.
+    pub fn target(&self) -> NodeId {
+        self.target
+    }
+
+    /// This activation in `doc`, the document a listener moved its target
+    /// into. `map` gives a node's ID in `doc`, or `None` when the node is not
+    /// there; `None` when the target is not.
+    pub fn relocate(
+        self,
+        doc: &BaseDocument,
+        mut map: impl FnMut(NodeId) -> Option<NodeId>,
+    ) -> Option<Self> {
+        let target = map(self.target)?;
+        let previous = match self.previous {
+            Previous::Node { id, .. } => match map(id) {
+                Some(id) => Previous::Node {
+                    id,
+                    _lease: doc.lease_node(id),
+                },
+                None => Previous::Elsewhere,
+            },
+            previous => previous,
+        };
+        Some(Self {
+            target,
+            previous,
+            _target_lease: doc.lease_node(target),
+            ..self
+        })
+    }
+
     /// Roll back a canceled click, or return the target eligible for input/change.
     /// Listener changes remain authoritative on a successful activation.
     pub fn finish(self, doc: &mut BaseDocument, canceled: bool) -> Option<NodeId> {
@@ -129,12 +174,14 @@ impl CheckableActivation {
                 .attr(markup5ever::local_name!("type"))
                 .is_some_and(|t| t.eq_ignore_ascii_case("radio"));
             if current_radio {
-                if let Some(previous) = self.previous {
-                    if previous == self.target || doc.same_radio_group(self.target, previous) {
-                        doc.mutate().set_checkedness(previous, true);
+                match self.previous {
+                    Previous::Node { id: previous, .. } => {
+                        if previous == self.target || doc.same_radio_group(self.target, previous) {
+                            doc.mutate().set_checkedness(previous, true);
+                        }
                     }
-                } else {
-                    doc.mutate().set_checkedness(self.target, false);
+                    Previous::None => doc.mutate().set_checkedness(self.target, false),
+                    Previous::Elsewhere => {}
                 }
             } else {
                 doc.mutate().set_checkedness(self.target, self.checked);

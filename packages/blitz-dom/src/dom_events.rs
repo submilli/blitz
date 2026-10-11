@@ -234,6 +234,16 @@ pub trait DispatchHost {
             .event_listeners
             .remove_entry(target, listener);
     }
+    /// Where a path node lives now that the listeners have returned. A
+    /// click's activation follows its node there.
+    fn placement(&self, node: NodeId) -> crate::Placement {
+        crate::Placement::Here(node)
+    }
+    /// Run a click's activation in the document a listener moved its node
+    /// into: [relocate](crate::ClickActivation::relocate) it there,
+    /// [run](crate::ClickActivation::run) it, and complete what it did as
+    /// [`Self::checkable_activated`] and [`Self::form_activated`] would.
+    fn activate_elsewhere(&mut self, _activation: crate::ClickActivation) {}
 }
 
 impl BaseDocument {
@@ -495,26 +505,29 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     host.set_phase(EventPhase::None, None);
     host.clear_propagation_flags();
     host.dispatch_finished();
-    let canceled = host.canceled();
-    let activated = activation.and_then(|a| a.finish(&mut host.document_mut(), canceled));
-    let action = if !canceled && activated.is_none() {
-        let coordinates = host.activation_coordinates();
-        form_target.and_then(|id| host.document_mut().activate_form_control(id, coordinates))
-    } else {
-        None
-    };
-    let _action_roots: Vec<_> = {
+    let form_target = form_target.map(|id| (id, host.document().lease_node(id)));
+    let activation = crate::ClickActivation::new(
+        activation,
+        form_target,
+        host.canceled(),
+        host.activation_coordinates(),
+    );
+    if activation
+        .node()
+        .is_some_and(|node| host.placement(node) == crate::Placement::Elsewhere)
+    {
+        host.activate_elsewhere(activation);
+        return !host.canceled();
+    }
+    let activation = {
         let doc = host.document();
-        action
-            .into_iter()
-            .flat_map(|a| a.nodes())
-            .map(|id| doc.lease_node(id))
-            .collect()
+        activation.relocate(&doc, |id| host.placement(id).here())
     };
-    if let Some(target) = activated {
+    let activated = activation.run(&mut host.document_mut());
+    if let Some(target) = activated.checkable {
         host.checkable_activated(target);
     }
-    if let Some(action) = action {
+    if let Some(action) = activated.form {
         host.form_activated(action);
     }
     !host.canceled()

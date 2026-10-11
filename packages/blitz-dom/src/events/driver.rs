@@ -41,6 +41,17 @@ pub trait EventHandler {
         doc: &mut dyn Document,
         event_state: &mut EventState,
     );
+
+    /// Where `node` lives now that an event's listeners have returned. The
+    /// event's activation and default action follow its target there.
+    fn placement(&mut self, node: NodeId) -> crate::Placement {
+        crate::Placement::Here(node)
+    }
+
+    /// Finish an event whose listeners moved its target into another
+    /// document: [relocate](super::ListenedEvent::relocate) it there and
+    /// [complete](EventDriver::complete) it with a driver over that document.
+    fn complete_elsewhere(&mut self, _event: super::ListenedEvent) {}
 }
 
 pub struct NoopEventHandler;
@@ -343,10 +354,66 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             }
         }
 
-        if !event_state.is_cancelled() {
-            self.run_default_action(&mut ptr_event);
-        }
+        self.follow_target(super::ListenedEvent {
+            event: ptr_event,
+            activation: None,
+            canceled: event_state.is_cancelled(),
+        });
         self.process_queue();
+    }
+
+    /// Run what follows an event's listeners in this document, where its
+    /// target lives: finish its checkable activation and queue `input` and
+    /// `change`, run its default action unless a listener canceled, then
+    /// process the events those generate.
+    pub fn complete(&mut self, event: super::ListenedEvent) {
+        self.finish(event);
+        self.process_queue();
+    }
+
+    /// Finish `event` where its target lives now: here, perhaps under a new
+    /// ID, or in another document through the handler.
+    fn follow_target(&mut self, event: super::ListenedEvent) {
+        if self.handler.placement(event.target()) == crate::Placement::Elsewhere {
+            self.handler.complete_elsewhere(event);
+            return;
+        }
+        let event = {
+            let doc = self.doc.inner();
+            let handler = &mut self.handler;
+            event.relocate(&doc, |id| handler.placement(id).here())
+        };
+        if let Some(event) = event {
+            self.finish(event);
+        }
+    }
+
+    fn finish(&mut self, event: super::ListenedEvent) {
+        let super::ListenedEvent {
+            mut event,
+            activation,
+            canceled,
+        } = event;
+        if let Some(activation) = activation {
+            let mut doc = self.doc.inner_mut();
+            if let Some(target) = activation.finish(&mut doc, canceled) {
+                let value = doc.checkedness(target).to_string();
+                for data in [
+                    DomEventData::Input(blitz_traits::events::BlitzInputEvent {
+                        value: value.clone(),
+                    }),
+                    DomEventData::Change(blitz_traits::events::BlitzInputEvent { value }),
+                ] {
+                    let mut completion = DomEvent::new(target, data);
+                    completion.checkable_completion = true;
+                    self.queue
+                        .push_back((completion.into(), vec![doc.lease_node(target)]));
+                }
+            }
+        }
+        if !canceled {
+            self.run_default_action(&mut event);
+        }
     }
 
     fn process_queue(&mut self) {
@@ -370,26 +437,11 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 None
             };
             let event_state = self.run_handler_event(&mut event, EventState::default());
-            if let Some(activation) = activation {
-                let mut doc = self.doc.inner_mut();
-                if let Some(target) = activation.finish(&mut doc, event_state.is_cancelled()) {
-                    let value = doc.checkedness(target).to_string();
-                    for data in [
-                        DomEventData::Input(blitz_traits::events::BlitzInputEvent {
-                            value: value.clone(),
-                        }),
-                        DomEventData::Change(blitz_traits::events::BlitzInputEvent { value }),
-                    ] {
-                        let mut completion = DomEvent::new(target, data);
-                        completion.checkable_completion = true;
-                        self.queue
-                            .push_back((completion.into(), vec![doc.lease_node(target)]));
-                    }
-                }
-            }
-            if !event_state.is_cancelled() {
-                self.run_default_action(&mut event);
-            }
+            self.follow_target(super::ListenedEvent {
+                event,
+                activation,
+                canceled: event_state.is_cancelled(),
+            });
         }
     }
 

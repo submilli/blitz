@@ -107,6 +107,8 @@ mod form_reset;
 pub mod form_selection;
 mod parser_forms;
 pub use checkable_activation::CheckableActivation;
+mod placement;
+pub use placement::{Activated, ClickActivation, Placement};
 mod disabled;
 mod focus;
 mod geometry;
@@ -219,7 +221,7 @@ pub use style::stylist::RegisterCustomPropertyResult;
 pub type SelectorList = selectors::SelectorList<style::selector_parser::SelectorImpl>;
 pub use events::{
     EventDriver, EventHandler, FocusTransition, FormAction, GeneratedEvent, ImplicitSubmission,
-    NoopEventHandler,
+    ListenedEvent, NoopEventHandler,
 };
 pub use html::{DummyHtmlParserProvider, HtmlParserProvider};
 pub use util::{Point, decode_font_bytes};
