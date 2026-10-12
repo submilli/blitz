@@ -738,6 +738,28 @@ impl BaseDocument {
         node.insert_damage(style::selector_parser::RestyleDamage::REPAINT);
     }
 
+    /// Drop the bitmap [`set_element_bitmap`](Self::set_element_bitmap)
+    /// published on `node_id`, so its pixels are freed before the next one is
+    /// made; the element paints nothing until then.
+    pub fn clear_element_bitmap(&mut self, node_id: NodeId) {
+        let Some(node) = self.nodes.get_mut(node_id) else {
+            return;
+        };
+        let Some(element) = node.element_data_mut() else {
+            return;
+        };
+        let published = matches!(
+            &element.special_data,
+            crate::node::SpecialElementData::Image(image)
+                if matches!(**image, crate::node::ImageData::Raster(_))
+        );
+        if !published {
+            return;
+        }
+        element.special_data = crate::node::SpecialElementData::None;
+        node.insert_damage(style::selector_parser::RestyleDamage::REPAINT);
+    }
+
     pub fn get_focussed_node_id(&self) -> Option<NodeId> {
         self.focus_node_id
             .or(self.try_root_element().map(|el| el.id))
@@ -2852,6 +2874,36 @@ impl AsRef<BaseDocument> for BaseDocument {
 impl AsMut<BaseDocument> for BaseDocument {
     fn as_mut(&mut self) -> &mut BaseDocument {
         self
+    }
+}
+
+#[cfg(test)]
+mod element_bitmap_tests {
+    use super::*;
+    use crate::node::RasterImageData;
+    use crate::qual_name;
+
+    #[test]
+    fn cleared_element_bitmaps_free_their_pixels_and_repaint() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let canvas = {
+            let mut mutator = doc.mutate();
+            let canvas = mutator.create_element(qual_name!("canvas", html), vec![]);
+            let body = mutator.doc.root_node().id;
+            mutator.append_children(body, &[canvas]);
+            canvas
+        };
+        doc.resolve(0.0);
+        let pixels = Arc::new(vec![0u8; 4]);
+        doc.set_element_bitmap(canvas, RasterImageData::new(1, 1, Arc::clone(&pixels)));
+        assert_eq!(Arc::strong_count(&pixels), 2);
+        doc.resolve(0.0);
+
+        doc.clear_element_bitmap(canvas);
+        assert_eq!(Arc::strong_count(&pixels), 1);
+        let node = doc.get_node(canvas).unwrap();
+        assert!(node.element_data().unwrap().image_data().is_none());
+        assert!(node.damage().is_some_and(|damage| !damage.is_empty()));
     }
 }
 
