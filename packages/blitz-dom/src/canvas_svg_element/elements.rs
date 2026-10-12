@@ -151,7 +151,7 @@ pub(super) fn middle_vertices(tag: &str, element: &ElementData) -> usize {
             .unwrap_or("")
     };
     match tag {
-        "path" => super::numbers::path_curves(data("d")),
+        "path" => crate::svg_expansion::path_curves(data("d")),
         "polyline" | "polygon" => svgtypes::PointsParser::from(data("points")).count(),
         _ => 0,
     }

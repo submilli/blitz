@@ -25,10 +25,12 @@ const USVG_NAMESPACES: [&str; 3] = [
     "http://www.w3.org/XML/1998/namespace",
 ];
 
-/// Parse SVG source as usvg parses it, DTDs allowed.
+/// Parse SVG source as usvg parses it, DTDs allowed, within the nodes usvg
+/// may build from it.
 pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, usvg::Error> {
     let options = roxmltree::ParsingOptions {
         allow_dtd: true,
+        nodes_limit: crate::svg_expansion::MAX_XML_NODES,
         ..Default::default()
     };
     roxmltree::Document::parse_with_options(text, options).map_err(usvg::Error::ParsingFailed)

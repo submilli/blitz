@@ -78,6 +78,9 @@ impl SvgIntrinsicDimensions {
 pub(crate) struct SvgParseCollectors {
     pub(crate) recorder: SubresourceRecorder,
     rasters: NestedRasterDecoder,
+    /// What converting the document and those it nests holds from the budget
+    /// until it is parsed (see [`crate::svg_bounds`]).
+    pub(crate) conversions: crate::svg_bounds::ConversionReservations,
 }
 
 impl SvgParseCollectors {
@@ -89,6 +92,7 @@ impl SvgParseCollectors {
         Self {
             recorder: SubresourceRecorder::new(shown),
             rasters: NestedRasterDecoder::new(budget, purpose),
+            conversions: crate::svg_bounds::ConversionReservations::new(budget),
         }
     }
 
@@ -132,28 +136,38 @@ impl SvgImageData {
     /// once, or twice for a root with an empty size (see
     /// [`crate::svg_root_size`]).
     ///
-    /// Unlike [`usvg::Tree::from_data`], `data` is never inflated: page data
-    /// is parsed through `svg_bounds::parse_svg_image`, which inflates SVGZ within
-    /// its bounds first.
+    /// Unlike [`usvg::Tree::from_data`], `data` is never inflated. Only for
+    /// trusted data: nothing bounds what it expands to. Page data is parsed
+    /// through `svg_bounds::parse_svg_image`, which inflates SVGZ and bounds
+    /// the document's expansion first.
     pub fn from_data(data: &[u8], options: &usvg::Options) -> Result<Self, usvg::Error> {
-        Self::parse(data, options, None)
+        Self::parse(data, options, None).map_err(|failure| match failure {
+            ParseFailure::Usvg(error) => error,
+            // Only collectors refuse documents.
+            ParseFailure::Refused(_) => usvg::Error::ElementsLimitReached,
+        })
     }
 
     /// [`Self::from_data`] with `collectors`, whose recorder the resolver of
-    /// `options` must consult (see [`SvgParseCollectors`]).
+    /// `options` must consult, and which reserve what converting the document
+    /// allocates (see [`SvgParseCollectors`]).
     pub(crate) fn parse_recording(
         data: &[u8],
         options: &usvg::Options,
         collectors: &SvgParseCollectors,
-    ) -> Result<Self, usvg::Error> {
-        Self::parse(data, options, Some(collectors))
+    ) -> Result<Self, crate::svg_bounds::SvgRefusal> {
+        use crate::svg_bounds::SvgRefusal;
+        Self::parse(data, options, Some(collectors)).map_err(|failure| match failure {
+            ParseFailure::Usvg(_) => SvgRefusal::Invalid,
+            ParseFailure::Refused(refusal) => refusal,
+        })
     }
 
     fn parse(
         data: &[u8],
         options: &usvg::Options,
         collectors: Option<&SvgParseCollectors>,
-    ) -> Result<Self, usvg::Error> {
+    ) -> Result<Self, ParseFailure> {
         let text = std::str::from_utf8(data).map_err(|_| usvg::Error::NotAnUtf8Str)?;
         let declared = svg_root_size::parse_xml(text)?;
         let intrinsic_dimensions = SvgIntrinsicDimensions::from_xmltree(&declared);
@@ -166,9 +180,14 @@ impl SvgImageData {
                 svg_root_size::parse_xml(resized)?
             }
         };
-        if let Some(collectors) = collectors {
-            collectors.recorder.scan_document(&doc);
-        }
+        let _levels = match collectors {
+            Some(collectors) => {
+                collectors.recorder.scan_document(&doc);
+                let levels = collectors.conversions.reserve(&doc);
+                Some(levels.map_err(ParseFailure::Refused)?)
+            }
+            None => None,
+        };
         let tree = usvg::Tree::from_xmltree(&doc, options)?;
         let (subresources, nested_rasters) = collectors
             .map(|collectors| collectors.finish(&tree))
@@ -317,6 +336,18 @@ impl SvgImageData {
                 }
             }
         }
+    }
+}
+
+/// Why [`SvgImageData::parse`] made no document.
+enum ParseFailure {
+    Usvg(usvg::Error),
+    Refused(crate::svg_bounds::SvgRefusal),
+}
+
+impl From<usvg::Error> for ParseFailure {
+    fn from(error: usvg::Error) -> Self {
+        Self::Usvg(error)
     }
 }
 

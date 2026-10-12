@@ -53,10 +53,13 @@ pub(crate) fn decode_image_showing(
         }
         Err(SvgRefusal::Budget) => Err(BUDGET_EXHAUSTED.into()),
         Err(SvgRefusal::Invalid) => Err(undecodable(bytes, &image_err, "not an SVG document")),
+        Err(SvgRefusal::Expansion) => Err(SVG_EXPANSION.into()),
     }
 }
 
 const BUDGET_EXHAUSTED: &str = "Decoded image budget exhausted";
+#[cfg(feature = "svg")]
+const SVG_EXPANSION: &str = "SVG document expands past its bounds";
 
 /// The raster image, or why `bytes` are not one. The outer error refuses the
 /// image outright: decoding it would pass the budget.

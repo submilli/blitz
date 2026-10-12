@@ -73,6 +73,19 @@ fn costs_count_resources_outside_the_rendered_tree() {
     assert!(gradient >= 200 * 64, "{gradient}");
 }
 
+/// Each text path keeps its own copy of the shape it follows.
+#[test]
+fn costs_count_the_paths_text_follows() {
+    let points: String = (0..1000).map(|i| format!(" L{i} {}", i % 2)).collect();
+    let text = cost(&format!(
+        "{OPEN}<path id='p' d='M0 0{points}'/><text><textPath href='#p'>a</textPath></text></svg>"
+    ));
+    assert!(
+        text >= 2 * 1000 * 16,
+        "the path and the text's copy: {text}"
+    );
+}
+
 /// A nested raster's decode is charged on its own, once, rather than with the
 /// tree for each paint.
 #[test]

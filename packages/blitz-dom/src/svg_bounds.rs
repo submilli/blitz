@@ -1,14 +1,19 @@
 //! Parsing the SVG documents a page supplies, as images or inline `<svg>`,
 //! within bounds: how far SVGZ may inflate, what nested images may add, what
-//! the XML parser allocates up front, and what a parsed document costs to
-//! keep. What parsing expands a source to (DTD entities, `<use>` copies,
-//! flattened text) is not yet reserved before it is allocated.
+//! the XML parser allocates as it expands the source, what usvg allocates to
+//! build and convert the parsed document, and what that document costs to
+//! keep. Each is reserved from the decoded image budget before it is
+//! allocated (see [`crate::svg_expansion`]).
 use crate::DecodedImageBudget;
 use crate::image_budget::Reservation;
 use crate::node::{SvgImageData, SvgParseCollectors};
+use crate::svg_expansion::{
+    ExpandedSource, MAX_NESTING, conversion, expand_entities, measure_bytes, measure_scan_bytes,
+};
 use crate::svg_nested_rasters::{NestedRasterDecoder, RasterPurpose};
 use crate::svg_subresources::{BodyDigest, NestedImages, SubresourceRecorder};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use usvg::roxmltree;
 
 /// The SVG source an SVGZ image may inflate to, and that the documents one SVG
 /// image nests may total. A few hundred kilobytes of gzip inflate a
@@ -27,6 +32,10 @@ pub(crate) enum SvgRefusal {
     /// The data is not an SVG document usvg accepts. Its error is dropped:
     /// parser errors can quote the document.
     Invalid,
+    /// The document expands past what may be built: its entities amplify it
+    /// past libxml2's bound, or its elements and references nest deeper than
+    /// usvg may recurse or form a cycle.
+    Expansion,
 }
 
 /// Parse an SVG image, charged to `budget`. Page-supplied SVG never reaches the
@@ -84,12 +93,13 @@ fn parse(
     } else {
         source
     };
+    let text = std::str::from_utf8(source).map_err(|_| SvgRefusal::Invalid)?;
+    let expanded = expand_entities(text).ok_or(SvgRefusal::Expansion)?;
     let svg = {
-        let _parsing = reserve_parse(budget, source).ok_or(SvgRefusal::Budget)?;
+        let _parsing = reserve_parse(budget, text, expanded).ok_or(SvgRefusal::Budget)?;
         let collectors = SvgParseCollectors::new(shown, budget, purpose);
-        let options = svg_options(fonts, budget, &collectors.recorder);
-        SvgImageData::parse_recording(source, &options, &collectors)
-            .map_err(|_| SvgRefusal::Invalid)?
+        let options = svg_options(fonts, budget, &collectors);
+        SvgImageData::parse_recording(source, &options, &collectors)?
     };
     if !budget.admit_svg(&svg) {
         return Err(SvgRefusal::Budget);
@@ -100,20 +110,22 @@ fn parse(
 /// usvg options without ambient resource access. usvg's default string resolver
 /// reads paths from the filesystem; nested SVG documents forward only the data
 /// resolver, so its bounds cover every nesting level: the number of nested
-/// images, their source bytes, what parsing one allocates up front, and the
-/// rasters' headers (they decode once the tree is parsed). The resolver
-/// refuses, and notes as omitted, the `<image>` bodies `recorder` does not
-/// admit, and scans each nested document with it.
+/// images, their source bytes, what parsing and converting one allocates, the
+/// levels it nests, and the rasters' headers (they decode once the tree is
+/// parsed). The resolver refuses, and notes as omitted, the `<image>` bodies
+/// the recorder of `collectors` does not admit, and scans each nested
+/// document with it.
 fn svg_options(
     fonts: &crate::SvgFontDb,
     budget: &DecodedImageBudget,
-    recorder: &SubresourceRecorder,
+    collectors: &SvgParseCollectors,
 ) -> usvg::Options<'static> {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     let nested = Arc::new(AtomicUsize::new(0));
     let sources = Arc::new(AtomicU64::new(0));
     let budget = budget.clone();
-    let recorder = recorder.clone();
+    let recorder = collectors.recorder.clone();
+    let conversions = collectors.conversions.clone();
     let decode = usvg::ImageHrefResolver::default_data_resolver();
     usvg::Options {
         fontdb: Arc::clone(fonts),
@@ -136,10 +148,11 @@ fn svg_options(
                     return None;
                 }
                 let kind = {
-                    let _parsing = reserve_parse(&budget, &data)?;
-                    // Before usvg parses a nested document and resolves its
-                    // images, so they are known to be `<image>` elements.
-                    recorder.scan_nested(&data);
+                    // usvg parses text as a document; a raster is not text.
+                    let _held = match std::str::from_utf8(&data) {
+                        Ok(text) => Some(prepare_nested(text, &budget, &recorder, &conversions)?),
+                        Err(_) => None,
+                    };
                     match decode(mime, Arc::clone(&data), options) {
                         Some(kind) => kind,
                         // usvg refuses a root size that is empty before it
@@ -159,6 +172,27 @@ fn svg_options(
         },
         ..Default::default()
     }
+}
+
+/// Bound a nested document as [`parse`] bounds an image: refuse amplifying
+/// entities, reserve what parsing holds (returned, to hold while usvg parses
+/// and converts it), scan its images with `recorder`, and reserve what converting it
+/// allocates until the image is parsed. The levels it nests count while
+/// the returned guard lives. `None` refuses it.
+fn prepare_nested(
+    text: &str,
+    budget: &DecodedImageBudget,
+    recorder: &SubresourceRecorder,
+    conversions: &ConversionReservations,
+) -> Option<(Reservation, Levels)> {
+    let expanded = expand_entities(text)?;
+    let parsing = reserve_parse(budget, text, expanded)?;
+    let doc = crate::svg_root_size::parse_xml(text).ok()?;
+    // Before usvg parses the document and resolves its images, so they are
+    // known to be `<image>` elements.
+    recorder.scan_nested(&doc);
+    let levels = conversions.reserve(&doc).ok()?;
+    Some((parsing, levels))
 }
 
 /// Whether `data` starts with the gzip magic bytes, as usvg detects SVGZ.
@@ -186,20 +220,102 @@ fn inflate_svgz_once(data: &[u8]) -> Option<Vec<u8>> {
 const PARSE_BYTES_PER_NODE: usize = 192;
 const PARSE_BYTES_PER_ATTRIBUTE: usize = 128;
 
-/// Reserve from `budget` what parsing `source` allocates before any limit of
-/// the parser applies; held while it parses. `None` when it does not fit.
-fn reserve_parse(budget: &DecodedImageBudget, source: &[u8]) -> Option<Reservation> {
-    let count = |byte: u8| source.iter().filter(|&&b| b == byte).count();
-    let nodes = count(b'<').saturating_mul(PARSE_BYTES_PER_NODE);
-    let attributes = count(b'=').saturating_mul(PARSE_BYTES_PER_ATTRIBUTE);
-    budget.reserve(nodes.saturating_add(attributes))
+/// Reserve from `budget` what parsing `text` allocates: up front for its
+/// markup, and as it expands its entities, for the nodes, attributes and
+/// text they add (see [`crate::svg_expansion`]). Held while it parses.
+/// `None` when it does not fit.
+fn reserve_parse(
+    budget: &DecodedImageBudget,
+    text: &str,
+    expanded: ExpandedSource,
+) -> Option<Reservation> {
+    let nodes = expanded.tags.saturating_mul(PARSE_BYTES_PER_NODE);
+    let attributes = expanded
+        .attributes
+        .saturating_mul(PARSE_BYTES_PER_ATTRIBUTE);
+    let added_text = expanded.bytes.saturating_sub(text.len());
+    budget.reserve(nodes.saturating_add(attributes).saturating_add(added_text))
+}
+
+/// What the conversions of one SVG image and the documents it nests hold
+/// from the budget until the image is parsed: usvg converts each nested
+/// document while it converts the image, and keeps it in the image's tree.
+#[derive(Clone)]
+pub(crate) struct ConversionReservations(Arc<Mutex<Held>>);
+
+/// The levels of a document being converted, until dropped.
+pub(crate) struct Levels {
+    reservations: ConversionReservations,
+    levels: usize,
+}
+
+impl Drop for Levels {
+    fn drop(&mut self) {
+        let mut held = self.reservations.lock();
+        held.levels = held.levels.saturating_sub(self.levels);
+    }
+}
+
+struct Held {
+    budget: DecodedImageBudget,
+    reservations: Vec<Reservation>,
+    /// The levels of the documents being converted: usvg converts a nested
+    /// document in the middle of its `<image>`'s, recursing further.
+    levels: usize,
+}
+
+impl ConversionReservations {
+    pub(crate) fn new(budget: &DecodedImageBudget) -> Self {
+        Self(Arc::new(Mutex::new(Held {
+            budget: budget.clone(),
+            reservations: Vec::new(),
+            levels: 0,
+        })))
+    }
+
+    /// Reserve what usvg allocates to convert `doc`, held until the image is
+    /// parsed, or refuse it. Measuring it holds its own reservation meanwhile.
+    /// Its levels count while the returned guard lives: until usvg has
+    /// converted it, within the document nesting it.
+    pub(crate) fn reserve(&self, doc: &roxmltree::Document) -> Result<Levels, SvgRefusal> {
+        let budget = self.lock().budget.clone();
+        let scanning = budget
+            .reserve(measure_scan_bytes(doc))
+            .ok_or(SvgRefusal::Budget)?;
+        let measuring = budget
+            .reserve(measure_bytes(doc))
+            .ok_or(SvgRefusal::Budget)?;
+        // The measure scans the stylesheets again for usvg's share.
+        let conversion = conversion(doc).ok_or(SvgRefusal::Expansion)?;
+        drop((scanning, measuring));
+        let mut held = self.lock();
+        let levels = held.levels.saturating_add(conversion.levels);
+        if levels > MAX_NESTING {
+            return Err(SvgRefusal::Expansion);
+        }
+        let reservation = held
+            .budget
+            .reserve(conversion.bytes)
+            .ok_or(SvgRefusal::Budget)?;
+        held.levels = levels;
+        held.reservations.push(reservation);
+        Ok(Levels {
+            reservations: self.clone(),
+            levels: conversion.levels,
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Held> {
+        // Only plain data is behind the lock; a panic leaves it usable.
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 /// What retaining a parsed SVG document costs, estimated from its nodes
 /// (including clip paths, masks, patterns, filters and gradient stops), path
-/// points, flattened text and nested documents. A nested raster costs its
-/// encoded body here; its decode is charged on its own (see
-/// [`crate::svg_nested_rasters`]).
+/// points, flattened text, the paths text follows and nested documents. A
+/// nested raster costs its encoded body here; its decode is charged on its
+/// own (see [`crate::svg_nested_rasters`]).
 pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
     use crate::svg_walk::{Visit, walk};
     const BYTES_PER_NODE: usize = 1024;
@@ -231,7 +347,16 @@ pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
                     | usvg::ImageKind::WEBP(data) => add(data.len()),
                     usvg::ImageKind::SVG(_) => {}
                 },
-                usvg::Node::Group(_) | usvg::Node::Text(_) => {}
+                // A text path keeps the shape it follows; its flattened
+                // glyphs are walked as nodes.
+                usvg::Node::Text(text) => {
+                    for chunk in text.chunks() {
+                        if let usvg::TextFlow::Path(path) = chunk.text_flow() {
+                            add(path.path().points().len().saturating_mul(BYTES_PER_POINT));
+                        }
+                    }
+                }
+                usvg::Node::Group(_) => {}
             }
         }
     });

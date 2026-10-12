@@ -139,11 +139,15 @@ mod resource_roots;
 #[cfg(feature = "svg")]
 mod svg_bounds;
 #[cfg(feature = "svg")]
+mod svg_expansion;
+#[cfg(feature = "svg")]
 mod svg_image_loads;
 #[cfg(feature = "svg")]
 mod svg_nested_rasters;
 #[cfg(feature = "svg")]
 mod svg_walk;
+#[cfg(test)]
+mod test_allocator;
 #[cfg(feature = "svg")]
 pub use svg_nested_rasters::SvgNestedRasters;
 #[cfg(feature = "svg")]

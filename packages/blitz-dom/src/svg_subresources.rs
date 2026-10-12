@@ -26,8 +26,7 @@ use usvg::roxmltree;
 /// appear at once.
 const MAX_IMAGE_HREFS: usize = 1024;
 
-const SVG_NS: &str = "http://www.w3.org/2000/svg";
-const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+use crate::svg_expansion::{SVG_NS, XLINK_NS};
 
 /// Identifies an image by its body (see the [module documentation](self)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -130,20 +129,10 @@ impl SubresourceRecorder {
         scan(doc, &mut recorded);
     }
 
-    /// Note the `<image>` elements of a nested document, parsing `source`
-    /// apart from usvg, which keeps no element names. Data that is not an
-    /// SVG document has none.
-    pub(crate) fn scan_nested(&self, source: &[u8]) {
-        let Ok(text) = std::str::from_utf8(source) else {
-            return;
-        };
-        let options = roxmltree::ParsingOptions {
-            allow_dtd: true,
-            ..Default::default()
-        };
-        if let Ok(doc) = roxmltree::Document::parse_with_options(text, options) {
-            scan(&doc, &mut self.lock());
-        }
+    /// Note the `<image>` elements of a nested document, parsed apart from
+    /// usvg, which keeps no element names.
+    pub(crate) fn scan_nested(&self, doc: &roxmltree::Document) {
+        scan(doc, &mut self.lock());
     }
 
     /// What the SVG image loads.

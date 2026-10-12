@@ -23,6 +23,7 @@ use super::scc::components;
 use super::{MAX_ATTRIBUTE_LEN, MAX_ELEMENT_NODES, MAX_EXPANDED_WEIGHT, WEIGHT_BYTES};
 use crate::canvas_svg_filter::CanvasSvgLimit;
 use crate::node::ElementData;
+use crate::svg_expansion::MAX_NESTING;
 use crate::{BaseDocument, NodeId};
 use std::collections::{HashMap, HashSet};
 use style::properties::ComputedValues;
@@ -32,9 +33,6 @@ use style::values::generics::url::UrlOrNone;
 
 /// Distinct IDs one reference may look up.
 const MAX_ID_LOOKUPS: usize = 256;
-/// Elements nested in the subtree and through its references: the parser
-/// recurses once per level.
-const MAX_NESTING: usize = 128;
 /// Entries of a computed `stroke-dasharray`, which stylesheets do not limit.
 const MAX_DASHES: usize = 1024;
 

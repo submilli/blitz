@@ -925,6 +925,7 @@ dependencies = [
  "regress-bounded",
  "ryu-js",
  "selectors",
+ "simplecss",
  "skrifa",
  "slotmap",
  "smallvec",
