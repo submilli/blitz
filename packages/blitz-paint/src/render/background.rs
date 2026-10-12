@@ -28,6 +28,9 @@ use style::{
 #[cfg(feature = "tracing")]
 use tracing::warn;
 
+#[cfg(feature = "svg")]
+mod svg;
+
 /// A box from the CSS box model. Abstracts over the (structurally identical)
 /// computed value types of the `background-clip`/`background-origin` and
 /// `mask-clip`/`mask-origin` properties.
@@ -335,80 +338,6 @@ impl ElementCx<'_, '_> {
             current = node.parent;
         }
         false
-    }
-
-    #[cfg(feature = "svg")]
-    fn draw_svg_image_layer(&self, scene: &mut impl PaintScene, layer: &ImageLayerStyles) {
-        use kurbo::Affine;
-
-        let Some(bg_image) = layer.image_data else {
-            return;
-        };
-        let ImageData::Svg(svg) = &bg_image.image else {
-            return;
-        };
-
-        // A zero-sized `viewBox` disables rendering of the SVG
-        if svg.intrinsic_dimensions.degenerate_view_box {
-            return;
-        }
-
-        let (origin_rect, base_transform) = if self.layer_is_fixed(layer) {
-            self.fixed_positioning_area()
-        } else {
-            (self.box_rect(layer.origin), self.transform)
-        };
-
-        let frame_w = (origin_rect.width() / self.scale) as f32;
-        let frame_h = (origin_rect.height() / self.scale) as f32;
-
-        let svg_size = svg.tree.size();
-
-        // Size the SVG per the CSS default sizing algorithm
-        // (https://drafts.csswg.org/css-images/#default-sizing). An SVG image
-        // may lack an intrinsic width, height, and/or aspect ratio, so each is
-        // passed separately (usvg's resolved `Tree::size` is only used as the
-        // source coordinate space of the rendered tree).
-        let intrinsic_width = svg.intrinsic_width().filter(|w| w.is_finite() && *w > 0.0);
-        let intrinsic_height = svg.intrinsic_height().filter(|h| h.is_finite() && *h > 0.0);
-        let aspect_ratio = match (intrinsic_width, intrinsic_height) {
-            (Some(w), Some(h)) => Some(w / h),
-            _ => svg.viewbox_aspect_ratio(),
-        }
-        .filter(|r| r.is_finite() && *r > 0.0);
-
-        let bg_size = compute_layer_size(
-            layer,
-            frame_w,
-            frame_h,
-            BackgroundSizeComputeMode::Intrinsic {
-                width: intrinsic_width,
-                height: intrinsic_height,
-                ratio: aspect_ratio,
-            },
-        );
-
-        if bg_size.width <= 0.0 || bg_size.height <= 0.0 {
-            return;
-        }
-
-        let x_ratio = (bg_size.width / svg_size.width() as f64) * self.scale;
-        let y_ratio = (bg_size.height / svg_size.height() as f64) * self.scale;
-
-        let bg_pos = compute_layer_position(
-            layer,
-            frame_w - bg_size.width as f32,
-            frame_h - bg_size.height as f32,
-        );
-
-        let transform = base_transform
-            * kurbo::Affine::translate((
-                origin_rect.x0 + bg_pos.x * self.scale,
-                origin_rect.y0 + bg_pos.y * self.scale,
-            ))
-            * Affine::scale_non_uniform(x_ratio, y_ratio);
-
-        anyrender_svg::render_svg_tree(scene, &svg.tree, transform);
     }
 
     fn draw_raster_image_layer(&self, scene: &mut impl PaintScene, layer: &ImageLayerStyles) {

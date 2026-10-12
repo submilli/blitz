@@ -1,4 +1,5 @@
 //! Image-button resource identity and CSSOM dimensions.
+use crate::image_state::natural_size;
 use crate::node::{ImageData, SpecialElementData};
 use crate::{BaseDocument, DocumentMutator, ElementData, NodeId};
 use markup5ever::{QualName, local_name, ns};
@@ -111,13 +112,8 @@ impl BaseDocument {
             return (0, 0);
         };
         let intrinsic = match element.form_state.image_input_image.as_deref() {
-            Some(ImageData::Raster(image)) => Some((image.width, image.height)),
-            #[cfg(feature = "svg")]
-            Some(ImageData::Svg(image)) => Some((
-                image.tree.size().width() as u32,
-                image.tree.size().height() as u32,
-            )),
-            _ => None,
+            None | Some(ImageData::None) => None,
+            Some(image) => Some(natural_size(image)),
         };
         if intrinsic.is_some() && self.image_input_has_box(id) {
             let layout = node.unrounded_layout();

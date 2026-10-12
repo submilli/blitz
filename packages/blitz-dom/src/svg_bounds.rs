@@ -116,7 +116,18 @@ fn svg_options(
                     // Before usvg parses a nested document and resolves its
                     // images, so they are known to be `<image>` elements.
                     recorder.scan_nested(&data);
-                    decode(mime, data, options)?
+                    match decode(mime, Arc::clone(&data), options) {
+                        Some(kind) => kind,
+                        // usvg refuses a root size that is empty before it
+                        // resolves anything nested, so a retry counts nothing
+                        // twice. A prefixed root size usvg accepted stays
+                        // (SUB-1606).
+                        None => {
+                            let resized =
+                                crate::svg_root_size::nested_chrome_root_size(mime, &data)?;
+                            decode(mime, resized, options)?
+                        }
+                    }
                 };
                 let encoded = match &kind {
                     usvg::ImageKind::JPEG(data)

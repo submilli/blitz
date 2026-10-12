@@ -258,3 +258,30 @@ fn unchanged_image_type_or_reattachment_preserves_queued_source_failure() {
         );
     }
 }
+
+/// Without a box, an SVG image button reports the image's natural size as
+/// `<img>` does: missing dimensions from the default object size, and a root
+/// size that is not positive as zero (Chrome).
+#[test]
+fn detached_svg_dimensions_are_natural_sizes() {
+    let cases: [(&[u8], (u32, u32)); 5] = [
+        (br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="5"><rect width="4" height="5"/></svg>"#, (0, 5)),
+        (br#"<svg xmlns="http://www.w3.org/2000/svg" width="5" height="0"><rect width="4" height="5"/></svg>"#, (5, 0)),
+        (br#"<svg xmlns="http://www.w3.org/2000/svg" width="10"><rect width="4" height="5"/></svg>"#, (10, 150)),
+        (br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 2"/>"#, (300, 150)),
+        (br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="5"/></svg>"#, (300, 150)),
+    ];
+    for (svg, natural) in cases {
+        let (mut doc, net) = document("<input id=i type=image src=a.svg>");
+        let id = q(&doc, "#i");
+        doc.mutate().remove_node(id);
+        net.complete_with("a.svg", svg);
+        doc.handle_messages();
+        assert_eq!(
+            doc.image_input_dimensions(id),
+            natural,
+            "{}",
+            String::from_utf8_lossy(svg)
+        );
+    }
+}

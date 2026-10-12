@@ -180,3 +180,29 @@ fn nested_images_share_one_bound() {
         MAX_NESTED_SVG_IMAGES
     );
 }
+
+/// usvg parses nested documents itself, and refuses one whose root size is
+/// not positive. Chrome draws it in its `<image>` box, so it is resized first.
+#[test]
+fn nested_documents_of_no_size_are_drawn() {
+    let nested = b"<svg xmlns='http://www.w3.org/2000/svg' width='0' height='5'><rect width='4' height='5'/></svg>";
+    for (mime, data) in [
+        ("image/svg+xml", nested.to_vec()),
+        ("text/plain", nested.to_vec()),
+        ("image/svg+xml", gzip(nested)),
+    ] {
+        let svg = parse(format!("{OPEN}{}</svg>", nesting(mime, &data)).as_bytes()).unwrap();
+        assert_eq!(images(&svg), 1, "{mime}");
+    }
+}
+
+/// usvg draws a nested document with a zero `viewBox` as if it had none, and
+/// fits a nested document's own size into its `<image>` box; Chrome draws
+/// nothing for the first and lays the second out in the box (SUB-1606).
+#[test]
+fn nested_documents_with_a_zero_view_box_are_drawn() {
+    let nested = b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4' viewBox='0 0 0 4'><rect width='4' height='4'/></svg>";
+    let svg =
+        parse(format!("{OPEN}{}</svg>", nesting("image/svg+xml", nested)).as_bytes()).unwrap();
+    assert_eq!(images(&svg), 1);
+}

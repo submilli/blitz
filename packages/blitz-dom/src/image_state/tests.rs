@@ -398,3 +398,37 @@ fn a_changed_referrer_policy_is_a_relevant_mutation() {
         .clear_attribute(img, qual_name!("referrerpolicy"));
     assert_eq!(doc.image_status(img).unwrap().revision, revision + 2);
 }
+
+/// An SVG whose root size is not positive loads, with that natural dimension
+/// zero; a zero `viewBox` keeps the size (`fixtures/local/image-state`
+/// `zeroSizes`).
+#[test]
+fn svg_images_without_area_load() {
+    let provider = Arc::new(Provider::default());
+    let mut doc = document(provider.clone());
+    let cases = [
+        ("width='0' height='5'", "0,5"),
+        ("width='5' height='0'", "5,0"),
+        ("width='0' height='0'", "0,0"),
+        ("width='0'", "0,150"),
+        ("width='0' viewBox='0 0 4 2'", "0,0"),
+        ("width='-5' height='5'", "0,5"),
+        ("width='0%' height='5'", "300,5"),
+        ("viewBox='0 0 0 10'", "300,150"),
+        ("width='10' height='8' viewBox='0 0 0 10'", "10,8"),
+    ];
+    for (index, (root, natural)) in cases.into_iter().enumerate() {
+        let img = image(&mut doc);
+        let src = format!("/{index}.svg");
+        set_src(&mut doc, img, &src);
+        stable(&mut doc);
+        let svg = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' {root}><rect width='4' height='5'/></svg>"
+        );
+        provider.answer(&mut doc, Some(Bytes::from(svg)));
+        assert_eq!(snap(&doc, img), format!("true,{natural},{src}"), "{root}");
+        let state = doc.image_status(img).unwrap().state;
+        assert_eq!(state, ImageRequestState::CompletelyAvailable, "{root}");
+        assert_eq!(events(&mut doc), [(img, ImageEventKind::Load)], "{root}");
+    }
+}

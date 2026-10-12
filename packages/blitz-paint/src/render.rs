@@ -1065,6 +1065,9 @@ impl ElementCx<'_, '_> {
         let Some(svg) = self.svg else {
             return;
         };
+        if !svg.renders_content() {
+            return;
+        }
         // Without a viewBox, user units are CSS pixels from the viewport's
         // origin, whatever size the box was given (an SVG without declared
         // dimensions lays out at the default 300x150), clipped to the box as

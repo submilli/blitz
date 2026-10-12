@@ -141,6 +141,8 @@ mod svg_bounds;
 #[cfg(feature = "svg")]
 mod svg_image_loads;
 #[cfg(feature = "svg")]
+mod svg_root_size;
+#[cfg(feature = "svg")]
 pub use svg_image_loads::SvgImageLoad;
 #[cfg(feature = "svg")]
 mod svg_subresources;

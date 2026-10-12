@@ -534,7 +534,8 @@ impl DocumentMutator<'_> {
 #[cfg(feature = "svg")]
 const DEFAULT_OBJECT_SIZE: (f32, f32) = (300.0, 150.0);
 
-fn natural_size(image: &ImageData) -> (u32, u32) {
+/// The natural size `<img>` and `<input type=image>` report.
+pub(crate) fn natural_size(image: &ImageData) -> (u32, u32) {
     match image {
         ImageData::Raster(raster) => (raster.width, raster.height),
         #[cfg(feature = "svg")]
