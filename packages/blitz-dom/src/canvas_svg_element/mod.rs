@@ -85,14 +85,14 @@ impl BaseDocument {
             return Ok(None);
         };
         let placed = match &markup.placed {
-            Some(placed) => self.parse_element_markup(placed).map(|svg| svg.tree),
+            Some(placed) => self.parse_placed_markup(placed),
             None => Some(painted.tree.clone()),
         };
         let bounds =
             placed.and_then(|placed| placed.root().abs_stroke_bounding_box().to_non_zero_rect());
         Ok(bounds.map(|bounds| CanvasSvgElement {
             tree: painted.tree,
-            rasters: painted.nested_rasters,
+            nested_rasters: painted.nested_rasters,
             bounds,
             // Blink maps only a viewport with area (an empty one scales by 1).
             viewport: viewport
@@ -105,6 +105,18 @@ impl BaseDocument {
     fn parse_element_markup(&self, markup: &str) -> Option<crate::node::SvgImageData> {
         crate::svg_bounds::parse_svg_image(markup.as_bytes(), &self.svg_fonts, &self.image_budget)
             .ok()
+    }
+
+    /// Parse the placed markup, which is only measured, so its nested rasters
+    /// are not decoded.
+    fn parse_placed_markup(&self, markup: &str) -> Option<std::sync::Arc<usvg::Tree>> {
+        crate::svg_bounds::parse_svg_geometry(
+            markup.as_bytes(),
+            &self.svg_fonts,
+            &self.image_budget,
+        )
+        .ok()
+        .map(|svg| svg.tree)
     }
 }
 

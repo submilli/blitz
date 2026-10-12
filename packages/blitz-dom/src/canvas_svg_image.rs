@@ -38,7 +38,7 @@ pub enum CanvasSvgImageSource {
 pub struct CanvasSvgElement {
     pub tree: Arc<usvg::Tree>,
     /// The decodes of the rasters `tree` nests, which paints draw.
-    pub rasters: crate::SvgNestedRasters,
+    pub nested_rasters: crate::SvgNestedRasters,
     /// The painted bounds, stroke included, in the parent's user space.
     pub bounds: usvg::NonZeroRect,
     /// The viewport Chrome maps onto the primitive subregion, when the

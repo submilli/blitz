@@ -305,6 +305,49 @@ fn nested_rasters_of_svg_images_decode_once_for_every_paint() {
     }
 }
 
+/// CSS background layers of one SVG image draw its nested raster from one
+/// decode too.
+#[test]
+fn nested_rasters_of_svg_backgrounds_decode_once_for_every_paint() {
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><image width='4' height='4' href='data:image/png;base64,{PNG}'/></svg>"
+    );
+    let mut doc = BaseDocument::new(DocumentConfig {
+        base_url: Some("https://page.test/".into()),
+        net_provider: Some(std::sync::Arc::new(SvgProvider(svg))),
+        ..Default::default()
+    });
+    let root = doc.root_node().id;
+    let html_name = |tag: &str| QualName::new(None, ns!(html), tag.into());
+    let html = element(&mut doc, root, html_name("html"), &[]);
+    let body = element(&mut doc, html, html_name("body"), &[]);
+    let style = [("style", "width:8px;height:8px;background:url(a.svg)")];
+    for _ in 0..3 {
+        element(&mut doc, body, html_name("div"), &style);
+    }
+    doc.resolve(0.0);
+    doc.handle_messages();
+    for load in doc.take_svg_image_loads() {
+        doc.complete_svg_image_load(load);
+    }
+    doc.resolve(0.0);
+    let mut drawn = Vec::new();
+    for _ in 0..2 {
+        let mut scene = Scene::new();
+        super::paint_scene(&mut scene, &mut doc, 1.0, 800, 600, 0, 0);
+        drawn.extend(scene.commands.iter().filter_map(|command| match command {
+            RenderCommand::Fill(fill) => match &fill.brush {
+                Paint::Image(image) => Some(image.image.data.id()),
+                _ => None,
+            },
+            _ => None,
+        }));
+    }
+    assert!(drawn.len() >= 6, "{drawn:?}");
+    assert!(drawn.iter().all(|id| *id == drawn[0]), "{drawn:?}");
+}
+
 fn image_kinds(tree: &usvg::Tree) -> Vec<usvg::ImageKind> {
     let mut kinds = Vec::new();
     let mut groups = vec![tree.root()];

@@ -125,3 +125,48 @@ fn rasters_of_other_trees_have_no_decode() {
     let other = usvg::Tree::from_str(&source, &usvg::Options::default()).unwrap();
     assert!(svg.nested_rasters().decoded(&kinds(&other)[0]).is_none());
 }
+
+/// usvg resolves an image before skipping it (here, one without area), so
+/// its decode is released with nothing holding its body.
+#[test]
+fn rasters_usvg_drops_release_their_decodes() {
+    let budget = DecodedImageBudget::default();
+    let png = solid_png(64, 64, [0, 0, 0, 255]);
+    let href: String = png.iter().map(|byte| format!("%{byte:02X}")).collect();
+    let body = format!("<image width='0' height='8' href='data:image/png,{href}'/>");
+    let svg = parse(&body, &budget);
+    assert!(kinds(&svg.tree).is_empty());
+    assert_eq!(svg.nested_rasters().decoded_bytes(), 0);
+    assert_eq!(budget.retained_bytes(), svg.retained_bytes, "nothing held");
+}
+
+/// A document parsed only to measure its geometry keeps its images, by their
+/// headers, without decoding or charging them.
+#[test]
+fn measured_documents_decode_nothing() {
+    let budget = DecodedImageBudget::default();
+    let png = solid_png(64, 64, [0, 0, 0, 255]);
+    let source = format!("{OPEN}{}</svg>", image("image/png", &png));
+    let svg =
+        crate::svg_bounds::parse_svg_geometry(source.as_bytes(), &default_svg_fonts(), &budget)
+            .unwrap();
+    let kinds = kinds(&svg.tree);
+    assert_eq!(kinds.len(), 1, "the image keeps its place");
+    assert!(svg.nested_rasters().decoded(&kinds[0]).is_none());
+    assert_eq!(budget.retained_bytes(), svg.retained_bytes);
+}
+
+/// usvg makes some rasters itself (the colour bitmap glyphs of flattened
+/// text) without its resolver; they decode when the document is finished.
+#[test]
+fn rasters_the_resolver_never_saw_decode_when_finished() {
+    use super::{NestedRasterDecoder, RasterPurpose};
+    let budget = DecodedImageBudget::default();
+    let png = solid_png(8, 8, [0, 0, 0, 255]);
+    let source = format!("{OPEN}{}</svg>", image("image/png", &png));
+    let tree = usvg::Tree::from_str(&source, &usvg::Options::default()).unwrap();
+    let rasters = NestedRasterDecoder::new(&budget, RasterPurpose::Paint).finish(&tree);
+    let kinds = kinds(&tree);
+    assert_eq!(rasters.decoded(&kinds[0]).map(|r| r.width), Some(8));
+    assert_eq!(budget.retained_bytes(), 8 * 8 * 4);
+}

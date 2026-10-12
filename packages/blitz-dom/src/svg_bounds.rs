@@ -5,9 +5,9 @@
 //! flattened text) is not yet reserved before it is allocated.
 use crate::DecodedImageBudget;
 use crate::image_budget::Reservation;
-use crate::node::SvgImageData;
-use crate::svg_nested_rasters::NestedRasterDecoder;
-use crate::svg_subresources::{BodyDigest, NestedImages, SubresourceRecorder};
+use crate::node::{SvgImageData, SvgParseCollectors};
+use crate::svg_nested_rasters::RasterPurpose;
+use crate::svg_subresources::{BodyDigest, NestedImages};
 use std::sync::Arc;
 
 /// The SVG source an SVGZ image may inflate to, and that the documents one SVG
@@ -51,6 +51,32 @@ pub(crate) fn parse_svg_image_showing(
     budget: &DecodedImageBudget,
     shown: NestedImages,
 ) -> Result<SvgImageData, SvgRefusal> {
+    parse(source, fonts, budget, shown, RasterPurpose::Paint)
+}
+
+/// [`parse_svg_image`] for a document whose geometry is measured and never
+/// painted: its nested rasters are admitted by their headers, undecoded.
+pub(crate) fn parse_svg_geometry(
+    source: &[u8],
+    fonts: &crate::SvgFontDb,
+    budget: &DecodedImageBudget,
+) -> Result<SvgImageData, SvgRefusal> {
+    parse(
+        source,
+        fonts,
+        budget,
+        NestedImages::All,
+        RasterPurpose::Measure,
+    )
+}
+
+fn parse(
+    source: &[u8],
+    fonts: &crate::SvgFontDb,
+    budget: &DecodedImageBudget,
+    shown: NestedImages,
+    purpose: RasterPurpose,
+) -> Result<SvgImageData, SvgRefusal> {
     let inflated;
     let source = if is_svgz(source) {
         inflated = inflate_svgz_once(source).ok_or(SvgRefusal::Invalid)?;
@@ -60,10 +86,9 @@ pub(crate) fn parse_svg_image_showing(
     };
     let svg = {
         let _parsing = reserve_parse(budget, source).ok_or(SvgRefusal::Budget)?;
-        let options = |recorder: &SubresourceRecorder, rasters: &NestedRasterDecoder| {
-            svg_options(fonts, budget, recorder, rasters)
-        };
-        SvgImageData::parse_recording(source, shown, budget, options)
+        let collectors = SvgParseCollectors::new(shown, budget, purpose);
+        let options = |collectors: &SvgParseCollectors| svg_options(fonts, budget, collectors);
+        SvgImageData::parse_recording(source, &collectors, options)
             .map_err(|_| SvgRefusal::Invalid)?
     };
     if !budget.admit_svg(&svg) {
@@ -76,21 +101,21 @@ pub(crate) fn parse_svg_image_showing(
 /// reads paths from the filesystem; nested SVG documents forward only the data
 /// resolver, so its bounds cover every nesting level: the number of nested
 /// images, their source bytes, what parsing one allocates up front, and the
-/// rasters, which `rasters` decodes (leaving out those it refuses).
-/// The resolver refuses, and notes as omitted, the `<image>` bodies `recorder`
-/// does not admit, and scans each nested document with it.
+/// rasters, which the collectors' decoder decodes (leaving out those it
+/// refuses). The resolver refuses, and notes as omitted, the `<image>` bodies
+/// the collectors' recorder does not admit, and scans each nested document
+/// with it.
 fn svg_options(
     fonts: &crate::SvgFontDb,
     budget: &DecodedImageBudget,
-    recorder: &SubresourceRecorder,
-    rasters: &NestedRasterDecoder,
+    collectors: &SvgParseCollectors,
 ) -> usvg::Options<'static> {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     let nested = Arc::new(AtomicUsize::new(0));
     let sources = Arc::new(AtomicU64::new(0));
     let budget = budget.clone();
-    let recorder = recorder.clone();
-    let rasters = rasters.clone();
+    let recorder = collectors.recorder.clone();
+    let rasters = collectors.rasters.clone();
     let decode = usvg::ImageHrefResolver::default_data_resolver();
     usvg::Options {
         fontdb: Arc::clone(fonts),
@@ -130,7 +155,7 @@ fn svg_options(
                         }
                     }
                 };
-                rasters.decode(&kind).then_some(kind)
+                rasters.admit(&kind).then_some(kind)
             }),
             resolve_string: Box::new(|_, _| None),
         },
@@ -183,46 +208,78 @@ pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
     const BYTES_PER_STOP: usize = 64;
     let mut bytes = 0usize;
     let mut add = |more: usize| bytes = bytes.saturating_add(more);
+    walk(tree, |visit| match visit {
+        Visit::Tree(tree) => {
+            add(BYTES_PER_NODE);
+            let primitives = tree.filters().iter().flat_map(|filter| filter.primitives());
+            add(primitives.count().saturating_mul(BYTES_PER_NODE));
+            let linear = tree.linear_gradients().iter().map(|g| g.stops().len());
+            let radial = tree.radial_gradients().iter().map(|g| g.stops().len());
+            for stops in linear.chain(radial) {
+                add(BYTES_PER_NODE.saturating_add(stops.saturating_mul(BYTES_PER_STOP)));
+            }
+        }
+        Visit::Node(node) => {
+            add(BYTES_PER_NODE);
+            match node {
+                usvg::Node::Path(path) => {
+                    add(path.data().points().len().saturating_mul(BYTES_PER_POINT));
+                }
+                usvg::Node::Image(image) => match image.kind() {
+                    usvg::ImageKind::JPEG(data)
+                    | usvg::ImageKind::PNG(data)
+                    | usvg::ImageKind::GIF(data)
+                    | usvg::ImageKind::WEBP(data) => add(data.len()),
+                    usvg::ImageKind::SVG(_) => {}
+                },
+                usvg::Node::Group(_) | usvg::Node::Text(_) => {}
+            }
+        }
+    });
+    bytes
+}
+
+/// What [`walk`] visits.
+pub(crate) enum Visit<'a> {
+    /// A document: the parsed one, or one nested as an image.
+    Tree(&'a usvg::Tree),
+    /// A node of a document.
+    Node(&'a usvg::Node),
+}
+
+/// Visit every document `tree` holds and every node it keeps: those it renders,
+/// and those of its clip paths, masks, patterns, `feImage` primitives,
+/// flattened text and nested documents.
+pub(crate) fn walk<'a>(tree: &'a usvg::Tree, mut visit: impl FnMut(Visit<'a>)) {
     let mut trees = vec![tree];
     let mut groups: Vec<&usvg::Group> = Vec::new();
     while let Some(tree) = trees.pop() {
-        add(BYTES_PER_NODE);
+        visit(Visit::Tree(tree));
         groups.push(tree.root());
         groups.extend(tree.clip_paths().iter().map(|clip| clip.root()));
         groups.extend(tree.masks().iter().map(|mask| mask.root()));
         groups.extend(tree.patterns().iter().map(|pattern| pattern.root()));
         for primitive in tree.filters().iter().flat_map(|filter| filter.primitives()) {
-            add(BYTES_PER_NODE);
             if let usvg::filter::Kind::Image(image) = primitive.kind() {
                 groups.push(image.root());
             }
         }
-        let linear = tree.linear_gradients().iter().map(|g| g.stops().len());
-        let radial = tree.radial_gradients().iter().map(|g| g.stops().len());
-        for stops in linear.chain(radial) {
-            add(BYTES_PER_NODE.saturating_add(stops.saturating_mul(BYTES_PER_STOP)));
-        }
         while let Some(group) = groups.pop() {
             for node in group.children() {
-                add(BYTES_PER_NODE);
+                visit(Visit::Node(node));
                 match node {
                     usvg::Node::Group(child) => groups.push(child),
-                    usvg::Node::Path(path) => {
-                        add(path.data().points().len().saturating_mul(BYTES_PER_POINT));
-                    }
                     usvg::Node::Text(text) => groups.push(text.flattened()),
-                    usvg::Node::Image(image) => match image.kind() {
-                        usvg::ImageKind::SVG(nested) => trees.push(nested),
-                        usvg::ImageKind::JPEG(data)
-                        | usvg::ImageKind::PNG(data)
-                        | usvg::ImageKind::GIF(data)
-                        | usvg::ImageKind::WEBP(data) => add(data.len()),
-                    },
+                    usvg::Node::Image(image) => {
+                        if let usvg::ImageKind::SVG(nested) = image.kind() {
+                            trees.push(nested);
+                        }
+                    }
+                    usvg::Node::Path(_) => {}
                 }
             }
         }
     }
-    bytes
 }
 
 #[cfg(test)]
