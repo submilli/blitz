@@ -57,6 +57,113 @@ fn document_write_inserts_at_the_insertion_point() {
     );
 }
 
+/// A script that a write parsed runs with the insertion point before the
+/// rest of that write, so its own writes come first.
+#[test]
+fn a_written_script_writes_before_the_rest_of_its_write() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let mut parser = StreamingParser::new(doc.clone());
+    parser.feed("<body><script>outer</script><p>end</p>");
+    parser.end_of_input();
+    assert!(matches!(parser.run(), ParseStep::Script(_)));
+
+    parser.save_insertion_point();
+    parser.write("<script>inner</script><b>rest</b>");
+    assert!(matches!(parser.run_written(), ParseStep::Script(_)));
+    parser.save_insertion_point();
+    parser.write("<i>inner</i>");
+    assert!(matches!(parser.run_written(), ParseStep::Done));
+    // Only the inner script's write is parsed while it runs.
+    assert_eq!(
+        body_html(&doc),
+        "<script>outer</script><script>inner</script><i>inner</i>"
+    );
+    parser.restore_insertion_point();
+    assert!(matches!(parser.run_written(), ParseStep::Done));
+    parser.restore_insertion_point();
+
+    assert!(matches!(parser.run(), ParseStep::Done));
+    assert_eq!(
+        body_html(&doc),
+        "<script>outer</script><script>inner</script><i>inner</i><b>rest</b><p>end</p>"
+    );
+}
+
+/// A written script the parser waits for (a pending parsing-blocking
+/// script) leaves the rest of its write unparsed. Later writes of the script
+/// that wrote it follow that rest, and its own writes, once it runs, precede
+/// it.
+#[test]
+fn a_pending_written_script_writes_before_the_input_it_blocked() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let mut parser = StreamingParser::new(doc.clone());
+    parser.feed("<body><script>outer</script><p>end</p>");
+    parser.end_of_input();
+    assert!(matches!(parser.run(), ParseStep::Script(_)));
+
+    parser.save_insertion_point();
+    parser.write("<script>pending</script><b>w</b>");
+    assert!(matches!(parser.run_written(), ParseStep::Script(_)));
+    parser.write("<b>x</b>");
+    parser.restore_insertion_point();
+
+    // The pending script loads and runs.
+    parser.save_insertion_point();
+    parser.write("<i>s</i>");
+    assert!(matches!(parser.run_written(), ParseStep::Done));
+    assert!(body_html(&doc).ends_with("<script>pending</script><i>s</i>"));
+    parser.restore_insertion_point();
+
+    assert!(matches!(parser.run(), ParseStep::Done));
+    assert!(parser.is_finished());
+    assert_eq!(
+        body_html(&doc),
+        "<script>outer</script><script>pending</script><i>s</i><b>w</b><b>x</b><p>end</p>"
+    );
+}
+
+/// The input after a saved insertion point, and the network input after
+/// that, wait for the script that saved it, so end of input waits too.
+#[test]
+fn a_saved_insertion_point_holds_back_later_input_and_the_end() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let mut parser = StreamingParser::new(doc.clone());
+    parser.feed("<body><script>s</script><p>net</p>");
+    parser.end_of_input();
+    assert!(matches!(parser.run(), ParseStep::Script(_)));
+    parser.write("<script>w</script><b>held</b>");
+    assert!(matches!(parser.run_written(), ParseStep::Script(_)));
+
+    parser.save_insertion_point();
+    parser.write("<i>in</i>");
+    assert!(matches!(parser.run(), ParseStep::Done));
+    assert!(!parser.is_finished());
+    assert_eq!(
+        body_html(&doc),
+        "<script>s</script><script>w</script><i>in</i>"
+    );
+    parser.restore_insertion_point();
+
+    assert!(matches!(parser.run(), ParseStep::Done));
+    assert!(parser.is_finished());
+    assert_eq!(
+        body_html(&doc),
+        "<script>s</script><script>w</script><i>in</i><b>held</b><p>net</p>"
+    );
+}
+
+/// Without a saved insertion point there is nothing to restore.
+#[test]
+fn restoring_without_a_saved_insertion_point_keeps_the_input() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let mut parser = StreamingParser::new(doc.clone());
+    parser.write("<p>a</p>");
+    parser.restore_insertion_point();
+    parser.end_of_input();
+    assert!(matches!(parser.run(), ParseStep::Done));
+    assert_eq!(body_html(&doc), "<p>a</p>");
+}
+
 #[test]
 fn inner_html_scripts_never_run_and_parser_scripts_are_not_queued() {
     let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));

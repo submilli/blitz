@@ -33,9 +33,12 @@ pub enum ParseStep {
 pub struct StreamingParser {
     tokenizer: Option<Tokenizer<Sink>>,
     input: BufferQueue,
-    /// Characters from `document.write`, parsed before the rest of the input
-    /// (the "insertion point").
+    /// Characters from `document.write` before the insertion point, parsed
+    /// before the rest of the input.
     written: BufferQueue,
+    /// Written characters after each saved insertion point, innermost last.
+    /// They follow `written` again once the script that saved it returns.
+    held: Vec<BufferQueue>,
     end_of_input: bool,
 }
 
@@ -72,6 +75,7 @@ impl StreamingParser {
             )),
             input: BufferQueue::default(),
             written: BufferQueue::default(),
+            held: Vec::new(),
             end_of_input: false,
         }
     }
@@ -106,9 +110,33 @@ impl StreamingParser {
         self.written.push_back(StrTendril::from_slice(text));
     }
 
-    /// Parse only the characters written by `document.write` since the last
-    /// call, stopping early at a script end tag. Used while a script is
-    /// running, so its writes land in the document before it continues.
+    /// A parser script is about to run: move the insertion point to just
+    /// before the next unparsed character, so its writes precede characters
+    /// earlier writes left unparsed (HTML "</script>" in the "text" insertion
+    /// mode, and executing a pending parsing-blocking script). The caller
+    /// bounds script nesting and pairs each call with
+    /// [`StreamingParser::restore_insertion_point`].
+    pub fn save_insertion_point(&mut self) {
+        self.held.push(std::mem::take(&mut self.written));
+    }
+
+    /// The script that saved the insertion point returned: the characters
+    /// after it follow those its writes left unparsed. Does nothing without a
+    /// saved insertion point (or once an exhausted parser dropped its input);
+    /// an unpaired call is a caller bug.
+    pub fn restore_insertion_point(&mut self) {
+        let Some(after) = self.held.pop() else {
+            return;
+        };
+        while let Some(chunk) = after.pop_front() {
+            self.written.push_back(chunk);
+        }
+    }
+
+    /// Parse only the characters written by `document.write` up to the
+    /// insertion point, stopping early at a script end tag. Used while a
+    /// script is running, so its writes land in the document before it
+    /// continues.
     pub fn run_written(&mut self) -> ParseStep {
         let Some(tokenizer) = &self.tokenizer else {
             return ParseStep::Done;
@@ -127,6 +155,7 @@ impl StreamingParser {
             self.tokenizer.take();
             while self.input.pop_front().is_some() {}
             while self.written.pop_front().is_some() {}
+            self.held.clear();
         }
     }
 
@@ -149,13 +178,18 @@ impl StreamingParser {
         }
     }
 
-    /// Parse until the next script end tag, or until input runs out.
+    /// Parse until the next script end tag, or until input runs out. While
+    /// an insertion point is saved, the input after it waits for its script,
+    /// so only written characters before it are parsed.
     pub fn run(&mut self) -> ParseStep {
         if self.is_finished() {
             return ParseStep::Done;
         }
         if let ParseStep::Script(node) = self.run_written() {
             return ParseStep::Script(node);
+        }
+        if !self.held.is_empty() {
+            return ParseStep::Done;
         }
         let Some(tokenizer) = &self.tokenizer else {
             return ParseStep::Done;
@@ -167,6 +201,7 @@ impl StreamingParser {
         if self.end_of_input
             && self.input.is_empty()
             && self.written.is_empty()
+            && self.held.is_empty()
             && let Some(tokenizer) = self.tokenizer.take()
         {
             // EOF can leave formatting/form handles in the tree builder. Release

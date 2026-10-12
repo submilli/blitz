@@ -125,6 +125,23 @@ fn exhausted_streaming_parser_refuses_later_network_and_written_input() {
     assert_eq!(doc.borrow().node_count(), 1);
 }
 
+/// Exhaustion while a script's insertion point is saved drops the held input
+/// too, so restoring it afterwards does nothing.
+#[test]
+fn exhaustion_drops_input_held_after_a_saved_insertion_point() {
+    let doc = Rc::new(RefCell::new(document(8)));
+    let mut parser = StreamingParser::new(doc.clone());
+    parser.write("<script>s</script><p>held</p>");
+    assert!(matches!(parser.run_written(), ParseStep::Script(_)));
+    parser.save_insertion_point();
+    parser.write(&"<div>".repeat(100));
+    assert!(matches!(parser.run_written(), ParseStep::Done));
+    assert!(parser.is_finished());
+    parser.restore_insertion_point();
+    assert!(matches!(parser.run(), ParseStep::Done));
+    assert!(doc.borrow().node_count() <= 8);
+}
+
 #[test]
 fn implied_eof_nodes_and_detached_documents_obey_admission() {
     for limit in 1..8 {
