@@ -114,6 +114,7 @@ fn rasters_past_the_budget_have_no_decode() {
     let budget = DecodedImageBudget::with_limit(512 * 1024);
     let svg = parse(&body, &budget);
     let kinds = kinds(&svg.tree);
+    assert_eq!(kinds.len(), 1, "the image keeps its place");
     assert!(svg.nested_rasters().decoded(&kinds[0]).is_none());
     assert_eq!(budget.retained_bytes(), svg.retained_bytes);
 }
@@ -191,4 +192,26 @@ fn rasters_the_resolver_never_saw_decode_when_finished() {
     let kinds = kinds(&tree);
     assert_eq!(rasters.decoded(&kinds[0]).map(|r| r.width), Some(8));
     assert_eq!(budget.retained_bytes(), 8 * 8 * 4);
+}
+
+/// Under the document's bound, earlier rasters in document order decode
+/// first, whatever groups hold them.
+#[test]
+fn rasters_decode_in_document_order() {
+    let large = |grey: u8| solid_png(4096, 2048, [grey, grey, grey, 255]);
+    let (first, second) = (large(1), large(2));
+    let body = format!(
+        "<g>{}</g><g>{}</g>",
+        image("image/png", &first),
+        image("image/png", &second)
+    );
+    let svg = parse(&body, &DecodedImageBudget::default());
+    let decoded = |png: &[u8]| {
+        kinds(&svg.tree).iter().any(|kind| {
+            matches!(kind, usvg::ImageKind::PNG(data) if data.as_slice() == png)
+                && svg.nested_rasters().decoded(kind).is_some()
+        })
+    };
+    assert!(decoded(&first), "the first image decodes");
+    assert!(!decoded(&second), "the second passes the bound");
 }
