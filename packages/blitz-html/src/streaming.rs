@@ -6,6 +6,10 @@
 //! as a loop: call [`StreamingParser::run`] until it returns
 //! [`ParseStep::Done`], running each [`ParseStep::Script`] in between.
 //!
+//! It also stops before creating an element whose custom element
+//! definition exists, when given a [`DefinitionLookup`], so the embedder can
+//! construct it: see [`ParseStep::CustomElement`].
+//!
 //! The document is shared (`Rc<RefCell<_>>`) and only borrowed per tree
 //! operation, so it is free for scripts while the parser is paused.
 
@@ -13,25 +17,34 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use blitz_dom::{BaseDocument, NodeId};
-use html5ever::TokenizerResult;
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{BufferQueue, Tokenizer, TokenizerOpts};
 use html5ever::tree_builder::{QuirksMode, TreeBuilder, TreeBuilderOpts};
+use html5ever::{LocalName, TokenizerResult};
 
 use crate::bounded_parser::BoundedHtml;
+use crate::custom_element_pause::DefinitionLookup;
 use crate::html_sink::{HtmlSink, SharedDocument};
-
-type Sink = BoundedHtml<SharedDocument>;
 
 pub enum ParseStep {
     /// A parser-inserted `<script>` just ended: run it, then call `run` again.
     Script(NodeId),
+    /// The parser is about to create an HTML element of this name, which has
+    /// a custom element definition. Construct it (HTML "create an element
+    /// for a token" steps 7–8), hand it to
+    /// [`StreamingParser::construct_custom_element`], which appends the
+    /// token's attributes (step 9), run their reactions (step 10), then call
+    /// `run` again.
+    CustomElement(LocalName),
+    /// The parser created and inserted that element: run the reactions of
+    /// its insertion, then call `run` again.
+    CustomElementCreated,
     /// All input has been parsed.
     Done,
 }
 
 pub struct StreamingParser {
-    tokenizer: Option<Tokenizer<Sink>>,
+    tokenizer: Option<Tokenizer<BoundedHtml<SharedDocument>>>,
     input: BufferQueue,
     /// Characters from `document.write` before the insertion point, parsed
     /// before the rest of the input.
@@ -78,6 +91,41 @@ impl StreamingParser {
             held: Vec::new(),
             end_of_input: false,
         }
+    }
+
+    /// Stop before creating elements whose name `lookup` reports defined.
+    pub fn set_definition_lookup(&mut self, lookup: DefinitionLookup) {
+        if let Some(tokenizer) = &mut self.tokenizer {
+            tokenizer.sink.set_definition_lookup(lookup);
+        }
+    }
+
+    /// After [`ParseStep::CustomElement`]: create that element as `element`,
+    /// the custom element the embedder constructed, and append the start
+    /// tag's attributes to it now. Refused (`false`) once the parser has
+    /// processed that tag (a nested run did), or unless `element` is a live
+    /// HTML element of its name; the parser then creates the element itself.
+    pub fn construct_custom_element(&mut self, element: NodeId) -> bool {
+        self.tokenizer
+            .as_ref()
+            .is_some_and(|tokenizer| tokenizer.sink.construct(element))
+    }
+
+    /// The custom element the parser stopped before
+    /// ([`ParseStep::CustomElement`]), until it creates it.
+    pub fn paused_custom_element(&self) -> Option<LocalName> {
+        self.tokenizer
+            .as_ref()
+            .and_then(|tokenizer| tokenizer.sink.paused_custom_element())
+    }
+
+    /// Elements the parser gave an `on*` attribute since the last call, which
+    /// may need their event handlers activated.
+    pub fn take_handler_elements(&mut self) -> Vec<NodeId> {
+        self.tokenizer
+            .as_ref()
+            .map(|tokenizer| tokenizer.sink.sink().take_handler_elements())
+            .unwrap_or_default()
     }
 
     /// Append network input.
@@ -134,14 +182,18 @@ impl StreamingParser {
     }
 
     /// Parse only the characters written by `document.write` up to the
-    /// insertion point, stopping early at a script end tag. Used while a
-    /// script is running, so its writes land in the document before it
-    /// continues.
+    /// insertion point, stopping early at a script end tag or custom element
+    /// creation. Used while a script is running, so its writes land in the
+    /// document before it continues.
     pub fn run_written(&mut self) -> ParseStep {
         let Some(tokenizer) = &self.tokenizer else {
             return ParseStep::Done;
         };
-        let step = Self::feed_until_script(tokenizer, &self.written);
+        if tokenizer.sink.create_paused() {
+            self.stop_if_exhausted();
+            return ParseStep::CustomElementCreated;
+        }
+        let step = Self::feed_until_pause(tokenizer, &self.written);
         self.stop_if_exhausted();
         step
     }
@@ -159,15 +211,24 @@ impl StreamingParser {
         }
     }
 
-    /// Feed `queue` until it is exhausted or a script ends. Encoding hints
-    /// (`<meta charset>`) are ignored: input is already decoded.
-    fn feed_until_script(tokenizer: &Tokenizer<Sink>, queue: &BufferQueue) -> ParseStep {
+    /// Feed `queue` until it is exhausted, a script ends or a custom element
+    /// is about to be created. Encoding hints (`<meta charset>`) are ignored:
+    /// input is already decoded.
+    fn feed_until_pause(
+        tokenizer: &Tokenizer<BoundedHtml<SharedDocument>>,
+        queue: &BufferQueue,
+    ) -> ParseStep {
         loop {
             if tokenizer.sink.exhausted() {
                 return ParseStep::Done;
             }
             match tokenizer.feed(queue) {
                 TokenizerResult::Script(node) => {
+                    // A paused start tag stops the tokenizer as a script
+                    // does; check it first.
+                    if let Some(name) = tokenizer.sink.paused_custom_element() {
+                        return ParseStep::CustomElement(name);
+                    }
                     if let Some(id) = node.node_id().filter(|_| !tokenizer.sink.exhausted()) {
                         return ParseStep::Script(id);
                     }
@@ -178,15 +239,17 @@ impl StreamingParser {
         }
     }
 
-    /// Parse until the next script end tag, or until input runs out. While
-    /// an insertion point is saved, the input after it waits for its script,
-    /// so only written characters before it are parsed.
+    /// Parse until the next script end tag or custom element creation (see
+    /// [`ParseStep`]), or until input runs out. While an insertion point is
+    /// saved, the input after it waits for its script, so only written
+    /// characters before it are parsed.
     pub fn run(&mut self) -> ParseStep {
         if self.is_finished() {
             return ParseStep::Done;
         }
-        if let ParseStep::Script(node) = self.run_written() {
-            return ParseStep::Script(node);
+        let step = self.run_written();
+        if !matches!(step, ParseStep::Done) {
+            return step;
         }
         if !self.held.is_empty() {
             return ParseStep::Done;
@@ -194,8 +257,9 @@ impl StreamingParser {
         let Some(tokenizer) = &self.tokenizer else {
             return ParseStep::Done;
         };
-        if let ParseStep::Script(node) = Self::feed_until_script(tokenizer, &self.input) {
-            return ParseStep::Script(node);
+        let step = Self::feed_until_pause(tokenizer, &self.input);
+        if !matches!(step, ParseStep::Done) {
+            return step;
         }
         self.stop_if_exhausted();
         if self.end_of_input

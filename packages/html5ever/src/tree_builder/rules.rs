@@ -991,6 +991,10 @@ where
                         self.parse_raw_data(tag, Rawtext)
                     } else {
                         self.reconstruct_active_formatting_elements();
+                        if self.pauses_before(&tag) {
+                            *self.paused.borrow_mut() = Some((tag, self.foster_parenting.get()));
+                            return ProcessResult::Script(self.sink.get_document());
+                        }
                         self.insert_element_for(tag);
                         ProcessResult::Done
                     }

@@ -8,6 +8,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use blitz_dom::node::Attribute;
+
+pub use crate::parser_handle::ParserHandle;
+#[cfg(test)]
+pub(crate) use crate::parser_handle::live_parser_handles;
 use blitz_dom::{BaseDocument, DocumentMutator, HtmlParserProvider, NodeId};
 use html5ever::{
     QualName,
@@ -134,56 +138,13 @@ pub struct HtmlSink<A: DocAccess> {
     /// Nodes created by this parse, including handles not yet attached when
     /// admission failed. A transactional caller can release all of them.
     allocations: Option<Rc<RefCell<Vec<NodeId>>>>,
-}
-
-/// An HTML tree-builder handle remains valid after node admission fails. Its
-/// name is retained without an arena allocation; it can never alias a live node.
-#[derive(Clone)]
-pub struct ParserHandle(Rc<ParserNode>);
-
-struct ParserNode {
-    lease: Option<blitz_dom::NodeLease>,
-    parser_form: Cell<Option<NodeId>>,
-    declarative_root: Cell<Option<NodeId>>,
-    name: QualName,
-}
-
-#[cfg(test)]
-thread_local! {
-    static LIVE_HANDLES: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-impl Drop for ParserNode {
-    fn drop(&mut self) {
-        LIVE_HANDLES.with(|count| count.set(count.get() - 1));
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn live_parser_handles() -> usize {
-    LIVE_HANDLES.with(Cell::get)
-}
-
-impl ParserHandle {
-    fn new(lease: Option<blitz_dom::NodeLease>, name: QualName) -> Self {
-        #[cfg(test)]
-        LIVE_HANDLES.with(|count| count.set(count.get() + 1));
-        Self(Rc::new(ParserNode {
-            lease,
-            name,
-            parser_form: Cell::new(None),
-            declarative_root: Cell::new(None),
-        }))
-    }
-
-    pub(crate) fn node_id(&self) -> Option<NodeId> {
-        self.0.lease.as_ref().map(blitz_dom::NodeLease::id)
-    }
-
-    fn non_element(lease: Option<blitz_dom::NodeLease>) -> Self {
-        Self::new(lease, QualName::new(None, html5ever::ns!(html), "".into()))
-    }
+    /// A custom element the embedder constructed for the start tag being
+    /// processed; the tree builder's creation of that element uses it (see
+    /// `custom_element_pause`).
+    pub(crate) constructed: RefCell<Option<ParserHandle>>,
+    /// Elements this parse gave an `on*` attribute since the embedder last
+    /// took them (see `StreamingParser::take_handler_elements`).
+    pub(crate) handler_elements: RefCell<Vec<NodeId>>,
 }
 
 /// The one-shot parser over a borrowed mutator.
@@ -201,14 +162,27 @@ impl<A: DocAccess> HtmlSink<A> {
             document_node: None,
             exhausted: Cell::new(false),
             allocations: None,
+            constructed: RefCell::new(None),
+            handler_elements: RefCell::new(Vec::new()),
         }
     }
 
-    fn with<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
+    /// HTML inserts a node only "if it is possible": a constructed custom
+    /// element, which script could reach before its insertion, must not
+    /// become its own ancestor. The parser never appends a node to itself, so
+    /// only a node with children can close a cycle.
+    fn closes_cycle(m: &DocumentMutator<'_>, parent: NodeId, child: NodeId) -> bool {
+        m.doc
+            .get_node(child)
+            .is_some_and(|node| !node.children.is_empty())
+            && m.doc.is_inclusive_ancestor(child, parent)
+    }
+
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut DocumentMutator<'_>) -> R) -> R {
         self.access.with_mutator(f)
     }
 
-    fn handle(&self, id: Option<NodeId>, name: QualName) -> ParserHandle {
+    pub(crate) fn handle(&self, id: Option<NodeId>, name: QualName) -> ParserHandle {
         ParserHandle::new(id.map(|id| self.with(|m| m.doc.lease_node(id))), name)
     }
 
@@ -507,8 +481,13 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         attrs: Vec<html5ever::Attribute>,
         _flags: ElementFlags,
     ) -> Self::Handle {
+        // Its attributes were appended when it was constructed.
+        if let Some(constructed) = self.take_constructed(&name) {
+            return constructed;
+        }
         let is_script =
             name.local == html5ever::local_name!("script") && name.ns == html5ever::ns!(html);
+        let handlers = crate::handler_elements::has_handler_attribute(&attrs);
         let id = self.allocate(|m| {
             let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
             let id = m.try_create_element(name.clone(), attrs)?;
@@ -517,6 +496,9 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
             }
             Ok(id)
         });
+        if let Some(id) = id.filter(|_| handlers) {
+            self.record_handler_element(id);
+        }
         self.handle(id, name)
     }
 
@@ -538,6 +520,9 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
             NodeOrText::AppendNode(child) => {
                 if let Some(id) = child.node_id() {
                     self.with(|m| {
+                        if Self::closes_cycle(m, parent, id) {
+                            return;
+                        }
                         m.append_children(parent, &[id]);
                         if let Some(form) = child.0.parser_form.take() {
                             m.associate_parser_form(id, form);
@@ -567,6 +552,14 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
             NodeOrText::AppendNode(child) => {
                 if let Some(id) = child.node_id() {
                     self.with(|m| {
+                        // Script may have detached the sibling.
+                        let Some(parent) = m.doc.get_node(sibling).and_then(|node| node.parent)
+                        else {
+                            return;
+                        };
+                        if Self::closes_cycle(m, parent, id) {
+                            return;
+                        }
                         m.insert_nodes_before(sibling, &[id]);
                         if let Some(form) = child.0.parser_form.take() {
                             m.associate_parser_form(id, form);
@@ -716,6 +709,7 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
 
     fn add_attrs_if_missing(&self, target: &Self::Handle, attrs: Vec<html5ever::Attribute>) {
         if let Some(id) = target.node_id().filter(|_| !self.exhausted.get()) {
+            self.record_handler_attributes(id, &attrs);
             let attrs = attrs.into_iter().map(html5ever_to_blitz_attr).collect();
             self.with(|m| m.add_attrs_if_missing(id, attrs));
         }

@@ -94,6 +94,30 @@ fn streaming_does_not_surface_a_script_after_admission_stops() {
     assert_eq!(doc.borrow().node_count(), 128);
 }
 
+/// The embedder's construction can use up the budget while the parser waits
+/// before a custom element; the held tag then creates nothing and the parser
+/// stops.
+#[test]
+fn a_held_custom_element_tag_stops_at_an_exhausted_budget() {
+    let doc = Rc::new(RefCell::new(document(64)));
+    let mut parser = StreamingParser::new(doc.clone());
+    parser.set_definition_lookup(Box::new(|name| name == "x-a"));
+    parser.feed("<p>a</p><x-a></x-a><x-a></x-a><p>b</p>");
+    parser.end_of_input();
+    assert!(matches!(parser.run(), ParseStep::CustomElement(_)));
+    let name = blitz_dom::QualName::new(None, blitz_dom::ns!(html), "div".into());
+    while doc
+        .borrow_mut()
+        .mutate()
+        .try_create_element(name.clone(), Vec::new())
+        .is_ok()
+    {}
+    assert!(matches!(parser.run(), ParseStep::CustomElementCreated));
+    assert!(parser.is_finished());
+    assert!(matches!(parser.run(), ParseStep::Done));
+    assert_eq!(doc.borrow().node_count(), 64);
+}
+
 #[test]
 fn xml_and_minimal_document_budgets_never_need_a_fake_node() {
     for limit in 1..16 {

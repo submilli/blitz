@@ -80,6 +80,12 @@ impl Default for TreeBuilderOpts {
     }
 }
 
+/// See [`TreeBuilder::set_pause_before`].
+struct PauseBefore<Handle> {
+    name: Box<dyn Fn(&LocalName) -> bool>,
+    template: Box<dyn Fn(&Handle) -> bool>,
+}
+
 /// The HTML tree builder.
 pub struct TreeBuilder<Handle, Sink> {
     /// Options controlling the behavior of the tree builder.
@@ -134,6 +140,14 @@ pub struct TreeBuilder<Handle, Sink> {
 
     /// Track current line
     current_line: Cell<u64>,
+
+    /// Whether to stop before creating the element for an "any other start
+    /// tag" of this name (see [`TreeBuilder::set_pause_before`]).
+    pause_before: Option<PauseBefore<Handle>>,
+
+    /// The start tag stopped before, with the foster-parenting flag its
+    /// element is inserted with.
+    paused: RefCell<Option<(Tag, bool)>>,
     // WARNING: If you add new fields that contain Handles, you
     // must add them to trace_handles() below to preserve memory
     // safety!
@@ -167,6 +181,8 @@ where
             frameset_ok: Cell::new(true),
             ignore_lf: Default::default(),
             foster_parenting: Default::default(),
+            pause_before: None,
+            paused: Default::default(),
             context_elem: Default::default(),
             current_line: Cell::new(1),
         }
@@ -207,6 +223,8 @@ where
             frameset_ok: Cell::new(true),
             ignore_lf: Default::default(),
             foster_parenting: Default::default(),
+            pause_before: None,
+            paused: Default::default(),
             context_elem: RefCell::new(Some(context_elem)),
             current_line: Cell::new(1),
         };
@@ -411,6 +429,59 @@ where
     /// Are we parsing a HTML fragment?
     pub fn is_fragment(&self) -> bool {
         self.context_elem.borrow().is_some()
+    }
+
+    /// Stop before creating the HTML element of an "any other start tag" in
+    /// the "in body" insertion mode whose name `name` accepts, after the
+    /// steps that precede its creation (implied elements, reconstructing the
+    /// active formatting elements), when `template` accepts every open
+    /// `template` element: the element goes into their contents, which are
+    /// inert unless a template declared a shadow root. Lets a driver run
+    /// script that HTML runs while creating the element, such as a custom
+    /// element's constructor: the token's processing returns
+    /// `TokenSinkResult::Script` with the document, and
+    /// [`TreeBuilder::create_paused_element`] finishes it.
+    pub fn set_pause_before(
+        &mut self,
+        name: Box<dyn Fn(&LocalName) -> bool>,
+        template: Box<dyn Fn(&Handle) -> bool>,
+    ) {
+        self.pause_before = Some(PauseBefore { name, template });
+    }
+
+    /// A copy of the start tag the tree builder stopped before.
+    pub fn paused_tag(&self) -> Option<Tag> {
+        self.paused.borrow().as_ref().map(|(tag, _)| tag.clone())
+    }
+
+    /// Create and insert the element of the start tag the tree builder
+    /// stopped before. `false` without one.
+    pub fn create_paused_element(&self) -> bool {
+        let Some((tag, foster_parenting)) = self.paused.borrow_mut().take() else {
+            return false;
+        };
+        let outer = self.foster_parenting.replace(foster_parenting);
+        self.insert_element_for(tag);
+        self.foster_parenting.set(outer);
+        true
+    }
+
+    /// Stop before `tag`'s creation, if the driver asked to.
+    fn pauses_before(&self, tag: &Tag) -> bool {
+        let Some(pause) = &self.pause_before else {
+            return false;
+        };
+        if !(pause.name)(&tag.name) {
+            return false;
+        }
+        // A template's insertion mode is stacked while it is open.
+        self.template_modes.borrow().is_empty()
+            || self
+                .open_elems
+                .borrow()
+                .iter()
+                .filter(|elem| self.html_elem_named(elem, local_name!("template")))
+                .all(|template| (pause.template)(template))
     }
 
     /// https://html.spec.whatwg.org/multipage/#appropriate-place-for-inserting-a-node

@@ -21,6 +21,10 @@ impl<A: DocAccess> BoundedHtml<A> {
     pub fn exhausted(&self) -> bool {
         self.0.sink.node_limit_exceeded()
     }
+
+    pub fn sink(&self) -> &HtmlSink<A> {
+        &self.0.sink
+    }
 }
 
 impl<A: DocAccess> TokenSink for BoundedHtml<A> {
