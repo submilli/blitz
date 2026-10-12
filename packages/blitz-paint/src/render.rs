@@ -1076,10 +1076,11 @@ impl ElementCx<'_, '_> {
             let origin = self.frame.content_box.origin().to_vec2();
             let transform = self.transform.pre_translate(origin).pre_scale(self.scale);
             scene.push_clip_layer(self.transform, &self.frame.content_box);
-            anyrender_svg::render_svg_tree(scene, &svg.tree, transform);
+            crate::paint_svg_tree(scene, &svg.tree, svg.nested_rasters(), transform);
             scene.pop_layer();
             return;
         }
+        let rasters = svg.nested_rasters();
         let svg = &*svg.tree;
 
         let width = self.frame.content_box.width() as u32;
@@ -1121,7 +1122,7 @@ impl ElementCx<'_, '_> {
             .pre_scale_non_uniform(x_scale, y_scale)
             .then_translate(Vec2 { x, y });
 
-        anyrender_svg::render_svg_tree(scene, svg, transform);
+        crate::paint_svg_tree(scene, svg, rasters, transform);
     }
 
     fn draw_image(&self, scene: &mut impl PaintScene) {

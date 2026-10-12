@@ -6,6 +6,7 @@
 use crate::DecodedImageBudget;
 use crate::image_budget::Reservation;
 use crate::node::SvgImageData;
+use crate::svg_nested_rasters::NestedRasterDecoder;
 use crate::svg_subresources::{BodyDigest, NestedImages, SubresourceRecorder};
 use std::sync::Arc;
 
@@ -17,12 +18,6 @@ pub(crate) const MAX_SVG_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Images an SVG document may nest (including within nested SVG images).
 const MAX_NESTED_SVG_IMAGES: usize = 16;
-
-/// Decoded bytes of the raster images one SVG document may nest. The renderer
-/// decodes them itself, so their headers are checked against this up front.
-/// The decoded image budget charges them twice (each paint decodes and copies
-/// them), so this is a quarter of it.
-const MAX_NESTED_SVG_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Why [`parse_svg_image`] produced no SVG document.
 #[derive(Debug)]
@@ -36,8 +31,10 @@ pub(crate) enum SvgRefusal {
 
 /// Parse an SVG image, charged to `budget`. Page-supplied SVG never reaches the
 /// network or the filesystem: nested images may only be `data:` URLs, a
-/// bounded number of them. SVGZ inflates within its bound, and what parsing
-/// allocates up front is reserved while it runs, for nested documents too.
+/// bounded number of them, and nested rasters are decoded once, charged to
+/// `budget` (see [`crate::svg_nested_rasters`]). SVGZ inflates within its
+/// bound, and what parsing allocates up front is reserved while it runs, for
+/// nested documents too.
 pub(crate) fn parse_svg_image(
     source: &[u8],
     fonts: &crate::SvgFontDb,
@@ -63,8 +60,11 @@ pub(crate) fn parse_svg_image_showing(
     };
     let svg = {
         let _parsing = reserve_parse(budget, source).ok_or(SvgRefusal::Budget)?;
-        let options = |recorder: &SubresourceRecorder| svg_options(fonts, budget, recorder);
-        SvgImageData::parse_recording(source, shown, options).map_err(|_| SvgRefusal::Invalid)?
+        let options = |recorder: &SubresourceRecorder, rasters: &NestedRasterDecoder| {
+            svg_options(fonts, budget, recorder, rasters)
+        };
+        SvgImageData::parse_recording(source, shown, budget, options)
+            .map_err(|_| SvgRefusal::Invalid)?
     };
     if !budget.admit_svg(&svg) {
         return Err(SvgRefusal::Budget);
@@ -76,20 +76,21 @@ pub(crate) fn parse_svg_image_showing(
 /// reads paths from the filesystem; nested SVG documents forward only the data
 /// resolver, so its bounds cover every nesting level: the number of nested
 /// images, their source bytes, what parsing one allocates up front, and the
-/// decoded size of rasters, which stay encoded until a renderer decodes them.
+/// rasters, which `rasters` decodes (leaving out those it refuses).
 /// The resolver refuses, and notes as omitted, the `<image>` bodies `recorder`
 /// does not admit, and scans each nested document with it.
 fn svg_options(
     fonts: &crate::SvgFontDb,
     budget: &DecodedImageBudget,
     recorder: &SubresourceRecorder,
+    rasters: &NestedRasterDecoder,
 ) -> usvg::Options<'static> {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     let nested = Arc::new(AtomicUsize::new(0));
     let sources = Arc::new(AtomicU64::new(0));
-    let bytes = Arc::new(AtomicU64::new(0));
     let budget = budget.clone();
     let recorder = recorder.clone();
+    let rasters = rasters.clone();
     let decode = usvg::ImageHrefResolver::default_data_resolver();
     usvg::Options {
         fontdb: Arc::clone(fonts),
@@ -129,16 +130,7 @@ fn svg_options(
                         }
                     }
                 };
-                let encoded = match &kind {
-                    usvg::ImageKind::JPEG(data)
-                    | usvg::ImageKind::PNG(data)
-                    | usvg::ImageKind::GIF(data)
-                    | usvg::ImageKind::WEBP(data) => data,
-                    usvg::ImageKind::SVG(_) => return Some(kind),
-                };
-                let decoded = crate::image_decode::bounded_rgba_bytes(encoded)?;
-                let total = bytes.fetch_add(decoded, Ordering::Relaxed) + decoded;
-                (total <= MAX_NESTED_SVG_IMAGE_BYTES).then_some(kind)
+                rasters.decode(&kind).then_some(kind)
             }),
             resolve_string: Box::new(|_, _| None),
         },
@@ -182,9 +174,9 @@ fn reserve_parse(budget: &DecodedImageBudget, source: &[u8]) -> Option<Reservati
 
 /// What retaining a parsed SVG document costs, estimated from its nodes
 /// (including clip paths, masks, patterns, filters and gradient stops), path
-/// points, flattened text and nested documents. A nested raster stays encoded
-/// in the tree, but the renderer decodes it and copies the decode on every
-/// paint, so it costs twice its decoded size.
+/// points, flattened text and nested documents. A nested raster costs its
+/// encoded body here; its decode is charged on its own (see
+/// [`crate::svg_nested_rasters`]).
 pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
     const BYTES_PER_NODE: usize = 1024;
     const BYTES_PER_POINT: usize = 16;
@@ -224,21 +216,13 @@ pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
                         usvg::ImageKind::JPEG(data)
                         | usvg::ImageKind::PNG(data)
                         | usvg::ImageKind::GIF(data)
-                        | usvg::ImageKind::WEBP(data) => add(nested_raster_bytes(data)),
+                        | usvg::ImageKind::WEBP(data) => add(data.len()),
                     },
                 }
             }
         }
     }
     bytes
-}
-
-/// A nested raster's decode and its renderer copy; its encoded size when its
-/// header is unreadable, as the renderer then fails to decode it.
-fn nested_raster_bytes(encoded: &[u8]) -> usize {
-    crate::image_decode::bounded_rgba_bytes(encoded)
-        .and_then(|rgba| usize::try_from(rgba).ok())
-        .map_or(encoded.len(), |rgba| rgba.saturating_mul(2))
 }
 
 #[cfg(test)]

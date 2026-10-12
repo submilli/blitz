@@ -100,7 +100,7 @@ impl ElementCx<'_, '_> {
             (bg_size.width * self.scale, bg_size.height * self.scale),
         );
         scene.push_clip_layer(base_transform, &tile);
-        anyrender_svg::render_svg_tree(scene, &svg.tree, transform);
+        crate::paint_svg_tree(scene, &svg.tree, svg.nested_rasters(), transform);
         scene.pop_layer();
     }
 }

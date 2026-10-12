@@ -128,6 +128,7 @@ enum HeldImage {
         origin_clean: bool,
         retained_bytes: usize,
         subresources: crate::svg_subresources::SvgSubresources,
+        nested_rasters: crate::svg_nested_rasters::WeakSvgNestedRasters,
     },
 }
 impl HeldImage {
@@ -146,6 +147,7 @@ impl HeldImage {
                 origin_clean: svg.origin_clean,
                 retained_bytes: svg.retained_bytes,
                 subresources: svg.subresources.clone(),
+                nested_rasters: svg.nested_rasters.downgrade(),
             }),
             ImageData::None => None,
         }
@@ -171,12 +173,14 @@ impl HeldImage {
                 origin_clean,
                 retained_bytes,
                 subresources,
+                nested_rasters,
             } => Some(ImageData::Svg(crate::node::SvgImageData {
                 tree: tree.upgrade()?,
                 intrinsic_dimensions: *intrinsic_dimensions,
                 origin_clean: *origin_clean,
                 retained_bytes: *retained_bytes,
                 subresources: subresources.clone(),
+                nested_rasters: nested_rasters.upgrade()?,
             })),
         }
     }
@@ -188,7 +192,7 @@ fn decoded_bytes(image: &ImageData) -> usize {
     match image {
         ImageData::Raster(raster) => raster.data.data().len(),
         #[cfg(feature = "svg")]
-        ImageData::Svg(svg) => svg.retained_bytes,
+        ImageData::Svg(svg) => svg.decoded_bytes(),
         ImageData::None => 0,
     }
 }

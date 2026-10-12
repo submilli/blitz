@@ -73,11 +73,16 @@ fn costs_count_resources_outside_the_rendered_tree() {
     assert!(gradient >= 200 * 64, "{gradient}");
 }
 
+/// A nested raster's decode is charged on its own, once, rather than with the
+/// tree for each paint.
 #[test]
-fn nested_rasters_cost_their_decode_and_its_paint_copy() {
-    let png = crate::image_decode::declared_png(512);
-    let nested = cost(&format!("{OPEN}{}</svg>", nesting("image/png", &png)));
-    assert!(nested >= 2 * 512 * 512 * 4, "{nested}");
+fn nested_rasters_are_charged_their_decode_once() {
+    let png = crate::image_decode::solid_png(512, 512, [0, 0, 0, 255]);
+    let budget = DecodedImageBudget::default();
+    let source = format!("{OPEN}{}</svg>", nesting("image/png", &png));
+    let svg = parse_svg_image(source.as_bytes(), &default_svg_fonts(), &budget).unwrap();
+    assert!(svg.retained_bytes < 512 * 512 * 4, "{}", svg.retained_bytes);
+    assert_eq!(budget.retained_bytes(), svg.retained_bytes + 512 * 512 * 4);
 }
 
 #[test]
@@ -157,18 +162,20 @@ fn svg_images_never_read_the_filesystem() {
     assert_eq!(images(&parsed), 1, "only the data: image loads");
 }
 
-/// The renderer decodes nested raster images itself, so their headers bound
-/// them first: sides past the decode limit, or images past the shared byte
-/// bound, are dropped rather than decoded.
+/// Nested raster images are bounded by their headers before they decode:
+/// sides past the decode limit, or images past the document's byte bound, are
+/// dropped rather than decoded.
 #[test]
 fn nested_raster_images_are_bounded_by_their_headers() {
-    let image = |side: u32| nesting("image/png", &crate::image_decode::declared_png(side));
+    use crate::image_decode::{declared_png, solid_png};
     let nested = |body: String| images(&parse(format!("{OPEN}{body}</svg>").as_bytes()).unwrap());
-    assert_eq!(nested(image(65_536)), 0, "a side past the decode limit");
-    assert_eq!(nested(image(4096)), 0, "64 MiB, past the 32 MiB bound");
-    // Each 2048² image decodes to half the bound.
-    assert_eq!(nested(image(2048).repeat(3)), 2);
-    assert_eq!(nested(image(16).repeat(3)), 3);
+    let declared = |side: u32| nesting("image/png", &declared_png(side));
+    assert_eq!(nested(declared(65_536)), 0, "a side past the decode limit");
+    assert_eq!(nested(declared(4096)), 0, "64 MiB, past the 32 MiB bound");
+    // Each 2048² image decodes to half the bound; equal bodies share one.
+    let image = |grey: u8| nesting("image/png", &solid_png(2048, 2048, [grey, grey, grey, 255]));
+    assert_eq!(nested(format!("{}{}{}", image(0), image(1), image(2))), 2);
+    assert_eq!(nested(image(0).repeat(3)), 3);
 }
 
 #[test]

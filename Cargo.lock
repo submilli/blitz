@@ -359,7 +359,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9a06a9cab20563ae5b392239db09d42222820fd3706fe483db7d3cb25546c24"
 dependencies = [
  "anyrender",
- "image",
  "kurbo",
  "peniko",
  "usvg",

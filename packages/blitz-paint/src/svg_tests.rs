@@ -237,3 +237,85 @@ fn svg_backgrounds_with_a_view_box_stretch_to_the_tile() {
         vec![kurbo::Rect::new(0.0, 12.0, 40.0, 28.0)]
     );
 }
+
+/// One SVG image shown by many elements, and painted again, draws its nested
+/// raster from the single decode its document holds: the renderer decodes
+/// nothing itself, and every draw shares the pixels (so a renderer's image
+/// cache, keyed by them, converts them once too).
+#[test]
+fn nested_rasters_of_svg_images_decode_once_for_every_paint() {
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><image width='4' height='4' href='data:image/png;base64,{PNG}'/></svg>"
+    );
+    let mut doc = BaseDocument::new(DocumentConfig {
+        base_url: Some("https://page.test/".into()),
+        net_provider: Some(std::sync::Arc::new(SvgProvider(svg))),
+        ..Default::default()
+    });
+    let root = doc.root_node().id;
+    let html_name = |tag: &str| QualName::new(None, ns!(html), tag.into());
+    let html = element(&mut doc, root, html_name("html"), &[]);
+    let body = element(&mut doc, html, html_name("body"), &[]);
+    let images: Vec<NodeId> = (0..20)
+        .map(|_| element(&mut doc, body, html_name("img"), &[("src", "a.svg")]))
+        .collect();
+    doc.resolve(0.0);
+    doc.handle_messages();
+    // A fetched SVG image with `<image>` elements completes a task later.
+    for load in doc.take_svg_image_loads() {
+        doc.complete_svg_image_load(load);
+    }
+    doc.resolve(0.0);
+    let held = images
+        .iter()
+        .map(|id| {
+            let svg = doc
+                .get_node(*id)
+                .unwrap()
+                .element_data()
+                .unwrap()
+                .svg_data();
+            let svg = svg.expect("the SVG image loads");
+            let kind = image_kinds(&svg.tree).pop().expect("its nested image");
+            svg.nested_rasters()
+                .decoded(&kind)
+                .expect("decoded")
+                .data
+                .id()
+        })
+        .collect::<Vec<_>>();
+    assert!(held.iter().all(|id| *id == held[0]), "{held:?}");
+
+    for _ in 0..2 {
+        let mut scene = Scene::new();
+        super::paint_scene(&mut scene, &mut doc, 1.0, 800, 600, 0, 0);
+        let drawn: Vec<u64> = scene
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                RenderCommand::Fill(fill) => match &fill.brush {
+                    Paint::Image(image) => Some(image.image.data.id()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, vec![held[0]; images.len()]);
+    }
+}
+
+fn image_kinds(tree: &usvg::Tree) -> Vec<usvg::ImageKind> {
+    let mut kinds = Vec::new();
+    let mut groups = vec![tree.root()];
+    while let Some(group) = groups.pop() {
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) => groups.push(child),
+                usvg::Node::Image(image) => kinds.push(image.kind().clone()),
+                _ => {}
+            }
+        }
+    }
+    kinds
+}

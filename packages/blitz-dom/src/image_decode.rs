@@ -111,7 +111,7 @@ pub(crate) fn bounded_rgba_bytes(bytes: &[u8]) -> Option<u64> {
 /// JPEG and WebP decoders ignore `max_alloc`, but their working memory is
 /// a few bytes per pixel, which the RGBA bound keeps near the same peak.
 /// The output buffer is checked here, as `ImageReader::decode` would.
-fn decode_bounded(bytes: &Bytes) -> image::ImageResult<image::DynamicImage> {
+fn decode_bounded(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
     use image::ImageDecoder;
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -140,7 +140,7 @@ enum DecodeRefusal {
 /// [`decode_bounded`] within `budget`: the RGBA bytes are reserved from the
 /// header before any pixel buffer is allocated, and charged to the image.
 fn decode_charged(
-    bytes: &Bytes,
+    bytes: &[u8],
     budget: &DecodedImageBudget,
 ) -> Result<RasterImageData, DecodeRefusal> {
     let rgba = bounded_rgba_bytes(bytes).and_then(|rgba| usize::try_from(rgba).ok());
@@ -163,12 +163,31 @@ fn decode_charged(
     Ok(raster)
 }
 
+/// [`decode_charged`] for an image that is either decoded or left out.
+#[cfg(feature = "svg")]
+pub(crate) fn decode_raster_charged(
+    bytes: &[u8],
+    budget: &DecodedImageBudget,
+) -> Option<RasterImageData> {
+    decode_charged(bytes, budget).ok()
+}
+
 fn decode_limits() -> image::Limits {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_DECODED_SIDE);
     limits.max_image_height = Some(MAX_DECODED_SIDE);
     limits.max_alloc = Some(MAX_DECODE_ALLOCATION);
     limits
+}
+
+#[cfg(test)]
+/// A `width`×`height` PNG of one `rgba` colour.
+pub(crate) fn solid_png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(width, height, image::Rgba(rgba))
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encoding a PNG in memory");
+    png
 }
 
 #[cfg(test)]

@@ -81,17 +81,18 @@ impl BaseDocument {
         if expanded > MAX_EXPANDED_BYTES {
             return Err(CanvasSvgLimit);
         }
-        let Some(tree) = self.parse_element_markup(&markup.painted) else {
+        let Some(painted) = self.parse_element_markup(&markup.painted) else {
             return Ok(None);
         };
         let placed = match &markup.placed {
-            Some(placed) => self.parse_element_markup(placed),
-            None => Some(tree.clone()),
+            Some(placed) => self.parse_element_markup(placed).map(|svg| svg.tree),
+            None => Some(painted.tree.clone()),
         };
         let bounds =
             placed.and_then(|placed| placed.root().abs_stroke_bounding_box().to_non_zero_rect());
         Ok(bounds.map(|bounds| CanvasSvgElement {
-            tree,
+            tree: painted.tree,
+            rasters: painted.nested_rasters,
             bounds,
             // Blink maps only a viewport with area (an empty one scales by 1).
             viewport: viewport
@@ -100,11 +101,10 @@ impl BaseDocument {
     }
 
     /// Parse serialized markup within the decoded image budget, which charges
-    /// the tree while a snapshot holds it.
-    fn parse_element_markup(&self, markup: &str) -> Option<std::sync::Arc<usvg::Tree>> {
+    /// the tree and its nested rasters while a snapshot holds them.
+    fn parse_element_markup(&self, markup: &str) -> Option<crate::node::SvgImageData> {
         crate::svg_bounds::parse_svg_image(markup.as_bytes(), &self.svg_fonts, &self.image_budget)
             .ok()
-            .map(|svg| svg.tree)
     }
 }
 

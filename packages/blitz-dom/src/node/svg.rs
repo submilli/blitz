@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::svg_nested_rasters::{NestedRasterDecoder, SvgNestedRasters};
 use crate::svg_root_size;
 use crate::svg_subresources::SubresourceRecorder;
 use usvg::roxmltree;
@@ -91,6 +92,8 @@ pub struct SvgImageData {
     pub(crate) retained_bytes: usize,
     /// What the SVG image loads itself (see [`crate::svg_subresources`]).
     pub(crate) subresources: crate::svg_subresources::SvgSubresources,
+    /// The decodes of the rasters it nests, which paints draw.
+    pub(crate) nested_rasters: SvgNestedRasters,
 }
 
 impl SvgImageData {
@@ -108,20 +111,25 @@ impl SvgImageData {
 
     /// [`Self::from_data`] with the options `options_for` builds around a
     /// recorder of the document's own images (see [`crate::svg_subresources`]),
-    /// whose resolver must consult it (`admits`, `scan_nested`).
+    /// whose resolver must consult it (`admits`, `scan_nested`), and a decoder
+    /// of its nested rasters charged to `budget` (see
+    /// [`crate::svg_nested_rasters`]), which it must pass each raster.
     pub(crate) fn parse_recording(
         data: &[u8],
         shown: crate::svg_subresources::NestedImages,
-        options_for: impl FnOnce(&SubresourceRecorder) -> usvg::Options<'static>,
+        budget: &crate::DecodedImageBudget,
+        options_for: impl FnOnce(&SubresourceRecorder, &NestedRasterDecoder) -> usvg::Options<'static>,
     ) -> Result<Self, usvg::Error> {
         let recorder = SubresourceRecorder::new(shown);
-        Self::parse(data, &options_for(&recorder), Some(&recorder))
+        let rasters = NestedRasterDecoder::new(budget);
+        let options = options_for(&recorder, &rasters);
+        Self::parse(data, &options, Some((&recorder, &rasters)))
     }
 
     fn parse(
         data: &[u8],
         options: &usvg::Options,
-        recorder: Option<&SubresourceRecorder>,
+        collectors: Option<(&SubresourceRecorder, &NestedRasterDecoder)>,
     ) -> Result<Self, usvg::Error> {
         let text = std::str::from_utf8(data).map_err(|_| usvg::Error::NotAnUtf8Str)?;
         let declared = svg_root_size::parse_xml(text)?;
@@ -135,12 +143,12 @@ impl SvgImageData {
                 svg_root_size::parse_xml(resized)?
             }
         };
-        if let Some(recorder) = recorder {
+        if let Some((recorder, _)) = collectors {
             recorder.scan_document(&doc);
         }
         let tree = usvg::Tree::from_xmltree(&doc, options)?;
-        let subresources: crate::svg_subresources::SvgSubresources = recorder
-            .map(|recorder| recorder.finish())
+        let (subresources, nested_rasters) = collectors
+            .map(|(recorder, rasters)| (recorder.finish(), rasters.finish()))
             .unwrap_or_default();
         let retained_bytes =
             crate::svg_bounds::retained_bytes(&tree).saturating_add(subresources.retained_bytes());
@@ -150,7 +158,22 @@ impl SvgImageData {
             intrinsic_dimensions,
             origin_clean: false,
             subresources,
+            nested_rasters,
         })
+    }
+
+    /// The decodes of the raster images the document nests, which paints
+    /// draw instead of decoding them again. Empty for a document parsed by
+    /// [`Self::from_data`], which decodes none.
+    pub fn nested_rasters(&self) -> &SvgNestedRasters {
+        &self.nested_rasters
+    }
+
+    /// Bytes the decoded image budget charges for the document and its
+    /// nested rasters.
+    pub(crate) fn decoded_bytes(&self) -> usize {
+        self.retained_bytes
+            .saturating_add(self.nested_rasters.decoded_bytes())
     }
 
     /// The intrinsic width in CSS px, present only when the root `<svg>`

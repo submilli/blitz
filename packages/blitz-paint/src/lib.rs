@@ -11,6 +11,8 @@ mod kurbo_css;
 mod layers;
 mod render;
 mod sizing;
+#[cfg(feature = "svg")]
+mod svg_tree;
 mod text;
 
 use std::collections::HashMap;
@@ -18,6 +20,8 @@ use std::collections::HashMap;
 use anyrender::{PaintScene, Scene};
 use blitz_dom::{BaseDocument, NodeId, util::Color};
 use render::BlitzDomPainter;
+#[cfg(feature = "svg")]
+pub use svg_tree::paint_svg_tree;
 
 const FONT_EMBOLDEN_ENABLED: bool = cfg!(any(
     feature = "font-embolden",
