@@ -71,13 +71,13 @@ impl SvgIntrinsicDimensions {
     }
 }
 
-/// What one parse of an SVG image collects through usvg's image resolver,
-/// which must consult `recorder` for the images the document loads itself
-/// (`admits`, `scan_nested`; see [`crate::svg_subresources`]) and pass each
-/// raster to `rasters` (see [`crate::svg_nested_rasters`]).
+/// What one parse of an SVG image collects: the images it loads itself,
+/// which usvg's resolver must consult (`admits`, `scan_nested`; see
+/// [`crate::svg_subresources`]), and the decodes of the rasters the parsed
+/// tree keeps (see [`crate::svg_nested_rasters`]).
 pub(crate) struct SvgParseCollectors {
     pub(crate) recorder: SubresourceRecorder,
-    pub(crate) rasters: NestedRasterDecoder,
+    rasters: NestedRasterDecoder,
 }
 
 impl SvgParseCollectors {
@@ -92,11 +92,12 @@ impl SvgParseCollectors {
         }
     }
 
+    /// What the parse collected, decoding the rasters the parsed `tree` keeps.
     fn finish(
         &self,
         tree: &usvg::Tree,
     ) -> (crate::svg_subresources::SvgSubresources, SvgNestedRasters) {
-        (self.recorder.finish(), self.rasters.finish(tree))
+        (self.recorder.finish(), self.rasters.decode(tree))
     }
 }
 
@@ -138,15 +139,14 @@ impl SvgImageData {
         Self::parse(data, options, None)
     }
 
-    /// [`Self::from_data`] with the options `options_for` builds around the
-    /// document's collectors, whose resolver must use them (see
-    /// [`SvgParseCollectors`]).
+    /// [`Self::from_data`] with `collectors`, whose recorder the resolver of
+    /// `options` must consult (see [`SvgParseCollectors`]).
     pub(crate) fn parse_recording(
         data: &[u8],
+        options: &usvg::Options,
         collectors: &SvgParseCollectors,
-        options_for: impl FnOnce(&SvgParseCollectors) -> usvg::Options<'static>,
     ) -> Result<Self, usvg::Error> {
-        Self::parse(data, &options_for(collectors), Some(collectors))
+        Self::parse(data, options, Some(collectors))
     }
 
     fn parse(

@@ -94,25 +94,46 @@ fn rasters_of_nested_documents_decode_with_the_document() {
     assert_eq!(decodes(&svg).len(), 1);
 }
 
+/// A raster whose header is readable but whose pixels are not keeps its place
+/// and draws nothing.
 #[test]
-fn rasters_that_do_not_decode_are_left_out() {
+fn rasters_that_do_not_decode_have_no_decode() {
     let budget = DecodedImageBudget::default();
     let svg = parse(&image("image/png", &declared_png(16)), &budget);
-    assert!(kinds(&svg.tree).is_empty(), "a header without pixels");
+    let kinds = kinds(&svg.tree);
+    assert_eq!(kinds.len(), 1, "a header without pixels");
+    assert!(svg.nested_rasters().decoded(&kinds[0]).is_none());
     assert_eq!(budget.retained_bytes(), svg.retained_bytes);
 }
 
 #[test]
-fn rasters_past_the_budget_are_left_out() {
+fn rasters_past_the_budget_have_no_decode() {
     // A 1 MiB decode against a budget that admits the document but not it.
     let png = solid_png(512, 512, [0, 0, 0, 255]);
     let body = format!("{}<rect width='8' height='8'/>", image("image/png", &png));
-    let svg = parse(&body, &DecodedImageBudget::with_limit(512 * 1024));
-    assert!(kinds(&svg.tree).is_empty(), "the image is left out");
-    assert!(
-        svg.tree.root().has_children(),
-        "the rest of the document stays"
+    let budget = DecodedImageBudget::with_limit(512 * 1024);
+    let svg = parse(&body, &budget);
+    let kinds = kinds(&svg.tree);
+    assert!(svg.nested_rasters().decoded(&kinds[0]).is_none());
+    assert_eq!(budget.retained_bytes(), svg.retained_bytes);
+}
+
+/// Only the rasters the parsed tree keeps count against the document's
+/// bound: a skipped image (without area) decodes nothing and leaves the bound
+/// to the images that draw.
+#[test]
+fn skipped_images_leave_the_bound_to_kept_ones() {
+    let large = |grey: u8| solid_png(4096, 2048, [grey, grey, grey, 255]);
+    let href = |png: &[u8]| -> String { png.iter().map(|byte| format!("%{byte:02X}")).collect() };
+    let skipped = format!(
+        "<image width='0' height='8' href='data:image/png,{}'/>",
+        href(&large(0))
     );
+    let svg = parse(
+        &format!("{skipped}{}", image("image/png", &large(1))),
+        &DecodedImageBudget::default(),
+    );
+    assert_eq!(decodes(&svg).len(), 1, "the kept image decodes");
 }
 
 /// Trees parsed apart from Blitz's bounds have no decodes to draw.
@@ -157,7 +178,8 @@ fn measured_documents_decode_nothing() {
 }
 
 /// usvg makes some rasters itself (the colour bitmap glyphs of flattened
-/// text) without its resolver; they decode when the document is finished.
+/// text) without its resolver; a tree parsed by default options stands in for
+/// them, as no test font has bitmap strikes. They decode with the document.
 #[test]
 fn rasters_the_resolver_never_saw_decode_when_finished() {
     use super::{NestedRasterDecoder, RasterPurpose};
@@ -165,7 +187,7 @@ fn rasters_the_resolver_never_saw_decode_when_finished() {
     let png = solid_png(8, 8, [0, 0, 0, 255]);
     let source = format!("{OPEN}{}</svg>", image("image/png", &png));
     let tree = usvg::Tree::from_str(&source, &usvg::Options::default()).unwrap();
-    let rasters = NestedRasterDecoder::new(&budget, RasterPurpose::Paint).finish(&tree);
+    let rasters = NestedRasterDecoder::new(&budget, RasterPurpose::Paint).decode(&tree);
     let kinds = kinds(&tree);
     assert_eq!(rasters.decoded(&kinds[0]).map(|r| r.width), Some(8));
     assert_eq!(budget.retained_bytes(), 8 * 8 * 4);

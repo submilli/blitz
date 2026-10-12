@@ -6,8 +6,8 @@
 use crate::DecodedImageBudget;
 use crate::image_budget::Reservation;
 use crate::node::{SvgImageData, SvgParseCollectors};
-use crate::svg_nested_rasters::RasterPurpose;
-use crate::svg_subresources::{BodyDigest, NestedImages};
+use crate::svg_nested_rasters::{NestedRasterDecoder, RasterPurpose};
+use crate::svg_subresources::{BodyDigest, NestedImages, SubresourceRecorder};
 use std::sync::Arc;
 
 /// The SVG source an SVGZ image may inflate to, and that the documents one SVG
@@ -55,7 +55,7 @@ pub(crate) fn parse_svg_image_showing(
 }
 
 /// [`parse_svg_image`] for a document whose geometry is measured and never
-/// painted: its nested rasters are admitted by their headers, undecoded.
+/// painted: its nested rasters are not decoded.
 pub(crate) fn parse_svg_geometry(
     source: &[u8],
     fonts: &crate::SvgFontDb,
@@ -87,8 +87,8 @@ fn parse(
     let svg = {
         let _parsing = reserve_parse(budget, source).ok_or(SvgRefusal::Budget)?;
         let collectors = SvgParseCollectors::new(shown, budget, purpose);
-        let options = |collectors: &SvgParseCollectors| svg_options(fonts, budget, collectors);
-        SvgImageData::parse_recording(source, &collectors, options)
+        let options = svg_options(fonts, budget, &collectors.recorder);
+        SvgImageData::parse_recording(source, &options, &collectors)
             .map_err(|_| SvgRefusal::Invalid)?
     };
     if !budget.admit_svg(&svg) {
@@ -101,21 +101,19 @@ fn parse(
 /// reads paths from the filesystem; nested SVG documents forward only the data
 /// resolver, so its bounds cover every nesting level: the number of nested
 /// images, their source bytes, what parsing one allocates up front, and the
-/// rasters, which the collectors' decoder decodes (leaving out those it
-/// refuses). The resolver refuses, and notes as omitted, the `<image>` bodies
-/// the collectors' recorder does not admit, and scans each nested document
-/// with it.
+/// rasters' headers (they decode once the tree is parsed). The resolver
+/// refuses, and notes as omitted, the `<image>` bodies `recorder` does not
+/// admit, and scans each nested document with it.
 fn svg_options(
     fonts: &crate::SvgFontDb,
     budget: &DecodedImageBudget,
-    collectors: &SvgParseCollectors,
+    recorder: &SubresourceRecorder,
 ) -> usvg::Options<'static> {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     let nested = Arc::new(AtomicUsize::new(0));
     let sources = Arc::new(AtomicU64::new(0));
     let budget = budget.clone();
-    let recorder = collectors.recorder.clone();
-    let rasters = collectors.rasters.clone();
+    let recorder = recorder.clone();
     let decode = usvg::ImageHrefResolver::default_data_resolver();
     usvg::Options {
         fontdb: Arc::clone(fonts),
@@ -155,7 +153,7 @@ fn svg_options(
                         }
                     }
                 };
-                rasters.admit(&kind).then_some(kind)
+                NestedRasterDecoder::admits(&kind).then_some(kind)
             }),
             resolve_string: Box::new(|_, _| None),
         },
@@ -203,6 +201,7 @@ fn reserve_parse(budget: &DecodedImageBudget, source: &[u8]) -> Option<Reservati
 /// encoded body here; its decode is charged on its own (see
 /// [`crate::svg_nested_rasters`]).
 pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
+    use crate::svg_walk::{Visit, walk};
     const BYTES_PER_NODE: usize = 1024;
     const BYTES_PER_POINT: usize = 16;
     const BYTES_PER_STOP: usize = 64;
@@ -237,49 +236,6 @@ pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
         }
     });
     bytes
-}
-
-/// What [`walk`] visits.
-pub(crate) enum Visit<'a> {
-    /// A document: the parsed one, or one nested as an image.
-    Tree(&'a usvg::Tree),
-    /// A node of a document.
-    Node(&'a usvg::Node),
-}
-
-/// Visit every document `tree` holds and every node it keeps: those it renders,
-/// and those of its clip paths, masks, patterns, `feImage` primitives,
-/// flattened text and nested documents.
-pub(crate) fn walk<'a>(tree: &'a usvg::Tree, mut visit: impl FnMut(Visit<'a>)) {
-    let mut trees = vec![tree];
-    let mut groups: Vec<&usvg::Group> = Vec::new();
-    while let Some(tree) = trees.pop() {
-        visit(Visit::Tree(tree));
-        groups.push(tree.root());
-        groups.extend(tree.clip_paths().iter().map(|clip| clip.root()));
-        groups.extend(tree.masks().iter().map(|mask| mask.root()));
-        groups.extend(tree.patterns().iter().map(|pattern| pattern.root()));
-        for primitive in tree.filters().iter().flat_map(|filter| filter.primitives()) {
-            if let usvg::filter::Kind::Image(image) = primitive.kind() {
-                groups.push(image.root());
-            }
-        }
-        while let Some(group) = groups.pop() {
-            for node in group.children() {
-                visit(Visit::Node(node));
-                match node {
-                    usvg::Node::Group(child) => groups.push(child),
-                    usvg::Node::Text(text) => groups.push(text.flattened()),
-                    usvg::Node::Image(image) => {
-                        if let usvg::ImageKind::SVG(nested) = image.kind() {
-                            trees.push(nested);
-                        }
-                    }
-                    usvg::Node::Path(_) => {}
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]

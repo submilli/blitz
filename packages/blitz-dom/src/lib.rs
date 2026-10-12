@@ -143,6 +143,8 @@ mod svg_image_loads;
 #[cfg(feature = "svg")]
 mod svg_nested_rasters;
 #[cfg(feature = "svg")]
+mod svg_walk;
+#[cfg(feature = "svg")]
 pub use svg_nested_rasters::SvgNestedRasters;
 #[cfg(feature = "svg")]
 mod svg_root_size;

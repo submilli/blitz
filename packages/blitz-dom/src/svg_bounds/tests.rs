@@ -162,19 +162,30 @@ fn svg_images_never_read_the_filesystem() {
     assert_eq!(images(&parsed), 1, "only the data: image loads");
 }
 
-/// Nested raster images are bounded by their headers before they decode:
-/// sides past the decode limit, or images past the document's byte bound, are
-/// dropped rather than decoded.
+/// Nested raster images are bounded by their headers before usvg keeps them:
+/// sides past the decode limit, or a decode past the document's byte bound,
+/// are dropped. Together they decode within the bound (see
+/// [`crate::svg_nested_rasters`]).
 #[test]
 fn nested_raster_images_are_bounded_by_their_headers() {
     use crate::image_decode::{declared_png, solid_png};
-    let nested = |body: String| images(&parse(format!("{OPEN}{body}</svg>").as_bytes()).unwrap());
+    let parsed = |body: String| parse(format!("{OPEN}{body}</svg>").as_bytes()).unwrap();
     let declared = |side: u32| nesting("image/png", &declared_png(side));
-    assert_eq!(nested(declared(65_536)), 0, "a side past the decode limit");
+    assert_eq!(
+        images(&parsed(declared(65_536))),
+        0,
+        "a side past the limit"
+    );
+    assert_eq!(images(&parsed(declared(4096))), 0, "64 MiB, past the bound");
     // Each 2048² image decodes to half the bound; equal bodies share one.
     let image = |grey: u8| nesting("image/png", &solid_png(2048, 2048, [grey, grey, grey, 255]));
-    assert_eq!(nested(format!("{}{}{}", image(0), image(1), image(2))), 2);
-    assert_eq!(nested(image(0).repeat(3)), 3);
+    let distinct = parsed(format!("{}{}{}", image(0), image(1), image(2)));
+    assert_eq!(
+        distinct.nested_rasters().decoded_bytes(),
+        2 * 2048 * 2048 * 4
+    );
+    let equal = parsed(image(0).repeat(3));
+    assert_eq!(equal.nested_rasters().decoded_bytes(), 2048 * 2048 * 4);
 }
 
 #[test]
