@@ -134,15 +134,53 @@ fn a_float_placed_below_a_line_leaves_the_line_free_to_move() {
 }
 
 #[test]
-fn a_lone_word_whose_space_hangs_past_a_float_moves_below_it_unlike_chrome() {
-    // Known difference (SUB-1574): "wwwwwwwwii" fits the 100px beside the
-    // float with its space hanging, so Chrome keeps it there (lines at 0
-    // and 60). Parley's line breaks report no hanging advance, so a line of
-    // one segment that overflows only by its space moves below the float.
+fn a_lone_word_whose_space_hangs_past_a_float_stays_beside_it() {
+    // "wwwwwwwwii" fits the 100px beside the float with its space hanging
+    // past it, so Chrome 154 keeps it there: lines at 0 and 60.
     let doc = laid_out(
-        "<div style='width:150px'><span style='float:left;width:50px;height:60px'></span>\
+        "<div style='width:150px;font-family:Arial'><span style='float:left;width:50px;height:60px'></span>\
          wwwwwwwwii nextwordthatdoesnotfit</div>",
     );
     let lines = line_boxes(&doc, "div");
-    assert_eq!(lines[0].0, 60.0, "{lines:?}");
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0].0, 0.0, "{lines:?}");
+    assert_eq!(lines[1].0, 60.0, "{lines:?}");
+}
+
+#[test]
+fn an_unbreakable_run_whose_space_hangs_past_a_float_stays_beside_it() {
+    // A line of one break segment longer than a word: the no-wrap run fits
+    // beside the float with the space after it hanging, so Chrome 154 keeps
+    // it there and "five" follows on the next line beside the float (tops 0
+    // and 18). In 145px the run does not fit, and both move below the float.
+    for (width, beside) in [(150, true), (160, true), (145, false)] {
+        let doc = laid_out(&format!(
+            "<div style='width:{width}px;font-family:Arial'>\
+             <span style='float:left;width:50px;height:60px'></span>\
+             <span style='white-space:nowrap'>two three four</span> five</div>"
+        ));
+        let lines = line_boxes(&doc, "div");
+        if beside {
+            assert_eq!(lines.len(), 2, "{width}: {lines:?}");
+            assert_eq!(lines[0].0, 0.0, "{width}: {lines:?}");
+            assert_eq!(lines[1].0, lines[0].1, "{width}: {lines:?}");
+        } else {
+            assert_eq!(lines.len(), 1, "{width}: {lines:?}");
+            assert_eq!(lines[0].0, 60.0, "{width}: {lines:?}");
+        }
+    }
+}
+
+#[test]
+fn a_line_whose_preserved_spaces_overflow_beside_a_float_stays_beside_it() {
+    // Preserved spaces before the end of the paragraph hang only as far as
+    // they overflow (CSS Text 4 §4.3.2), so the line's content measures the
+    // 100px beside the float give or take rounding: Chrome 154 keeps it there.
+    let doc = laid_out(
+        "<div style='width:150px;font-family:Arial;white-space:pre-wrap'>\
+         <span style='float:left;width:50px;height:60px'></span>wwwwwwwwii      </div>",
+    );
+    let lines = line_boxes(&doc, "div");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].0, 0.0, "{lines:?}");
 }

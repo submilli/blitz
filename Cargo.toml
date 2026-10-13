@@ -108,7 +108,7 @@ taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "4863877b9cab21645b
     "calc",
     "detailed_layout_info",
 ] }
-parley = { git = "https://github.com/linebender/parley", rev = "6a9444f402b2c8698cf0c28dcd7ea8b469688f16", default-features = false, features = ["std"] }
+parley = { git = "https://github.com/submilli/parley", rev = "3345031380227bbb2130f0e47984c72708e8417a", default-features = false, features = ["std"] }
 skrifa = { version = "0.44", default-features = false, features = [
     "std",
 ] } # Should match parley and vello versions
@@ -318,6 +318,6 @@ rustc-hash = { workspace = true }
 # [patch."https://github.com/dioxuslabs/taffy"]
 # taffy = { path = "../taffy" }
 
-# [patch."https://github.com/linebender/parley"]
+# [patch."https://github.com/submilli/parley"]
 # parley = { path = "../parley/parley" }
 # fontique = { path = "../parley/fontique" }

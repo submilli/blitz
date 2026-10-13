@@ -125,6 +125,52 @@ fn steps_pass_many_empty_boxes_between_lines() {
 }
 
 #[test]
+fn a_wrapped_left_to_right_run_in_a_right_to_left_line_keeps_its_place() {
+    // UAX #9 L1 gives the space ending each wrapped line the paragraph's
+    // direction, so it hangs at the line's left end and the words sit flush
+    // right. A line step keeps the caret's x there: Chrome 154 goes from
+    // offset 2 of the first line to offset 17 of the second, and back.
+    let doc = laid_out(
+        "<!doctype html><style>body{font-family:Arial;font-size:16px}</style>\
+         <div dir=rtl style='width:120px'>aaa bbb ccc ddd eee fff ggg hhh</div>",
+    );
+    let text = child(&doc, "div", 0);
+    for direction in [FORWARD, Direction::Right] {
+        assert_eq!(
+            carets(&doc, at(text, 2), &moves(direction, Granularity::Line, 1)),
+            [at(text, 17)]
+        );
+    }
+    assert_eq!(
+        carets(&doc, at(text, 17), &moves(BACKWARD, Granularity::Line, 1)),
+        [at(text, 2)]
+    );
+}
+
+#[test]
+fn a_wrapped_mixed_direction_right_to_left_line_ends_before_its_space() {
+    // The first line holds "אבג abc אבג" and the space after it, which
+    // takes the paragraph's direction (UAX #9 L1) and hangs: Chrome 154 ends
+    // the line before the space, at offset 11.
+    let doc = laid_out(
+        "<!doctype html><style>body{font-family:Arial;font-size:16px}</style>\
+         <div dir=rtl style='width:90px'>אבג abc אבג def אבג ghi</div>",
+    );
+    let text = child(&doc, "div", 0);
+    for offset in [2, 5, 9] {
+        assert_eq!(
+            carets(
+                &doc,
+                at(text, offset),
+                &moves(FORWARD, Granularity::LineBoundary, 1)
+            ),
+            [at(text, 11)],
+            "from {offset}"
+        );
+    }
+}
+
+#[test]
 fn right_and_left_by_line_and_paragraph_are_logical() {
     // Chrome 154 leaves `BidiVisualOrderCaretMovement` off: right is the
     // next line or paragraph and left the previous one, in any direction.

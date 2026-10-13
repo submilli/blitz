@@ -11,19 +11,10 @@ use caret_support::laid_out;
 use common::q;
 use std::collections::HashMap;
 
-/// Steps that still differ from Chrome, with ours:
-/// - Parley drops the collapsible space after an inline box that follows a
-///   forced break (`nestedIBwrap.zz`), and starts the next line with the
-///   space after an overflowing inline box (`ibWrap2`): submilli SUB-1574;
-/// - Chrome's step from before a `<select>` enters its user-agent shadow tree
-///   (`selectAfter.after.fn`): submilli SUB-1575.
-const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
-    ("c1/nestedIBwrap.zz.fl", "#bb:2"),
-    ("c1/nestedIBwrap.zz.bl", "#bb:0"),
-    ("c1/nestedIBwrap.zz.bn", "#aa :2"),
-    ("c5/ibWrap2.bb.bl", "# bb:0"),
-    ("r4a/selectAfter.after.fn", "#cc:2"),
-];
+/// Steps that still differ from Chrome, with ours: Chrome's step from before
+/// a `<select>` enters its user-agent shadow tree (`selectAfter.after.fn`):
+/// submilli SUB-1575.
+const KNOWN_DIFFERENCES: &[(&str, &str)] = &[("r4a/selectAfter.after.fn", "#cc:2")];
 
 #[test]
 fn steps_around_floats_match_chrome() {

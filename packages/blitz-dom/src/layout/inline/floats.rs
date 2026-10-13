@@ -2,7 +2,7 @@
 //! (CSS 2.1 §9.5.1), and the band of floats each line sits beside.
 
 use blitz_traits::node_id::NodeId;
-use parley::{BoxBreakData, BreakLines, BreakerState, Layout, LineBreakData, YieldData};
+use parley::{BoxBreakData, BreakerState, Layout, LineBreakData, YieldData};
 use std::collections::HashSet;
 use taffy::{
     BlockContext, BlockItemStyle as _, Clear, CoreStyle as _, Float, LayoutInput,
@@ -41,22 +41,15 @@ impl BaseDocument {
         state.set_layout_max_advance(container.width);
         let initial_slot = block_ctx.find_content_slot(0.0, Clear::None, None);
         floats.enter(state, &initial_slot, scale);
-        // The line is laid out again where it was, and stays there.
-        let mut keep_line = false;
 
         while let Some(yield_data) = breaker.break_next() {
             match yield_data {
                 YieldData::LineBreak(line) => {
                     let max_advance = breaker.state().line_max_advance();
-                    if !std::mem::take(&mut keep_line)
-                        && let Some(lower) = floats.slot_below(block_ctx, &line, max_advance, scale)
+                    if let Some(lower) = floats.slot_below(block_ctx, &line, max_advance, scale)
                         && breaker.revert()
                     {
-                        if holds_more_than_first_segment(&mut breaker, line.advance) {
-                            keep_line = true;
-                        } else {
-                            floats.retry_in(breaker.state_mut(), &lower, scale);
-                        }
+                        floats.retry_in(breaker.state_mut(), &lower, scale);
                         continue;
                     }
                     let state = breaker.state_mut();
@@ -235,7 +228,7 @@ impl LineFloats {
         scale: f32,
     ) -> Option<taffy::ContentSlot> {
         let segment = self.segment?;
-        if line.advance <= max_advance || self.after_content {
+        if content_fits(line, max_advance) || self.after_content {
             return None;
         }
         let min_y = line.line_y_start as f32 / scale;
@@ -296,24 +289,12 @@ impl LineFloats {
     }
 }
 
-/// Whether the line the breaker just reverted holds more than its first
-/// segment, measured by breaking that segment alone. Parley appends a later
-/// segment only when it fits with its trailing white space hanging, so such
-/// a line fits beside the floats however far that white space reaches; only
-/// a first segment can overflow them.
-fn holds_more_than_first_segment(breaker: &mut BreakLines<'_, TextBrush>, advance: f32) -> bool {
-    let start = breaker.state().clone();
-    breaker.state_mut().set_line_max_advance(0.0);
-    let first = loop {
-        match breaker.break_next() {
-            Some(YieldData::LineBreak(line)) => break Some(line.advance),
-            Some(YieldData::InlineBoxBreak(float_break)) => breaker
-                .state_mut()
-                .append_inline_box_to_line(float_break.advance, 0.0, 0.0, true),
-            Some(YieldData::MaxHeightExceeded(_)) => {}
-            None => break None,
-        }
-    };
-    breaker.revert_to(start);
-    first.is_some_and(|first| first < advance)
+/// Whether `line`'s content fits in `max_advance`. White space hanging past
+/// the line's end may overflow the floats (CSS Text 4 §4.3.2). Preserved
+/// white space at a forced break hangs only by its overflow, so the content
+/// can measure `max_advance` give or take rounding: a relative tolerance far
+/// below a pixel keeps such a line beside the floats.
+fn content_fits(line: &LineBreakData, max_advance: f32) -> bool {
+    let content = line.advance - line.hanging_advance;
+    content - max_advance <= max_advance.abs().max(1.0) * 1e-5
 }

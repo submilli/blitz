@@ -436,7 +436,10 @@ impl BaseDocument {
                         let hanging = f64::from(line_metrics.hanging_advance);
                         let line_start = f64::from(line_metrics.offset);
                         let line_end = line_start + f64::from(line_metrics.advance);
-                        let (visible_start, visible_end) = if run.is_rtl() {
+                        // White space hangs at the line's end edge, which is
+                        // the paragraph's (UAX #9 L1), whatever the run's
+                        // direction.
+                        let (visible_start, visible_end) = if layout.is_rtl() {
                             (line_start + hanging, line_end)
                         } else {
                             (line_start, line_end - hanging)

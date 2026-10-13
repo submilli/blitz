@@ -331,8 +331,12 @@ fn float_item(
 
 /// Collapsible white space ending a soft-wrapped line hangs outside the
 /// line's items, though it stays in the text content.
+///
+/// The space ends the line logically, and `items` are in visual order: a
+/// right-to-left line's trailing space takes the paragraph's direction
+/// (UAX #9 L1), so it is its leftmost item even after left-to-right text.
 fn drop_hanging_space(items: &mut Vec<Item>, mapping: &Mapping) {
-    while let Some(index) = items.iter().rposition(Item::is_leaf) {
+    while let Some(index) = logically_last_leaf(items) {
         let item = &mut items[index];
         if !matches!(
             item.kind,
@@ -367,6 +371,17 @@ fn drop_hanging_space(items: &mut Vec<Item>, mapping: &Mapping) {
             }
         }
     }
+}
+
+/// The index of the leaf of `items` that ends last in the content, a text
+/// item before an atomic one ending at the same offset.
+fn logically_last_leaf(items: &[Item]) -> Option<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.is_leaf())
+        .max_by_key(|(_, item)| (item.content.end, matches!(item.kind, ItemKind::Text { .. })))
+        .map(|(index, _)| index)
 }
 
 /// A forced break Parley positioned no cluster for still ends its line.
