@@ -817,7 +817,7 @@ impl BaseDocument {
 }
 
 /// The scaled height of the inline content: to the bottom of its last line box.
-fn content_height(layout: &parley::Layout<crate::node::TextBrush>) -> f32 {
+pub(super) fn content_height(layout: &parley::Layout<crate::node::TextBrush>) -> f32 {
     let mut height = layout.height();
 
     // A forced line break (e.g. `<br>` or a preserved newline) at the end of the inline

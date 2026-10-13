@@ -43,6 +43,9 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("pmargin", "23x47.67+0+-0.33 7x15+8+16"),
     ("blockmargin", "7x35+0+0 7x15+0+10"),
     ("floatline", "32x46+0+0 8x40+8+3 7.42x15+16.3+3"),
+    ("pctauto", "23x21+0+0 7x15+8+3"),
+    ("negpct", "24x80+0+0 8x37+8+34 8x5+8+41"),
+    ("floatpct", "23x80+0+0 5x60+8+10 7x18.5+8+10"),
     // Parley also rounds a tall inline box's extents, so the line sits half
     // a pixel lower (submilli SUB-1677).
     ("tall", "23x60+0+0.5 6.67x15+8.17+23"),
@@ -50,6 +53,12 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("alignend", "23x60+0+0.5 6.67x15+8.17+23"),
     ("inputtall", "23x60+0+0.5"),
     ("tallmargin", "23x60+0+0.5 7x15+8+23"),
+    ("pcthalf", "23x60+0+0.5 7x27+8+17"),
+    ("pctinline", "23x60+0+0.5 7x27+8+17"),
+    ("relpct", "23x80+0+0.25 7x18.5+8+41"),
+    ("rel", "23x80+0+0.5 7x15+8+53"),
+    ("nonepct", "23x80+0+0.5 7x37+8+22 0x0+-8+-8"),
+    ("collapsepct", "23x80+0+0.5 7x37+8+17 7x0+8+64"),
     // A line holding only atomic inlines has no strut (submilli SUB-1677).
     ("empty", "16x6+0+0"),
     ("img", "34x13+0+0"),
@@ -61,6 +70,10 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     // first item's (submilli SUB-1677).
     ("flexbase", "17.8x17+0+46 23x60+17.8+0 7x54+25.8+3"),
     ("gridbase", "17.8x17+0+46 23x60+17.8+0 7x54+25.8+3"),
+    // Percentages inside the anonymous blocks that wrap inline content
+    // beside blocks do not skip them (submilli SUB-1698).
+    ("anonpct", "24x80+0+0.5 8x15+8+33 7x15+8.5+48"),
+    ("anondiv", "784x18+0+18 8x18+0+36"),
     // Vertical writing modes (submilli SUB-1678).
     ("vertical", "60x21+0+0 6.67x15+26.67+3"),
 ];
@@ -231,6 +244,33 @@ fn content_keeps_its_margins_and_floats() {
     assert_eq!((button.1, span.0 - button.0), (41.0, 13.0));
     let doc = page("<button><span style='float:left;display:block;height:40px'>a</span>b</button>");
     assert_eq!(block_extent(&doc, "button").1, 46.0);
+}
+
+#[test]
+fn content_resolves_percentages_against_the_button() {
+    // Percentages skip the anonymous content box: a 100% block fills a
+    // 20px button's 14px content box, and a 50% block or inline-block is
+    // 27px of a 60px button's 54px, centered 13.5px down, as in Chrome. With
+    // an auto height the percentage is auto.
+    let doc = page(
+        "<button style='box-sizing:border-box;width:40px;height:20px'>\
+         <span style='display:block;width:100%;height:100%'>child-only-label</span></button>",
+    );
+    let (button, span) = (block_extent(&doc, "button"), block_extent(&doc, "span"));
+    assert_eq!((span.0 - button.0, span.1), (3.0, 14.0));
+    for display in ["block", "inline-block"] {
+        let doc = page(&format!(
+            "<button style='height:60px'><span style='display:{display};height:50%'>x</span></button>"
+        ));
+        let (button, span) = (block_extent(&doc, "button"), block_extent(&doc, "span"));
+        assert_eq!(span.1, 27.0, "{display}");
+        assert!(
+            (span.0 - button.0 - 16.5).abs() <= 0.5,
+            "{display}: {span:?}"
+        );
+    }
+    let doc = page("<button><span style='display:block;height:50%'>x</span></button>");
+    assert_eq!(block_extent(&doc, "span").1, 15.0);
 }
 
 #[test]

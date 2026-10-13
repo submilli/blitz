@@ -490,6 +490,10 @@ impl BaseDocument {
                     return output;
                 }
 
+                if button::is_content_box(node) {
+                    return button::compute_content_box_layout(self, node_id, inputs);
+                }
+
                 if node.flags.is_inline_root() {
                     return self.compute_inline_layout(dom_node_id(node_id), inputs, block_ctx);
                 }

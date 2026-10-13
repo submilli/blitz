@@ -1,6 +1,6 @@
 # Button layout in Chrome 154 (macOS): key, HTML, then the border box (WxH+X+Y from the first div)
 # of each button, input, span and i, in document order.
-# Probes: submilli-browser docs/reconstruction/probes/SUB-1576 (cases/style.tsv and contain.tsv, with chrome/ results).
+# Probes: submilli-browser docs/reconstruction/probes/SUB-1576 (cases/style.tsv, contain.tsv and anonymous.tsv, with chrome/ results).
 x	<div><button>x</button></div>	22.67x21+0+0
 empty	<div><button></button></div>	16x6+0+11
 long	<div><button>a much longer label</button></div>	132.34x21+0+0
@@ -49,3 +49,15 @@ floatline	<div><button><span style="float:left;display:block;height:40px">a</spa
 tallmargin	<div><button style="height:60px"><span style="display:block;margin:5px 0">x</span></button></div>	22.67x60+0+0	6.67x15+8+22.5
 flexbase	<div style="font:16px Arial"><span>ab</span><button style="display:inline-flex;height:60px"><i>x</i></button></div>	17.8x17+0+1	22.67x60+17.8+0	6.67x54+25.8+3
 gridbase	<div style="font:16px Arial"><span>ab</span><button style="display:inline-grid;height:60px"><i>x</i></button></div>	17.8x17+0+1	22.67x60+17.8+0	6.67x54+25.8+3
+pct	<div><button style='box-sizing:border-box;width:40px;height:20px'><span style='display:block;width:100%;height:100%'>child-only-label</span></button></div>	40x20+0+0	24x14+8+3
+pcthalf	<div><button style='height:60px'><span style='display:block;height:50%'>x</span></button></div>	22.67x60+0+0	6.67x27+8+16.5
+pctinline	<div><button style='height:60px'><span style='display:inline-block;height:50%'>x</span></button></div>	22.67x60+0+0	6.67x27+8+16.5
+pctauto	<div><button><span style='display:block;height:50%'>x</span></button></div>	22.67x21+0+0	6.67x15+8+3
+relpct	<div><button style='height:80px'><span style='display:block;height:25%;position:relative;top:10px'>x</span></button></div>	22.67x80+0+0	6.67x18.5+8+40.75
+rel	<div><button style='height:80px'><span style='display:block;position:relative;top:20px'>x</span></button></div>	22.67x80+0+0	6.67x15+8+52.5
+negpct	<div><button style='height:80px'><i style='display:block;height:50%'>a</i><span style='display:block;margin-top:-30px;height:5px'>x</span></button></div>	23.42x80+0+0	7.42x37+8+34	7.42x5+8+41
+floatpct	<div><button style='height:80px'><i style='float:left;display:block;height:60px;width:5px'></i><span style='display:block;height:25%'>x</span></button></div>	22.67x80+0+0	5x60+8+10	6.67x18.5+8+10
+nonepct	<div><button style='height:80px'><span style='display:block;height:50%'>x</span><i style='display:none'></i></button></div>	22.67x80+0+0	6.67x37+8+21.5	0x0+-8+-8
+collapsepct	<div><button style='height:80px'><span style='display:block;height:50%'>x</span><i style='display:block;margin:10px 0'></i></button></div>	22.67x80+0+0	6.67x37+8+16.5	6.67x0+8+63.5
+anonpct	<div><button style='height:80px'>t<i style='display:block'>b</i><span style='display:inline-block;height:50%'>x</span></button></div>	23.42x80+0+0	7.42x15+8+21.5	6.67x37+8.38+36.5
+anondiv	<div style='height:80px'>t<i style='display:block'>b</i><span style='display:inline-block;height:50%'>x</span></div>	784x18+0+18	8x40+0+36
