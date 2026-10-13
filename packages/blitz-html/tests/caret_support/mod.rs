@@ -2,6 +2,8 @@
 // Each test target uses a subset of the helpers.
 #![allow(dead_code)]
 
+pub mod recorded;
+
 pub use crate::common::laid_out;
 use crate::common::q;
 use blitz_dom::caret::{Alter, CaretMemory, Direction, Granularity, ModifyRequest};

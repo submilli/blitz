@@ -4,6 +4,7 @@ mod box_shadow;
 mod clip_path;
 mod form_controls;
 mod mask;
+pub(crate) mod select;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -346,6 +347,9 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             .element_data()
             .and_then(|el| el.text_input_data())
             .is_some();
+        let is_select = node
+            .element_data()
+            .is_some_and(|el| el.is_laid_out_select());
         // The root element's overflow is propagated to the viewport (which is clipped by the
         // window/surface bounds), so the root element must not clip its own overflow.
         let is_root_element = self.root_element_id == Some(node_id);
@@ -353,6 +357,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             && (is_image
                 || is_sub_doc
                 || is_text_input
+                || is_select
                 || contain_paint
                 || !matches!(overflow_x, Overflow::Visible)
                 || !matches!(overflow_y, Overflow::Visible));
@@ -560,6 +565,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                                 cx.draw_custom_widget(scene);
                                 cx.draw_sub_document(scene);
                                 cx.draw_input(scene);
+                                cx.draw_select(scene, content_position);
                                 cx.draw_text_input_text(scene, content_position);
                                 cx.draw_inline_layout(scene, content_position);
                                 cx.draw_marker(scene, content_position);

@@ -1,0 +1,86 @@
+# Selection.modify steps at <select> controls, recorded in Chrome 154 (macOS):
+# key, HTML, child path from body, offset, steps, Chrome's selection after each step.
+# Probes: submilli-browser docs/reconstruction/probes/SUB-1575 (cases/caret*.tsv).
+dd.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	1	1	forward:line	#cc:2
+dd.fn2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	1	1	forward:line;forward:line	#cc:2 | #cc:2
+dd.bn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	2,0	1	backward:line	#aa:1
+dd.bn2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	2,0	1	backward:line;backward:line	#aa:1 | #aa:0
+dd.after.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p><p>cc</p>	1,2	1	forward:line	#cc:2
+dd.after.bn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p><p>cc</p>	1,2	1	backward:line	#aa:0
+dd.a0.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	1,0	0	forward:line	#cc:0
+dd.a2.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	1,0	2	forward:line	#cc:2
+dd.p2.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	1	2	forward:line	#cc:2
+dd.only.fn	<style>body{font-family:Arial;font-size:16px}</style><p><select><option>o</option></select></p><p>cc</p>	1	0	forward:line	P:0
+dd.only.bn	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p>	2	0	backward:line	#zz:0
+dd.zz.fn	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p>	1,0	1	forward:line	P:0
+dd.zz.fn2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line	P:0 | P:0
+dd.cc.bn	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	3,0	1	backward:line;backward:line	P:0 | #zz:1
+dd.mid.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p><p>cc</p>	1,0	1	forward:line;forward:line	#cc:1 | #cc:2
+dd.fl	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p>	1,0	1	forward:lineboundary	#bb:2
+dd.bl	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p>	1,2	1	backward:lineboundary	#aa:0
+dd.fc	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p>	1,0	2	forward:character;forward:character	P:2 | #bb:1
+dd.bc	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p>	1,2	0	backward:character;backward:character	#aa:2 | #aa:1
+dd.fw	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p>	1,0	0	forward:word;forward:word	#aa:2 | P:1
+dd.ext	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	1,0	1	forward:line:extend	#aa:1..#cc:1
+dd.para	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select></p><p>cc</p>	1	1	forward:paragraph	#cc:2
+dd.wrap	<style>body{font-family:Arial;font-size:16px}</style><div style='width:40px'>aa <select><option>o</option></select> bb</div><p>cc</p>	1,0	1	forward:line;forward:line;forward:line	#aa :3 | # bb:2 | #cc:1
+dd.wrapb	<style>body{font-family:Arial;font-size:16px}</style><div style='width:40px'>aa <select><option>o</option></select> bb</div><p>cc</p>	2,0	1	backward:line;backward:line;backward:line	# bb:2 | #aa :3 | #aa :1
+lb.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select size=3><option>o</option><option>p</option></select></p><p>cc</p>	1	1	forward:line	#cc:2
+lb.fn2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select size=3><option>o</option><option>p</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line	#cc:1 | #cc:2
+lb.bn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2,0	1	backward:line;backward:line	#aa:1 | #aa:0
+lb.m.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select multiple><option>o</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line	#cc:1 | #cc:2
+lb.only.fn	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=2><option>o</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line	P:0 | SELECT:0
+lb.only.bn	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=2><option>o</option></select></p><p>cc</p>	3,0	1	backward:line;backward:line	P:0 | #zz:1
+og.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><optgroup label=g><option>o</option></optgroup></select></p><p>cc</p>	1	1	forward:line	#cc:2
+empty.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select></select></p><p>cc</p>	1	1	forward:line	#cc:2
+float.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<img style='float:left;width:10px;height:10px'><select><option>o</option></select></p><p>cc</p>	1	2	forward:line	P:2
+float.bn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<img style='float:left;width:10px;height:10px'><select><option>o</option></select></p><p>cc</p>	1	2	backward:line	P:2
+none.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select style='appearance:none'><option>o</option></select></p><p>cc</p>	1	1	forward:line	#cc:2
+block.fn	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select style='display:block'><option>o</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line	P:1 | P:1
+lb.zz.f4	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line;forward:line;forward:line	P:0 | SELECT:0 | SELECT:1 | #cc:1
+lb.p0.f3	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2	0	forward:line;forward:line;forward:line	SELECT:0 | SELECT:1 | #cc:0
+lb.cc.b4	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	3,0	1	backward:line;backward:line;backward:line;backward:line	P:0 | #zz:1 | #zz:0 | #zz:0
+lb.p1.b2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2	1	backward:line;backward:line	#zz:2 | #zz:0
+lb.s0.f2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2,0	0	forward:line;forward:line	SELECT:0 | SELECT:1
+lb.s0.b2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2,0	0	backward:line;backward:line	#zz:0 | #zz:0
+lb.s1.f1	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2,0	1	forward:line	#cc:0
+lb.o.f1	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2,0,0,0	0	forward:line	SELECT:1
+lb.fl	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2,0	0	forward:lineboundary	P:1
+lb.fc	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3><option>o</option><option>p</option></select></p><p>cc</p>	2,0	0	forward:character;forward:character	SELECT:0 | SELECT:0
+lb.m.zz.f3	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select multiple><option>o</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line;forward:line	P:0 | SELECT:0 | #cc:1
+dd.cc.b3	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	3,0	1	backward:line;backward:line;backward:line	P:0 | #zz:1 | #zz:0
+dd.p0.b2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	2	0	backward:line;backward:line	#zz:0 | #zz:0
+dd.p1.f2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	2	1	forward:line;forward:line	#cc:2 | #cc:2
+dd.p1.b2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	2	1	backward:line;backward:line	#zz:2 | #zz:0
+dd.two.f3	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select><select><option>q</option></select></p><p>cc</p>	1,0	1	forward:line;forward:line;forward:line	P:0 | P:0 | P:0
+dd.ib.f2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><span style='display:inline-block'><select><option>o</option></select></span></p><p>cc</p>	1,0	1	forward:line;forward:line	SPAN:0 | SPAN:0
+dd.s0.f	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	2,0	0	forward:line	P:0
+dd.o.f	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	2,0,0,0	0	forward:line	#o:0
+dd.text.fn	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p>x<select><option>o</option></select></p><p>cc</p>	2	1	forward:line;forward:line	#cc:1 | #cc:2
+dd.textb.fn	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select>x</p><p>cc</p>	2	0	forward:line;forward:line	P:0 | P:0
+dd.fw2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p>	1,0	0	forward:word;forward:word;forward:word;forward:word	#aa:2 | P:1 | P:1 | #aa:0
+dd.bw2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select><option>o</option></select>bb</p>	1,2	2	backward:word;backward:word;backward:word;backward:word	P:2 | P:1 | P:1 | #bb:2
+dd.fwsp	<style>body{font-family:Arial;font-size:16px}</style><p>aa <select><option>o</option></select> bb</p>	1,0	0	forward:word;forward:word;forward:word;forward:word	#aa :2 | P:1 | P:1 | #aa :0
+lb.fw2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<select size=2><option>o</option></select>bb</p>	1,0	0	forward:word;forward:word;forward:word	#aa:2 | SELECT:0 | SELECT:0
+inp.fw2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<input>bb</p>	1,0	0	forward:word;forward:word;forward:word	#aa:2 | P:2 | #bb:2
+img.fw2	<style>body{font-family:Arial;font-size:16px}</style><p>aa<img style='width:5px;height:5px'>bb</p>	1,0	0	forward:word;forward:word;forward:word	#aa:2 | P:2 | #bb:2
+lb.walk	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2	0	forward:line;forward:line;forward:line;backward:line;backward:line;backward:line;backward:line	SELECT:0 | SELECT:1 | SELECT:2 | SELECT:1 | SELECT:0 | P:0 | #zz:0
+lb.walk2	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2	0	forward:line;forward:line;forward:line;forward:line;backward:line;backward:line;backward:line;backward:line	SELECT:0 | SELECT:1 | SELECT:2 | #cc:0 | P:0 | #zz:0 | #zz:0 | #zz:0
+lb.s2.f	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2,0	2	forward:line	#cc:0
+lb.s2.b	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2,0	2	backward:line	SELECT:1
+lb.s3.b	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2,0	3	backward:line	#zz:2
+lb.s3.f	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2,0	3	forward:line	#cc:2
+lb.q.b	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2,0,2,0	0	backward:line;backward:line;backward:line	SELECT:1 | SELECT:0 | P:0
+lb.p.f	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2,0,1,0	1	forward:line;forward:line	SELECT:2 | #cc:1
+lb.ext	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option>o</option><option>p</option><option>q</option></select></p><p>cc</p>	2	0	forward:line:extend;forward:line:extend;forward:line:extend	P:0 | P:0 | P:0
+lb.empty	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=3></select></p><p>cc</p>	2	0	forward:line;forward:line	#cc:0 | #cc:2
+dd.empty	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select></select></p><p>cc</p>	2	0	forward:line;forward:line	#cc:0 | #cc:2
+dd.s1	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option><option>p</option></select></p><p>cc</p>	2,0	1	forward:line	SELECT:1
+dd.s2b	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option><option>p</option></select></p><p>cc</p>	2,0	2	backward:line	#zz:2
+dd.ext	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select><option>o</option></select></p><p>cc</p>	2	0	forward:line:extend;forward:line:extend	P:0 | P:0
+lb.og	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><optgroup label=g><option>o</option></optgroup><option>p</option></select></p><p>cc</p>	2	0	forward:line;forward:line;forward:line;forward:line	SELECT:0 | OPTGROUP:0 | SELECT:1 | #cc:0
+lb.ws	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4> <option>o</option> <option>p</option> </select></p><p>cc</p>	2	0	forward:line;forward:line;forward:line	SELECT:1 | SELECT:3 | #cc:0
+lb.hid	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option hidden>o</option><option>p</option></select></p><p>cc</p>	2	0	forward:line;forward:line;forward:line	SELECT:1 | #cc:0 | #cc:2
+lb.emptyopt	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p><select size=4><option></option><option>p</option></select></p><p>cc</p>	2	0	forward:line;forward:line;forward:line	SELECT:1 | #cc:0 | #cc:2
+lb.x	<style>body{font-family:Arial;font-size:16px}</style><p>zz</p><p>wwwwwwwwww<select size=2><option>o</option><option>p</option></select></p><p>cccccccccccccccccccc</p>	2	1	forward:line;forward:line;forward:line	#cccccccccccccccccccc:14 | #cccccccccccccccccccc:20 | #cccccccccccccccccccc:20
+lb.x2	<style>body{font-family:Arial;font-size:16px}</style><p>zzzzzzzzzzzzzzzzzzzzzzz</p><p>wwwwwwwwww<select size=2><option>o</option><option>p</option></select></p><p>cccccccccccccccccccc</p>	1,0	14	forward:line;forward:line;forward:line;forward:line	#wwwwwwwwww:10 | #cccccccccccccccccccc:14 | #cccccccccccccccccccc:20 | #cccccccccccccccccccc:20

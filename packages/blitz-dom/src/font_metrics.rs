@@ -17,6 +17,15 @@ fn query_for_font_styles<'a>(
     font_ctx: &'a mut FontContext,
     font_styles: &'a FontStyles,
 ) -> parley::fontique::Query<'a> {
+    query_for_font_styles_then(font_ctx, font_styles, None)
+}
+
+/// Query fontique for the fonts matching `font_styles`, then `fallback`.
+fn query_for_font_styles_then<'a>(
+    font_ctx: &'a mut FontContext,
+    font_styles: &'a FontStyles,
+    fallback: Option<parley::GenericFamily>,
+) -> parley::fontique::Query<'a> {
     use parley::fontique::Attributes;
 
     let mut query = font_ctx.collection.query(&mut font_ctx.source_cache);
@@ -24,7 +33,8 @@ fn query_for_font_styles<'a>(
         .font_family
         .families
         .iter()
-        .map(stylo_to_parley::query_font_family);
+        .map(stylo_to_parley::query_font_family)
+        .chain(fallback.map(parley::fontique::QueryFamily::Generic));
     query.set_families(families);
     query.set_attributes(Attributes {
         width: stylo_to_parley::font_width(font_styles.font_stretch),
@@ -36,15 +46,58 @@ fn query_for_font_styles<'a>(
 
 /// The used value of `line-height: normal` for the first available font matching
 /// `font_styles`: ascent + descent + line gap, at `font_size` (in CSS px).
-///
-/// Each metric is rounded to a whole device pixel (at `scale` device px per CSS px)
-/// before summing, matching Chromium and Parley's pixel-quantized line metrics.
 pub(crate) fn normal_line_height(
     font_ctx: &mut FontContext,
     font_styles: &FontStyles,
     font_size: f32,
     scale: f32,
 ) -> Option<f32> {
+    let metrics = first_available_font_metrics(font_ctx, font_styles, font_size, scale)?;
+    Some(metrics.ascent + metrics.descent + metrics.leading)
+}
+
+/// The vertical metrics of a font, in CSS px, each rounded to whole device
+/// pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct RoundedFontMetrics {
+    pub(crate) ascent: f32,
+    pub(crate) descent: f32,
+    pub(crate) leading: f32,
+}
+
+/// The ascent, descent and line gap of the first available font matching
+/// `font_styles`, at `font_size` (in CSS px).
+///
+/// Each metric is rounded to a whole device pixel (at `scale` device px per CSS px),
+/// matching Chromium and Parley's pixel-quantized line metrics.
+pub(crate) fn first_available_font_metrics(
+    font_ctx: &mut FontContext,
+    font_styles: &FontStyles,
+    font_size: f32,
+    scale: f32,
+) -> Option<RoundedFontMetrics> {
+    font_metrics_of_query(font_ctx, font_styles, None, font_size, scale)
+}
+
+/// As [`first_available_font_metrics`], falling back to the default
+/// sans-serif font when no family matches, as text shapes in it then.
+pub(crate) fn first_available_or_fallback_font_metrics(
+    font_ctx: &mut FontContext,
+    font_styles: &FontStyles,
+    font_size: f32,
+    scale: f32,
+) -> Option<RoundedFontMetrics> {
+    let fallback = Some(parley::GenericFamily::SansSerif);
+    font_metrics_of_query(font_ctx, font_styles, fallback, font_size, scale)
+}
+
+fn font_metrics_of_query(
+    font_ctx: &mut FontContext,
+    font_styles: &FontStyles,
+    fallback: Option<parley::GenericFamily>,
+    font_size: f32,
+    scale: f32,
+) -> Option<RoundedFontMetrics> {
     use parley::fontique::{QueryFont, QueryStatus};
     use skrifa::instance::{LocationRef, Size};
     use skrifa::metrics::Metrics;
@@ -53,7 +106,7 @@ pub(crate) fn normal_line_height(
 
     // The "first available font" is the first font in the family list that contains
     // U+0020 (space). See https://drafts.csswg.org/css-fonts/#first-available-font
-    let mut query = query_for_font_styles(font_ctx, font_styles);
+    let mut query = query_for_font_styles_then(font_ctx, font_styles, fallback);
     let mut first_font: Option<QueryFont> = None;
     let mut font: Option<QueryFont> = None;
     query.matches_with(|q_font| {
@@ -82,8 +135,11 @@ pub(crate) fn normal_line_height(
         Size::new(font_size * scale),
         LocationRef::from(&location),
     );
-    let line_height = metrics.ascent.round() + (-metrics.descent).round() + metrics.leading.round();
-    Some(line_height / scale)
+    Some(RoundedFontMetrics {
+        ascent: metrics.ascent.round() / scale,
+        descent: (-metrics.descent).round() / scale,
+        leading: metrics.leading.round() / scale,
+    })
 }
 
 #[derive(Clone)]

@@ -323,6 +323,7 @@ impl BaseDocument {
             if is_out_of_flow || is_floated {
                 ibox.width = 0.0;
                 ibox.height = 0.0;
+                ibox.baseline = None;
             } else {
                 let output = self.compute_child_layout(taffy::NodeId::from(ibox.id), child_inputs);
                 ibox.width = (margin.left + margin.right + output.size.width) * scale;
@@ -333,6 +334,19 @@ impl BaseDocument {
                 // `MaxHeightExceeded` for this box forever without advancing.
                 ibox.height = ((margin.top + margin.bottom + output.size.height).max(0.0) * scale)
                     .min(f32::MAX);
+                // A drop-down select aligns its label's baseline, as Chrome's
+                // menu list does; other boxes sit on the baseline.
+                let is_select = self.nodes[NodeId::from_u64(ibox.id)]
+                    .element_data()
+                    .is_some_and(|element| element.is_laid_out_select());
+                // Kept within the box, finite like its height.
+                ibox.baseline = output
+                    .baselines
+                    .first
+                    .filter(|_| is_select)
+                    .map(|baseline| (margin.top + baseline) * scale)
+                    .filter(|baseline| baseline.is_finite())
+                    .map(|baseline| baseline.clamp(0.0, ibox.height));
             }
         }
 

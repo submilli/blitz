@@ -85,9 +85,25 @@ button {
     font-family: system-ui, sans-serif;
 }
 
-/* A drop-down select is an atomic inline-level control, as in Chrome. */
+/* A select is an atomic inline-level control, as in Chrome (html.css on
+ * macOS): it takes its own small font rather than inheriting text styles,
+ * and its border box holds its content's intrinsic size. */
 select {
     display: inline-block;
+    box-sizing: border-box;
+    font-size: 13.333333px;
+    font-style: normal;
+    font-weight: normal;
+    line-height: normal;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-transform: none;
+    text-indent: 0;
+    text-shadow: none;
+    text-align: start;
+    color: black;
+    background-color: white;
+    border: 1px solid #767676;
 }
 
 textarea {
@@ -151,6 +167,19 @@ legend {
 
 option {
     display: none;
+    font-weight: normal;
+    padding-block: 0 1px;
+    padding-inline: 2px;
+    white-space: nowrap;
+}
+
+/* A list box indents an option group's options. */
+optgroup > option {
+    padding-inline-start: 20px;
+}
+
+optgroup {
+    font-weight: bolder;
 }
 
 picture {

@@ -95,6 +95,12 @@ impl BaseDocument {
             );
         damage_from_children.remove(REORDER_CHILDREN);
         damage |= damage_from_children;
+        // A select is laid out from its options and their styles, so any
+        // change among them rebuilds it; like a reorder, only its own box.
+        let select_changed = !damage_from_children.is_empty()
+            && self.nodes[node_id]
+                .element_data()
+                .is_some_and(|element| element.is_laid_out_select());
 
         let node = &mut self.nodes[node_id];
 
@@ -108,7 +114,7 @@ impl BaseDocument {
         // Compute damage to propagate to parent
         let mut damage_for_parent = damage; // & RestyleDamage::RELAYOUT;
 
-        if reorder {
+        if reorder || select_changed {
             damage.insert(CONSTRUCT_BOX);
             damage_for_parent.insert(CONSTRUCT_DESCENDENT);
         }
@@ -399,6 +405,10 @@ impl BaseDocument {
                 } else {
                     node.insert_damage(ALL_DAMAGE);
                 }
+            } else if element.is_laid_out_select() {
+                // A select's labels are shaped at the scale and in the fonts
+                // of its construction.
+                node.insert_damage(ALL_DAMAGE);
             } else if let Some(input) = element.text_input_data_mut() {
                 input.editor.set_scale(scale);
                 let mut font_ctx = font_ctx.lock().unwrap();

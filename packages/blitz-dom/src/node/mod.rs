@@ -9,6 +9,7 @@ mod edit;
 mod element;
 mod node;
 pub(crate) mod scrollbar;
+mod select;
 mod stylo_data;
 #[cfg(feature = "svg")]
 mod svg;
@@ -27,6 +28,7 @@ pub use element::{
 pub(crate) use element::{FormControlState, ScriptState};
 pub use node::*;
 pub use scrollbar::{ScrollbarColor, ScrollbarRef, ScrollbarWidth};
+pub use select::{DropDownLayout, ListBoxLayout, ListBoxRowLayout, SelectContent, SelectLayout};
 pub use stylo_data::ComputedStyleRef;
 #[cfg(feature = "svg")]
 pub(crate) use svg::SvgParseCollectors;

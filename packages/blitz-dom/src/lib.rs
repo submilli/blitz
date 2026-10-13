@@ -136,6 +136,7 @@ mod option_state;
 mod output_state;
 mod reclamation;
 mod resource_roots;
+mod select;
 #[cfg(feature = "svg")]
 mod svg_bounds;
 #[cfg(feature = "svg")]

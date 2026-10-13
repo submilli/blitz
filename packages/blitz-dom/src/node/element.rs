@@ -128,6 +128,9 @@ pub struct ElementData {
     /// does not exclude inline_layout_data
     pub list_item_data: Option<Box<ListItemLayout>>,
 
+    /// What a \<select\> shows, laid out (selects only)
+    pub select_layout: Option<Box<super::SelectLayout>>,
+
     /// The element's template contents (\<template\> elements only)
     pub template_contents: Option<NodeId>,
 
@@ -342,6 +345,7 @@ impl std::fmt::Debug for ElementData {
             .field("mask_images", &self.mask_images)
             .field("inline_layout_data", &self.inline_layout_data)
             .field("list_item_data", &self.list_item_data)
+            .field("select_layout", &self.select_layout)
             .field("template_contents", &self.template_contents)
             .field("element_state", &self.element_state)
             .field("display_constructed_as", &self.display_constructed_as)
@@ -369,6 +373,8 @@ impl Clone for ElementData {
             mask_images: self.mask_images.clone(),
             inline_layout_data: self.inline_layout_data.clone(),
             list_item_data: self.list_item_data.clone(),
+            // A clone's content is laid out when its box is constructed.
+            select_layout: None,
             template_contents: self.template_contents,
             // A clone gets no shadow root (it is not cloned with the element).
             shadow_root: None,
@@ -508,6 +514,7 @@ impl ElementData {
             style_attribute: Default::default(),
             inline_layout_data: None,
             list_item_data: None,
+            select_layout: None,
             special_data: SpecialElementData::None,
             stylesheet_origin_clean: false,
             shadow_root: None,
@@ -928,6 +935,12 @@ impl ElementData {
             .unwrap_or_default();
         self.special_data = SpecialElementData::None;
         resource_ids
+    }
+
+    /// Whether this is a `<select>` laid out as a control, from its own
+    /// content rather than its children.
+    pub fn is_laid_out_select(&self) -> bool {
+        self.select_layout.is_some()
     }
 
     pub fn take_inline_layout(&mut self) -> Option<Box<TextLayout>> {

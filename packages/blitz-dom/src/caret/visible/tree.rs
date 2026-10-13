@@ -277,6 +277,18 @@ impl<'a> Tree<'a> {
         }
     }
 
+    /// An `<option>` or `<optgroup>` of a select: a list box row. Chrome
+    /// reports the point before one in its parent, as for an opaque node.
+    pub(super) fn is_select_row_element(&self, id: NodeId) -> bool {
+        let is_row = self.node(id).element_data().is_some_and(|element| {
+            matches!(
+                element.name.local,
+                local_name!("option") | local_name!("optgroup")
+            )
+        });
+        is_row && self.doc().option_select(id).is_some()
+    }
+
     /// Form controls contain their own selection (`IsUserSelectContain`).
     pub(super) fn is_user_select_contain(&self, id: NodeId) -> bool {
         self.node(id).element_data().is_some_and(|element| {

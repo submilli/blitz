@@ -20,6 +20,7 @@ mod line;
 mod modify;
 mod paragraph;
 mod position;
+mod select;
 mod selection;
 mod shadow;
 mod text;

@@ -1,0 +1,158 @@
+# <select> border boxes in Chrome 154 (macOS): key, HTML, the first select's width x height.
+# Probes: submilli-browser docs/reconstruction/probes/SUB-1575 (cases/{sizes,more,sweep,sweep2}.tsv).
+o	<div><select><option>o</option></select></div>	30x19
+one	<div><select><option>one</option></select></div>	45x19
+empty	<div><select></select></div>	22x19
+emptyopt	<div><select><option></option></select></div>	22x19
+long	<div><select><option>a much longer label</option></select></div>	139x19
+longsel	<div><select><option>o</option><option>a much longer label</option></select></div>	139x19
+longsel2	<div><select><option>a much longer label</option><option selected>o</option></select></div>	139x19
+arial16	<div style='font-family:Arial;font-size:16px'><select><option>o</option></select><span>o</span></div>	30x19
+corpus	<div style='font-family:Arial;font-size:16px'><p>aa<img style='float:left;width:10px;height:10px'><select><option>o</option></select></p><p>cc</p></div>	30x19
+setfont	<div><select style='font-family:Arial;font-size:16px'><option>o</option></select><span style='font-family:Arial;font-size:16px'>o</span></div>	31x21
+setfont20	<div><select style='font-family:Arial;font-size:20px'><option>abc</option></select><span style='font-family:Arial;font-size:20px'>abc</span></div>	55x26
+arialsmall	<div><select style='font-family:Arial'><option>abc</option></select><span style='font-family:Arial;font-size:13.3333px'>abc</span></div>	44x19
+lh	<div><select style='font-family:Arial;line-height:40px'><option>abc</option></select></div>	44x19
+pad	<div><select style='font-family:Arial;padding:5px'><option>abc</option></select></div>	54x29
+none	<div><select style='font-family:Arial;appearance:none'><option>abc</option></select><span style='font-family:Arial;font-size:13.3333px'>abc</span></div>	24x17
+none16	<div><select style='font-family:Arial;font-size:16px;appearance:none'><option>abc</option></select></div>	28x19
+multi	<div><select multiple style='font-family:Arial'><option>abc</option><option>a much longer label</option></select><span style='font-family:Arial;font-size:13.3333px'>a much longer label</span></div>	137.34x70
+multi1	<div><select multiple style='font-family:Arial'><option>abc</option></select></div>	42.5x70
+multi0	<div><select multiple style='font-family:Arial'></select></div>	17x66
+multi6	<div><select multiple style='font-family:Arial'><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select></div>	28.42x70
+size3	<div><select size=3 style='font-family:Arial'><option>abc</option></select></div>	42.5x53
+size1	<div><select size=1 style='font-family:Arial'><option>abc</option></select></div>	44x19
+size1m	<div><select size=1 multiple style='font-family:Arial'><option>abc</option></select></div>	83x19
+size2	<div><select size=2 style='font-family:Arial'><option>abc</option></select></div>	42.5x36
+size0	<div><select size=0 style='font-family:Arial'><option>abc</option></select></div>	44x19
+sizebad	<div><select size=x style='font-family:Arial'><option>abc</option></select></div>	44x19
+size3_16	<div><select size=3 style='font-family:Arial;font-size:16px'><option>abc</option></select></div>	46.8x62.56
+size3_lh	<div><select size=3 style='font-family:Arial;line-height:30px'><option>abc</option></select></div>	42.5x53
+optgroup	<div><select style='font-family:Arial'><optgroup label='a very long group label'><option>abc</option></optgroup></select></div>	59x19
+optgrouplb	<div><select size=4 style='font-family:Arial'><optgroup label='grp'><option>abc</option><option>d</option></optgroup></select></div>	60.5x70
+hidden	<div><select style='font-family:Arial'><option hidden>a much longer label</option><option>abc</option></select></div>	139x19
+dispnone	<div><select style='font-family:Arial'><option style='display:none'>a much longer label</option><option>abc</option></select></div>	139x19
+labelattr	<div><select style='font-family:Arial'><option label='lab'>a much longer label</option></select></div>	40x19
+spaces	<div><select style='font-family:Arial'><option>  a   b  </option></select></div>	41x19
+width	<div><select style='font-family:Arial;width:200px'><option>abc</option></select></div>	200x19
+block	<div><select style='font-family:Arial;display:block'><option>abc</option></select></div>	44x19
+rtl	<div><select dir=rtl style='font-family:Arial'><option>abc</option></select></div>	44x19
+bbox	<div><select style='font-family:Arial;box-sizing:content-box'><option>abc</option></select></div>	44x19
+inline	<div style='font-family:Arial;font-size:16px'>x<select><option>abc</option></select>y</div>	44x19
+og_short	<div><select style='font-family:Arial'><optgroup label='x'><option>abc</option></optgroup></select></div>	59x19
+og_empty	<div><select style='font-family:Arial'><optgroup label=''><option>abc</option></optgroup></select></div>	59x19
+og_two	<div><select style='font-family:Arial'><option>abc</option><optgroup label='x'><option>abc</option></optgroup></select></div>	59x19
+og_o	<div><select style='font-family:Arial'><optgroup label='x'><option>o</option></optgroup></select></div>	45x19
+og_o16	<div><select style='font-family:Arial;font-size:16px'><optgroup label='x'><option>o</option></optgroup></select></div>	49x21
+lb_optlh	<style>option{line-height:30px}</style><div><select size=3 style='font-family:Arial'><option>abc</option></select></div>	42.5x53
+lb_optpad	<style>option{padding:5px}</style><div><select size=3 style='font-family:Arial'><option>abc</option></select></div>	48.5x80
+dd_optpad	<style>option{padding:5px}</style><div><select style='font-family:Arial'><option>abc</option></select></div>	44x19
+dd_optfont	<style>option{font-size:30px}</style><div><select style='font-family:Arial'><option>abc</option></select></div>	44x19
+lb_optfont	<style>option{font-size:30px}</style><div><select size=2 style='font-family:Arial'><option>abc</option><option>d</option></select></div>	69.38x76
+lb_pad	<div><select size=3 style='font-family:Arial;padding:5px'><option>abc</option></select></div>	52.5x63
+lb_empty3	<div><select size=3 style='font-family:Arial'></select></div>	17x50
+lb_empty16	<div><select size=3 style='font-family:Arial;font-size:16px'></select></div>	17x56
+lb_big	<div><select size=100000 style='font-family:Arial'><option>abc</option></select></div>	42.5x1700002
+lb_multisize2	<div><select size=2 multiple style='font-family:Arial'><option>abc</option></select></div>	42.5x36
+lb_hidden	<div><select size=3 style='font-family:Arial'><option hidden>a much longer label</option><option>abc</option></select></div>	42.5x53
+lb_width	<div><select size=3 style='font-family:Arial;width:100px'><option>abc</option></select></div>	100x53
+lb_height	<div><select size=3 style='font-family:Arial;height:100px'><option>abc</option></select></div>	42.5x100
+dd_height	<div><select style='font-family:Arial;height:40px'><option>abc</option></select></div>	44x40
+dd_ws	<div><select style='font-family:Arial'><option>&#9;a&#10;b&nbsp;</option></select></div>	45x19
+dd_ff	<div><select style='font-family:Times New Roman'><option>abc</option></select><span style='font-family:Times New Roman;font-size:13.3333px'>abc</span></div>	41x19
+dd_sys	<div><select style='font-family:system-ui'><option>abc</option></select></div>	45x20
+dd_bold	<div><select style='font-family:Arial;font-weight:bold'><option>abc</option></select><span style='font-family:Arial;font-weight:bold;font-size:13.3333px'>abc</span></div>	45x19
+dd_ls	<div><select style='font-family:Arial;letter-spacing:5px'><option>abc</option></select></div>	59x19
+dd_tt	<div><select style='font-family:Arial;text-transform:uppercase'><option>abc</option></select><span style='font-family:Arial;font-size:13.3333px'>ABC</span></div>	50x19
+dd_border	<div><select style='font-family:Arial;border:5px solid'><option>abc</option></select></div>	52x27
+dd_vertical	<div><select style='font-family:Arial;writing-mode:vertical-rl'><option>abc</option></select></div>	19x44
+dd_zoom	<div><select style='font-family:Arial;zoom:2'><option>abc</option></select></div>	87x38
+dd_nested	<div><select style='font-family:Arial'><option>a<b>bc</b></option></select></div>	44x19
+dd_script	<div><select style='font-family:Arial'><option>ab<script>x</script>c</option></select></div>	44x19
+dd_nonopt	<div><select style='font-family:Arial'>text<p>para</p><option>abc</option></select></div>	44x19
+dd_hr	<div><select style='font-family:Arial'><option>abc</option><hr></select></div>	44x19
+dd_baseline	<div style='font-family:Arial;font-size:16px'><span>x</span><select style='font-size:30px'><option>abc</option></select></div>	71x37
+lb_baseline	<div style='font-family:Arial;font-size:16px'><span>x</span><select size=3><option>abc</option></select></div>	42.5x53
+dd_baseline13	<div style='font-family:Arial;font-size:16px'><span>x</span><select><option>abc</option></select></div>	44x19
+f6	<div><select style='font-family:Arial;font-size:6px'></select><select style='font-family:Arial;font-size:6px;appearance:none'></select></div>	22x10
+f8	<div><select style='font-family:Arial;font-size:8px'></select><select style='font-family:Arial;font-size:8px;appearance:none'></select></div>	22x13
+f9	<div><select style='font-family:Arial;font-size:9px'></select><select style='font-family:Arial;font-size:9px;appearance:none'></select></div>	22x14
+f10	<div><select style='font-family:Arial;font-size:10px'></select><select style='font-family:Arial;font-size:10px;appearance:none'></select></div>	22x15
+f11	<div><select style='font-family:Arial;font-size:11px'></select><select style='font-family:Arial;font-size:11px;appearance:none'></select></div>	22x16
+f12	<div><select style='font-family:Arial;font-size:12px'></select><select style='font-family:Arial;font-size:12px;appearance:none'></select></div>	22x18
+f13	<div><select style='font-family:Arial;font-size:13px'></select><select style='font-family:Arial;font-size:13px;appearance:none'></select></div>	22x19
+f13.333333	<div><select style='font-family:Arial;font-size:13.333333px'></select><select style='font-family:Arial;font-size:13.333333px;appearance:none'></select></div>	22x19
+f14	<div><select style='font-family:Arial;font-size:14px'></select><select style='font-family:Arial;font-size:14px;appearance:none'></select></div>	22x20
+f15	<div><select style='font-family:Arial;font-size:15px'></select><select style='font-family:Arial;font-size:15px;appearance:none'></select></div>	22x21
+f16	<div><select style='font-family:Arial;font-size:16px'></select><select style='font-family:Arial;font-size:16px;appearance:none'></select></div>	22x21
+f17	<div><select style='font-family:Arial;font-size:17px'></select><select style='font-family:Arial;font-size:17px;appearance:none'></select></div>	22x23
+f18	<div><select style='font-family:Arial;font-size:18px'></select><select style='font-family:Arial;font-size:18px;appearance:none'></select></div>	22x24
+f19	<div><select style='font-family:Arial;font-size:19px'></select><select style='font-family:Arial;font-size:19px;appearance:none'></select></div>	22x25
+f20	<div><select style='font-family:Arial;font-size:20px'></select><select style='font-family:Arial;font-size:20px;appearance:none'></select></div>	22x26
+f21	<div><select style='font-family:Arial;font-size:21px'></select><select style='font-family:Arial;font-size:21px;appearance:none'></select></div>	22x27
+f22	<div><select style='font-family:Arial;font-size:22px'></select><select style='font-family:Arial;font-size:22px;appearance:none'></select></div>	22x29
+f23	<div><select style='font-family:Arial;font-size:23px'></select><select style='font-family:Arial;font-size:23px;appearance:none'></select></div>	22x30
+f24	<div><select style='font-family:Arial;font-size:24px'></select><select style='font-family:Arial;font-size:24px;appearance:none'></select></div>	22x31
+f25	<div><select style='font-family:Arial;font-size:25px'></select><select style='font-family:Arial;font-size:25px;appearance:none'></select></div>	22x32
+f26	<div><select style='font-family:Arial;font-size:26px'></select><select style='font-family:Arial;font-size:26px;appearance:none'></select></div>	22x34
+f27	<div><select style='font-family:Arial;font-size:27px'></select><select style='font-family:Arial;font-size:27px;appearance:none'></select></div>	22x34
+f28	<div><select style='font-family:Arial;font-size:28px'></select><select style='font-family:Arial;font-size:28px;appearance:none'></select></div>	22x35
+f29	<div><select style='font-family:Arial;font-size:29px'></select><select style='font-family:Arial;font-size:29px;appearance:none'></select></div>	22x36
+f30	<div><select style='font-family:Arial;font-size:30px'></select><select style='font-family:Arial;font-size:30px;appearance:none'></select></div>	22x37
+f32	<div><select style='font-family:Arial;font-size:32px'></select><select style='font-family:Arial;font-size:32px;appearance:none'></select></div>	22x40
+f34	<div><select style='font-family:Arial;font-size:34px'></select><select style='font-family:Arial;font-size:34px;appearance:none'></select></div>	22x42
+f36	<div><select style='font-family:Arial;font-size:36px'></select><select style='font-family:Arial;font-size:36px;appearance:none'></select></div>	22x45
+f40	<div><select style='font-family:Arial;font-size:40px'></select><select style='font-family:Arial;font-size:40px;appearance:none'></select></div>	22x48
+f48	<div><select style='font-family:Arial;font-size:48px'></select><select style='font-family:Arial;font-size:48px;appearance:none'></select></div>	22x57
+f60	<div><select style='font-family:Arial;font-size:60px'></select><select style='font-family:Arial;font-size:60px;appearance:none'></select></div>	22x71
+f8/o	<div style='font-family:Arial;font-size:8px;white-space:pre'><select style='font-family:Arial;font-size:8px'><option>o</option></select><span>o</span></div>	27x13
+f8/abc	<div style='font-family:Arial;font-size:8px;white-space:pre'><select style='font-family:Arial;font-size:8px'><option>abc</option></select><span>abc</span></div>	35x13
+f8/a much longer label	<div style='font-family:Arial;font-size:8px;white-space:pre'><select style='font-family:Arial;font-size:8px'><option>a much longer label</option></select><span>a much longer label</span></div>	92x13
+f10/o	<div style='font-family:Arial;font-size:10px;white-space:pre'><select style='font-family:Arial;font-size:10px'><option>o</option></select><span>o</span></div>	28x15
+f10/abc	<div style='font-family:Arial;font-size:10px;white-space:pre'><select style='font-family:Arial;font-size:10px'><option>abc</option></select><span>abc</span></div>	39x15
+f10/a much longer label	<div style='font-family:Arial;font-size:10px;white-space:pre'><select style='font-family:Arial;font-size:10px'><option>a much longer label</option></select><span>a much longer label</span></div>	110x15
+f12/o	<div style='font-family:Arial;font-size:12px;white-space:pre'><select style='font-family:Arial;font-size:12px'><option>o</option></select><span>o</span></div>	29x18
+f12/abc	<div style='font-family:Arial;font-size:12px;white-space:pre'><select style='font-family:Arial;font-size:12px'><option>abc</option></select><span>abc</span></div>	42x18
+f12/a much longer label	<div style='font-family:Arial;font-size:12px;white-space:pre'><select style='font-family:Arial;font-size:12px'><option>a much longer label</option></select><span>a much longer label</span></div>	127x18
+f13/o	<div style='font-family:Arial;font-size:13px;white-space:pre'><select style='font-family:Arial;font-size:13px'><option>o</option></select><span>o</span></div>	30x19
+f13/abc	<div style='font-family:Arial;font-size:13px;white-space:pre'><select style='font-family:Arial;font-size:13px'><option>abc</option></select><span>abc</span></div>	43x19
+f13/a much longer label	<div style='font-family:Arial;font-size:13px;white-space:pre'><select style='font-family:Arial;font-size:13px'><option>a much longer label</option></select><span>a much longer label</span></div>	136x19
+f13.333333/o	<div style='font-family:Arial;font-size:13.333333px;white-space:pre'><select style='font-family:Arial;font-size:13.333333px'><option>o</option></select><span>o</span></div>	30x19
+f13.333333/abc	<div style='font-family:Arial;font-size:13.333333px;white-space:pre'><select style='font-family:Arial;font-size:13.333333px'><option>abc</option></select><span>abc</span></div>	44x19
+f13.333333/a much longer label	<div style='font-family:Arial;font-size:13.333333px;white-space:pre'><select style='font-family:Arial;font-size:13.333333px'><option>a much longer label</option></select><span>a much longer label</span></div>	139x19
+f14/o	<div style='font-family:Arial;font-size:14px;white-space:pre'><select style='font-family:Arial;font-size:14px'><option>o</option></select><span>o</span></div>	30x20
+f14/abc	<div style='font-family:Arial;font-size:14px;white-space:pre'><select style='font-family:Arial;font-size:14px'><option>abc</option></select><span>abc</span></div>	45x20
+f14/a much longer label	<div style='font-family:Arial;font-size:14px;white-space:pre'><select style='font-family:Arial;font-size:14px'><option>a much longer label</option></select><span>a much longer label</span></div>	145x20
+f16/o	<div style='font-family:Arial;font-size:16px;white-space:pre'><select style='font-family:Arial;font-size:16px'><option>o</option></select><span>o</span></div>	31x21
+f16/abc	<div style='font-family:Arial;font-size:16px;white-space:pre'><select style='font-family:Arial;font-size:16px'><option>abc</option></select><span>abc</span></div>	48x21
+f16/a much longer label	<div style='font-family:Arial;font-size:16px;white-space:pre'><select style='font-family:Arial;font-size:16px'><option>a much longer label</option></select><span>a much longer label</span></div>	162x21
+f18/o	<div style='font-family:Arial;font-size:18px;white-space:pre'><select style='font-family:Arial;font-size:18px'><option>o</option></select><span>o</span></div>	33x24
+f18/abc	<div style='font-family:Arial;font-size:18px;white-space:pre'><select style='font-family:Arial;font-size:18px'><option>abc</option></select><span>abc</span></div>	52x24
+f18/a much longer label	<div style='font-family:Arial;font-size:18px;white-space:pre'><select style='font-family:Arial;font-size:18px'><option>a much longer label</option></select><span>a much longer label</span></div>	180x24
+f20/o	<div style='font-family:Arial;font-size:20px;white-space:pre'><select style='font-family:Arial;font-size:20px'><option>o</option></select><span>o</span></div>	34x26
+f20/abc	<div style='font-family:Arial;font-size:20px;white-space:pre'><select style='font-family:Arial;font-size:20px'><option>abc</option></select><span>abc</span></div>	55x26
+f20/a much longer label	<div style='font-family:Arial;font-size:20px;white-space:pre'><select style='font-family:Arial;font-size:20px'><option>a much longer label</option></select><span>a much longer label</span></div>	197x26
+f22/o	<div style='font-family:Arial;font-size:22px;white-space:pre'><select style='font-family:Arial;font-size:22px'><option>o</option></select><span>o</span></div>	35x29
+f22/abc	<div style='font-family:Arial;font-size:22px;white-space:pre'><select style='font-family:Arial;font-size:22px'><option>abc</option></select><span>abc</span></div>	58x29
+f22/a much longer label	<div style='font-family:Arial;font-size:22px;white-space:pre'><select style='font-family:Arial;font-size:22px'><option>a much longer label</option></select><span>a much longer label</span></div>	215x29
+f24/o	<div style='font-family:Arial;font-size:24px;white-space:pre'><select style='font-family:Arial;font-size:24px'><option>o</option></select><span>o</span></div>	36x31
+f24/abc	<div style='font-family:Arial;font-size:24px;white-space:pre'><select style='font-family:Arial;font-size:24px'><option>abc</option></select><span>abc</span></div>	61x31
+f24/a much longer label	<div style='font-family:Arial;font-size:24px;white-space:pre'><select style='font-family:Arial;font-size:24px'><option>a much longer label</option></select><span>a much longer label</span></div>	232x31
+f26/o	<div style='font-family:Arial;font-size:26px;white-space:pre'><select style='font-family:Arial;font-size:26px'><option>o</option></select><span>o</span></div>	37x34
+f26/abc	<div style='font-family:Arial;font-size:26px;white-space:pre'><select style='font-family:Arial;font-size:26px'><option>abc</option></select><span>abc</span></div>	64x34
+f26/a much longer label	<div style='font-family:Arial;font-size:26px;white-space:pre'><select style='font-family:Arial;font-size:26px'><option>a much longer label</option></select><span>a much longer label</span></div>	249x34
+f28/o	<div style='font-family:Arial;font-size:28px;white-space:pre'><select style='font-family:Arial;font-size:28px'><option>o</option></select><span>o</span></div>	38x35
+f28/abc	<div style='font-family:Arial;font-size:28px;white-space:pre'><select style='font-family:Arial;font-size:28px'><option>abc</option></select><span>abc</span></div>	68x35
+f28/a much longer label	<div style='font-family:Arial;font-size:28px;white-space:pre'><select style='font-family:Arial;font-size:28px'><option>a much longer label</option></select><span>a much longer label</span></div>	267x35
+f30/o	<div style='font-family:Arial;font-size:30px;white-space:pre'><select style='font-family:Arial;font-size:30px'><option>o</option></select><span>o</span></div>	39x37
+f30/abc	<div style='font-family:Arial;font-size:30px;white-space:pre'><select style='font-family:Arial;font-size:30px'><option>abc</option></select><span>abc</span></div>	71x37
+f30/a much longer label	<div style='font-family:Arial;font-size:30px;white-space:pre'><select style='font-family:Arial;font-size:30px'><option>a much longer label</option></select><span>a much longer label</span></div>	284x37
+f34/o	<div style='font-family:Arial;font-size:34px;white-space:pre'><select style='font-family:Arial;font-size:34px'><option>o</option></select><span>o</span></div>	41x42
+f34/abc	<div style='font-family:Arial;font-size:34px;white-space:pre'><select style='font-family:Arial;font-size:34px'><option>abc</option></select><span>abc</span></div>	77x42
+f34/a much longer label	<div style='font-family:Arial;font-size:34px;white-space:pre'><select style='font-family:Arial;font-size:34px'><option>a much longer label</option></select><span>a much longer label</span></div>	319x42
+f40/o	<div style='font-family:Arial;font-size:40px;white-space:pre'><select style='font-family:Arial;font-size:40px'><option>o</option></select><span>o</span></div>	45x48
+f40/abc	<div style='font-family:Arial;font-size:40px;white-space:pre'><select style='font-family:Arial;font-size:40px'><option>abc</option></select><span>abc</span></div>	87x48
+f40/a much longer label	<div style='font-family:Arial;font-size:40px;white-space:pre'><select style='font-family:Arial;font-size:40px'><option>a much longer label</option></select><span>a much longer label</span></div>	372x48
+f60/o	<div style='font-family:Arial;font-size:60px;white-space:pre'><select style='font-family:Arial;font-size:60px'><option>o</option></select><span>o</span></div>	56x71
+f60/abc	<div style='font-family:Arial;font-size:60px;white-space:pre'><select style='font-family:Arial;font-size:60px'><option>abc</option></select><span>abc</span></div>	119x71
+f60/a much longer label	<div style='font-family:Arial;font-size:60px;white-space:pre'><select style='font-family:Arial;font-size:60px'><option>a much longer label</option></select><span>a much longer label</span></div>	546x71

@@ -46,9 +46,9 @@ fn a_select_is_an_atomic_inline_box() {
     let select = q(&doc, "select");
     let boxes: Vec<_> = layout.layout.inline_boxes().iter().map(|b| b.id).collect();
     assert_eq!(boxes, [select.as_u64()]);
-    // As wide as its longest label and an arrow, one line tall: an
-    // approximation of Chrome's metrics (0.6em a character, a 1.5em arrow).
+    // Its own 13.333333px font, as wide as its longest label (the grouped
+    // one, indented) and its button part, one line tall: Chrome 154 gives
+    // 60x19 (`select_layout.rs` measures more).
     let size = doc.get_node(select).unwrap().final_layout().size;
-    assert_eq!(size.width, 3.0 * 20.0 * 0.6 + 20.0 * 1.5);
-    assert_eq!(size.height, 24.0);
+    assert_eq!((size.width, size.height), (60.0, 19.0));
 }

@@ -2,12 +2,22 @@
 //! readers never infer a selection or change defaults.
 //! https://html.spec.whatwg.org/multipage/form-elements.html#the-option-element
 
+use crate::select::SelectDisplay;
 use crate::{BaseDocument, DocumentMutator, NodeId};
 use markup5ever::{QualName, local_name, ns};
 use style_dom::ElementState;
 
+/// An option or option group of a select.
+pub(crate) struct SelectItem {
+    pub(crate) id: NodeId,
+    pub(crate) is_group: bool,
+    /// Disabled, or in a disabled group.
+    pub(crate) disabled: bool,
+}
+
 impl BaseDocument {
-    fn option_tag(&self, id: NodeId) -> Option<&str> {
+    /// An HTML element's local name.
+    pub(crate) fn option_tag(&self, id: NodeId) -> Option<&str> {
         let el = self.get_node(id)?.element_data()?;
         (el.name.ns == ns!(html)).then_some(&*el.name.local)
     }
@@ -57,9 +67,20 @@ impl BaseDocument {
             .collect()
     }
 
+    fn select_option_entries(&self, select: NodeId) -> Vec<(NodeId, bool)> {
+        self.select_items(select)
+            .into_iter()
+            .filter(|item| !item.is_group)
+            .map(|item| (item.id, item.disabled))
+            .collect()
+    }
+
+    /// A select's options and option groups in tree order. Options nest in
+    /// groups and other elements, but not in options, datalists, `<hr>`s or
+    /// other selects.
     // Carry optgroup disabledness once through the tree, rather than walking
     // the same deep ancestry separately for each option.
-    fn select_option_entries(&self, select: NodeId) -> Vec<(NodeId, bool)> {
+    pub(crate) fn select_items(&self, select: NodeId) -> Vec<SelectItem> {
         if self.option_tag(select) != Some("select") {
             return Vec::new();
         }
@@ -69,17 +90,23 @@ impl BaseDocument {
             .rev()
             .map(|&id| (id, false))
             .collect();
-        let mut options = Vec::new();
+        let mut items = Vec::new();
         while let Some((id, mut disabled)) = pending.pop() {
             match self.option_tag(id) {
-                Some("option") => options.push((
+                Some("option") => items.push(SelectItem {
                     id,
-                    disabled || self.null_attribute(id, "disabled").is_some(),
-                )),
+                    is_group: false,
+                    disabled: disabled || self.null_attribute(id, "disabled").is_some(),
+                }),
                 Some("select" | "datalist" | "hr") => {}
                 tag => {
                     if tag == Some("optgroup") {
                         disabled = self.null_attribute(id, "disabled").is_some();
+                        items.push(SelectItem {
+                            id,
+                            is_group: true,
+                            disabled,
+                        });
                     }
                     pending.extend(
                         self.nodes[id]
@@ -91,7 +118,7 @@ impl BaseDocument {
                 }
             }
         }
-        options
+        items
     }
 
     /// Successful selected options for form entries, excluding disabled groups.
@@ -203,6 +230,11 @@ impl DocumentMutator<'_> {
                 }
                 node.mark_ancestors_dirty();
             });
+        // The select shows its selection: a drop-down's label, a list box's
+        // highlighted rows.
+        if let Some(select) = self.doc.option_select(option) {
+            self.doc.nodes[select].insert_damage(crate::layout::damage::ALL_DAMAGE);
+        }
     }
 
     fn deselect_other_options(&mut self, select: NodeId, selected: NodeId) {
@@ -235,12 +267,7 @@ impl DocumentMutator<'_> {
             .rfind(|&id| self.doc.option_selectedness(id));
         if let Some(selected) = last_selected {
             self.deselect_other_options(select, selected);
-        } else if self
-            .doc
-            .null_attribute(select, "size")
-            .map_or(0, |a| display_size(a.value.as_str_lossy()))
-            <= 1
-        {
+        } else if self.doc.select_display(select) == Some(SelectDisplay::DropDown) {
             if let Some((option, _)) = options.into_iter().find(|&(_, disabled)| !disabled) {
                 self.write_option_selectedness(option, true, None);
             }
@@ -329,12 +356,4 @@ impl DocumentMutator<'_> {
             self.reconcile_select(select);
         }
     }
-}
-
-// HTML nonnegative integer parsing accepts a numeric prefix, not just Rust literals.
-fn display_size(value: &str) -> u32 {
-    let value = value.trim_start_matches(['\t', '\n', '\u{c}', '\r', ' ']);
-    let value = value.strip_prefix('+').unwrap_or(value);
-    let end = value.bytes().take_while(u8::is_ascii_digit).count();
-    value[..end].parse().unwrap_or(0)
 }

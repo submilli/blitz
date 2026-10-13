@@ -147,6 +147,8 @@ fn process_custom_widget_node(
 }
 
 #[cfg(test)]
+mod select_tests;
+#[cfg(test)]
 mod subdocument_tests;
 #[cfg(all(test, feature = "svg"))]
 mod svg_tests;

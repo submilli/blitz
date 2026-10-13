@@ -1026,7 +1026,7 @@ impl FontSize {
                     }
                 },
             };
-        let size = NonNegative(Self::quantize_font_size(size));
+        let size = NonNegative(Self::clamp_font_size(size));
         computed::FontSize {
             computed_size: size,
             used_size: size,
@@ -1034,27 +1034,17 @@ impl FontSize {
         }
     }
 
-    /// Quantize a value intended for use as a font size, to avoid creating a near-infinity
-    /// of different styles and font instances when "random" floating-point sizes are used.
+    /// Bound a value intended for use as a font size, so that later
+    /// arithmetic on it stays finite. Sizes otherwise stay exact, as Chrome
+    /// keeps them: Chrome's 13.333333px control font must measure text as
+    /// Chrome does.
     #[inline]
-    pub fn quantize_font_size(size: CSSPixelLength) -> CSSPixelLength {
-        // Based on the Veltkamp-Dekker float-splitting algorithm, see e.g.
-        // https://indico.cern.ch/event/313684/contributions/1687773/attachments/600513/826490/FPArith-Part2.pdf
-        // A 32-bit float has 24 bits of precision (23 stored, plus an implicit 1 bit
-        // at the start of the mantissa).
-        // (Compare also QuantizeFontSize in dom/canvas/CanvasRenderingContext2D.cpp.)
-        // If we ever change the representation of CSSPixelLength (e.g. to f64 or some fixed-point type)
-        // this will need to be revised.
-        size_of_test!(CSSPixelLength, std::mem::size_of::<f32>());
-        const BITS_TO_DROP: u32 = 14; // leaving 10 bits of precision
-        const SCALE_PLUS_ONE: f32 = ((1 << BITS_TO_DROP) + 1) as f32;
-        const LIMIT: f32 = f32::MAX / SCALE_PLUS_ONE;
+    pub fn clamp_font_size(size: CSSPixelLength) -> CSSPixelLength {
+        const LIMIT: f32 = f32::MAX / ((1 << 14) + 1) as f32;
         if size.px() >= LIMIT {
             return CSSPixelLength::new(LIMIT);
         }
-        let d = size.px() * SCALE_PLUS_ONE;
-        let t = d - size.px();
-        CSSPixelLength::new(d - t)
+        size
     }
 }
 

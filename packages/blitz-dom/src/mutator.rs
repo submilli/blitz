@@ -315,11 +315,38 @@ impl DocumentMutator<'_> {
                 let parent = &mut self.doc.nodes[parent_id];
                 parent.insert_damage(ALL_DAMAGE);
             }
+            self.damage_select_of_option_text(node_id);
 
             self.maybe_record_node(parent_id);
         }
         if let Some(parent) = self.doc.nodes[node_id].parent {
             self.textarea_children_changed(parent);
+        }
+    }
+
+    /// Damage the select whose option holds text in an unstyled subtree,
+    /// where its damage is otherwise dropped: a select is laid out from its
+    /// options' text, and an option's descendants are never styled. The
+    /// walk is bounded: label text nested deeper than this is measured
+    /// again when the select next rebuilds.
+    fn damage_select_of_option_text(&mut self, node_id: NodeId) {
+        const MAX_LABEL_NESTING: usize = 32;
+        if !self.doc.nodes[node_id].flags.is_in_document() {
+            return;
+        }
+        let mut ancestor = self.doc.nodes[node_id].parent;
+        for _ in 0..MAX_LABEL_NESTING {
+            let Some(id) = ancestor else {
+                return;
+            };
+            if let Some(select) = self.doc.option_select(id) {
+                self.doc.nodes[select].insert_damage(ALL_DAMAGE);
+                return;
+            }
+            if self.doc.nodes[id].primary_styles().is_some() {
+                return;
+            }
+            ancestor = self.doc.nodes[id].parent;
         }
     }
 

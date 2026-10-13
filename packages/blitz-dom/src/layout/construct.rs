@@ -597,6 +597,12 @@ fn collect_layout_children_with_wrap(
             }
         }
 
+        // A select's content is its user-agent shadow tree's, not its children.
+        if tag_name == "select" && el.name.ns == markup5ever::ns!(html) {
+            super::select::build_select_layout(doc, container_node_id);
+            return;
+        }
+
         #[cfg(feature = "svg")]
         if matches!(tag_name, "svg") {
             let mut outer_html = doc.get_node(container_node_id).unwrap().svg_markup();

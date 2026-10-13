@@ -249,7 +249,11 @@ impl Position {
     /// the point before a node whose content editing does not ignore is
     /// reported as offset 0 inside it.
     pub(super) fn to_boundary(self, tree: &Tree) -> Option<Boundary> {
-        let opaque = |node| tree.editing_ignores_content(node) || tree.is_table(node);
+        let opaque = |node| {
+            tree.editing_ignores_content(node)
+                || tree.is_table(node)
+                || tree.is_select_row_element(node)
+        };
         let offset = match self.anchor {
             Anchor::Offset(offset) => offset,
             _ => 0,
