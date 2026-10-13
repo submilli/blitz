@@ -11,7 +11,8 @@ use std::collections::HashMap;
 impl BaseDocument {
     /// Move or extend a document selection. Returns `None` when an endpoint
     /// has no caret position, for example in a document without rendered
-    /// text; the selection should then stay as it is.
+    /// text; the selection should then stay as it is. A result whose
+    /// `reported` range is `None` leaves no selection.
     pub fn modify_selection(
         &self,
         anchor: Boundary,
@@ -32,15 +33,16 @@ impl BaseDocument {
             focus: focus_caret,
         };
         let (moved, line_x) = navigate::modify(&flows, carets, request)?;
-        Some(Modified {
-            anchor: flows.point(moved.anchor)?,
-            focus: flows.point(moved.focus)?,
-            memory: CaretMemory {
-                line_x,
-                upstream: moved.focus.upstream,
-                ..CaretMemory::default()
-            },
-        })
+        let memory = CaretMemory {
+            line_x,
+            upstream: moved.focus.upstream,
+            ..CaretMemory::default()
+        };
+        Some(Modified::reporting_kept(
+            flows.point(moved.anchor)?,
+            flows.point(moved.focus)?,
+            memory,
+        ))
     }
 }
 

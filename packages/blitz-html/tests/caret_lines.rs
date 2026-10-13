@@ -5,7 +5,9 @@ mod caret_support;
 mod common;
 
 use blitz_dom::caret::{Alter, CaretMemory, Direction, Granularity, ModifyRequest};
-use caret_support::{BACKWARD, FORWARD, at, carets, child, laid_out, moves, walk};
+use caret_support::{
+    BACKWARD, FORWARD, at, carets, child, laid_out, moves, reported, shadow_child, walk,
+};
 use common::{FLOAT, q};
 
 #[test]
@@ -197,29 +199,113 @@ fn right_and_left_by_line_and_paragraph_are_logical() {
 }
 
 #[test]
-fn extension_by_line_stays_out_of_shadow_trees() {
-    // Chrome moves an end that a line step carries into a shadow tree
-    // beside its host, then makes it visible in the DOM tree: the start of
-    // the next paragraph (Chrome reports the equivalent `<p>`, 0).
+fn extension_by_line_keeps_ends_beside_shadow_hosts() {
+    // Chrome keeps the visible selection of a step in the DOM tree, which
+    // moves an end that a line step carries into a shadow tree beside its
+    // host: the end of a forward range before it. Made visible again, that
+    // end reports as `(<p>, 0)`, the paragraph after the host. The next
+    // step starts from the kept end, which in the flat tree is on the
+    // shadow line again (results from Chrome 155).
     for mode in ["open", "closed"] {
         let doc = laid_out(&format!(
             "<p>aa</p><div><template shadowrootmode={mode}><span>shadow</span></template></div><p>tail</p>"
         ));
         let aa = child(&doc, "p", 0);
+        let tail_p = q(&doc, "p:last-of-type");
         let tail = child(&doc, "p:last-of-type", 0);
-        let extend = [(Alter::Extend, FORWARD, Granularity::Line)];
+        let down = (Alter::Extend, FORWARD, Granularity::Line);
+        let up = (Alter::Extend, BACKWARD, Granularity::Line);
         assert_eq!(
-            walk(&doc, (at(aa, 1), at(aa, 1)), &extend),
-            [(at(aa, 1), at(tail, 0))],
+            reported(&doc, (at(aa, 1), at(aa, 1)), &[down, down, up]),
+            [
+                Some((at(aa, 1), at(tail_p, 0))),
+                Some((at(aa, 1), at(tail, 1))),
+                Some((at(aa, 1), at(tail_p, 0))),
+            ],
             "{mode}"
         );
-        let extend = [(Alter::Extend, BACKWARD, Granularity::Line)];
+        // Up from `tail`, the start moves after the host, and the next step
+        // goes on from the shadow line.
         assert_eq!(
-            walk(&doc, (at(tail, 1), at(tail, 1)), &extend),
-            [(at(tail, 1), at(tail, 0))],
+            reported(&doc, (at(tail, 3), at(tail, 3)), &[up, up]),
+            [
+                Some((at(tail, 3), at(tail, 0))),
+                Some((at(tail, 3), at(aa, 2))),
+            ],
             "{mode}"
         );
     }
+}
+
+#[test]
+fn a_position_before_a_host_is_on_the_line_before_it() {
+    // Of the candidates around (body, 1), before the host, Chrome takes the
+    // one in the body's own DOM subtree: shadow content is not inside it.
+    let doc = laid_out(
+        "<p>aa</p><div><template shadowrootmode=open><span>shadow</span></template></div><p>tail</p>",
+    );
+    let body = q(&doc, "body");
+    let aa = child(&doc, "p", 0);
+    let shadow = shadow_child(&doc, q(&doc, "div"), &[0, 0]);
+    assert_eq!(
+        carets(
+            &doc,
+            at(body, 1),
+            &moves(FORWARD, Granularity::LineBoundary, 1)
+        ),
+        [at(aa, 2)]
+    );
+    assert_eq!(
+        carets(
+            &doc,
+            at(body, 1),
+            &moves(BACKWARD, Granularity::LineBoundary, 1)
+        ),
+        [at(aa, 0)]
+    );
+    // A line step down from there reaches the shadow line.
+    let [down] = carets(&doc, at(body, 1), &moves(FORWARD, Granularity::Line, 1))[..] else {
+        panic!("one step");
+    };
+    assert_eq!(down.node, shadow);
+}
+
+#[test]
+fn an_extension_past_a_nested_host_keeps_re_entering_its_shadow_tree() {
+    // Up from `tail`, the extension's start is kept after the outer host:
+    // its last flat position, on the shadow tree's last line. A step up
+    // from there reaches the inner host's line, which the DOM tree moves
+    // after the outer host again (Chrome 155, `nested.extendUp`).
+    let doc = laid_out(
+        "<p>aa</p><div><template shadowrootmode=open><p>outer</p><div><template shadowrootmode=open><span>deep</span></template></div><p>after</p></template></div><p>tail</p>",
+    );
+    let tail = child(&doc, "p:last-of-type", 0);
+    let up = (Alter::Extend, BACKWARD, Granularity::Line);
+    assert_eq!(
+        reported(&doc, (at(tail, 3), at(tail, 3)), &[up; 3]),
+        [Some((at(tail, 3), at(tail, 0))); 3]
+    );
+}
+
+#[test]
+fn a_step_that_leaves_nothing_visible_in_the_dom_tree_drops_the_selection() {
+    // Lines of `<hr>`s in a shadow tree have no caret position the DOM tree
+    // can see: Chrome's selection has no range after a move onto one, and an
+    // extension onto one leaves the caret where it was.
+    let doc = laid_out(
+        "<p>abc</p><div><template shadowrootmode=open><hr><hr></template></div><p>def</p>",
+    );
+    let def = child(&doc, "p:last-of-type", 0);
+    let move_up = (Alter::Move, BACKWARD, Granularity::Line);
+    assert_eq!(
+        reported(&doc, (at(def, 1), at(def, 1)), &[move_up, move_up]),
+        [None, None]
+    );
+    let extend_up = (Alter::Extend, BACKWARD, Granularity::Line);
+    assert_eq!(
+        reported(&doc, (at(def, 1), at(def, 1)), &[extend_up, extend_up]),
+        [Some((at(def, 1), at(def, 1))); 2]
+    );
 }
 
 #[test]

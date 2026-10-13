@@ -31,7 +31,8 @@ use crate::BaseDocument;
 use crate::ranges::Boundary;
 
 /// Move or extend a document selection by line, paragraph or line
-/// boundary; `None` leaves it as it is.
+/// boundary; `None` leaves it as it is, and a result reporting no range
+/// leaves no selection.
 pub(super) fn modify_selection(
     doc: &BaseDocument,
     anchor: Boundary,

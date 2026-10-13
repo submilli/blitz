@@ -71,12 +71,52 @@ pub struct ModifyRequest {
 /// A selection after movement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Modified {
-    /// The canonical DOM position of the anchor's caret stop.
+    /// The anchor of the selection Chrome keeps, which the next step starts
+    /// from. It can be inside a shadow tree.
     pub anchor: Boundary,
-    /// The canonical DOM position of the focus's caret stop.
+    /// The focus of the selection Chrome keeps.
     pub focus: Boundary,
+    /// The range the selection reports for the kept one, still in the kept
+    /// ends' tree scope; `None` when the step leaves no selection, as
+    /// Chrome's does when neither end has a visible position in the DOM
+    /// tree (`anchor` and `focus` are then where the step started).
+    pub reported: Option<Reported>,
     /// What to pass to the next step.
     pub memory: CaretMemory,
+}
+
+impl Modified {
+    /// A selection that reports its kept ends as they are.
+    pub(crate) fn reporting_kept(anchor: Boundary, focus: Boundary, memory: CaretMemory) -> Self {
+        Self {
+            anchor,
+            focus,
+            reported: Some(Reported { anchor, focus }),
+            memory,
+        }
+    }
+
+    /// No selection left after a step from `given` (anchor, focus).
+    pub(crate) fn dropped(given: (Boundary, Boundary)) -> Self {
+        Self {
+            anchor: given.0,
+            focus: given.1,
+            reported: None,
+            memory: CaretMemory::default(),
+        }
+    }
+}
+
+/// The boundary points a selection reports: its visible range in the DOM
+/// tree. A range kept beside a shadow host reports the position Chrome's
+/// DOM tree makes of it: an end kept before a block host reports as
+/// `(<p>, 0)` for the paragraph after the host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reported {
+    /// The reported anchor.
+    pub anchor: Boundary,
+    /// The reported focus.
+    pub focus: Boundary,
 }
 
 /// What consecutive `modify()` calls keep of a selection beyond its

@@ -1,10 +1,12 @@
 //! Visible selections (Blink's `CreateVisibleSelection`): both ends as
-//! visible positions, a range narrowed to the smallest equivalent one.
+//! visible positions (or the one end that has one), kept in one tree scope
+//! in the DOM tree, and a range narrowed to the smallest equivalent one.
 
 use super::canonical::{self, most_backward, most_forward};
 use super::caret::{Affinity, Placed};
 use super::context::Context;
 use super::position::Position;
+use super::shadow;
 use super::visible_position;
 use std::cmp::Ordering;
 
@@ -16,8 +18,10 @@ pub(super) struct Selection {
 }
 
 impl Selection {
-    /// The visible selection of a DOM selection. `None` when an end has no
-    /// visible position.
+    /// The visible selection of a DOM selection. An end without a visible
+    /// position collapses the selection to the other end
+    /// (`CanonicalizeSelection`); `None` when neither has one. In the DOM
+    /// tree a range is also kept inside its anchor's tree scope.
     pub(super) fn visible(
         cx: &Context,
         anchor: Position,
@@ -27,7 +31,19 @@ impl Selection {
         let deep = |position| {
             visible_position::create(cx, Placed { position, affinity }).map(|v| v.position)
         };
-        let (anchor, focus) = (deep(anchor)?, deep(focus)?);
+        let (anchor, mut focus) = match (deep(anchor), deep(focus)) {
+            (Some(anchor), Some(focus)) => (anchor, focus),
+            (Some(end), None) | (None, Some(end)) => (end, end),
+            (None, None) => return None,
+        };
+        if cx.tree.is_dom() {
+            let canonical = Self {
+                anchor,
+                focus,
+                affinity,
+            };
+            focus = shadow::avoid_crossing(&cx.tree, anchor, focus, canonical.anchor_first(cx));
+        }
         Some(minimal(cx, anchor, focus, affinity))
     }
 

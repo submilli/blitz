@@ -85,6 +85,56 @@ impl Position {
         }
     }
 
+    /// A flat-tree position as a position in the DOM tree
+    /// (`ToPositionInDOMTree`): an offset among a node's flat children
+    /// becomes the place of that child among its DOM siblings, which for
+    /// shadow content are the shadow root's children. Offset 0 stays the
+    /// node's first position, and the end of its flat children its last.
+    pub(super) fn in_dom_tree(self, flat: &Tree) -> Self {
+        let Anchor::Offset(offset) = self.anchor else {
+            return self;
+        };
+        if flat.is_character_data(self.node) || offset == 0 {
+            return self;
+        }
+        flat.child_at(self.node, offset)
+            .and_then(|child| flat.dom_index(child))
+            .map_or_else(
+                || Self {
+                    node: self.node,
+                    anchor: Anchor::AfterChildren,
+                },
+                |(parent, index)| Self::offset(parent, index),
+            )
+    }
+
+    /// A DOM-tree position in the flat tree (`ToPositionInFlatTree`): a
+    /// position in a shadow root is one in its host, and an offset names the
+    /// flat place of the DOM child at it, or the end of the node when the
+    /// child is not in the flat tree. `None` before or after a node with no
+    /// place in the flat tree.
+    pub(super) fn in_flat_tree(self, flat: &Tree) -> Option<Self> {
+        let node = flat.shadow_host(self.node).unwrap_or(self.node);
+        let Anchor::Offset(offset) = self.anchor else {
+            let beside = matches!(self.anchor, Anchor::Before | Anchor::After);
+            if beside && flat.parent(node).is_none() {
+                return None;
+            }
+            return Some(Self { node, ..self });
+        };
+        if flat.is_character_data(self.node) {
+            return Some(self);
+        }
+        if offset == 0 {
+            return Some(Self::first_in_node(node));
+        }
+        let place = flat
+            .dom_children(self.node)
+            .get(offset)
+            .and_then(|&child| Some(Self::offset(flat.parent(child)?, flat.index(child))));
+        Some(place.unwrap_or_else(|| Self::last_in_node(flat, node)))
+    }
+
     /// A boundary point as the position a previous step reported with
     /// `kept`; a type that no longer describes the boundary point falls
     /// back to [`Position::from_boundary`].

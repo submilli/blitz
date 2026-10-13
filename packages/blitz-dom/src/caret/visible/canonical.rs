@@ -6,6 +6,7 @@
 use super::context::{Context, Kind};
 use super::iterator::PositionIterator;
 use super::position::Position;
+use super::shadow;
 use super::text;
 use crate::NodeId;
 use std::cmp::Ordering;
@@ -13,6 +14,53 @@ use std::cmp::Ordering;
 /// The most backward position rendering at the same place
 /// (`MostBackwardCaretPosition`).
 pub(super) fn most_backward(cx: &Context, position: Position) -> Position {
+    match cx.flat() {
+        Some(flat) => through_flat_tree(cx, flat, position, most_backward_in_tree),
+        None => most_backward_in_tree(cx, position),
+    }
+}
+
+/// The most forward position rendering at the same place
+/// (`MostForwardCaretPosition`).
+pub(super) fn most_forward(cx: &Context, position: Position) -> Position {
+    match cx.flat() {
+        Some(flat) => through_flat_tree(cx, flat, position, most_forward_in_tree),
+        None => most_forward_in_tree(cx, position),
+    }
+}
+
+/// A DOM-tree position's most backward or forward position
+/// (`MostBackwardOrForwardCaretPosition`): `walk` runs in the flat tree, and
+/// a result across a shadow boundary moves back into `position`'s tree
+/// scope, or gives `position` itself when that would pass it.
+fn through_flat_tree(
+    dom: &Context,
+    flat: &Context,
+    position: Position,
+    walk: fn(&Context, Position) -> Position,
+) -> Position {
+    let Some(in_flat) = position.in_flat_tree(&flat.tree) else {
+        return position;
+    };
+    let candidate = walk(flat, in_flat).in_dom_tree(&flat.tree);
+    let tree = &dom.tree;
+    let near_shadow = |node| tree.is_in_shadow_tree(node) || tree.is_shadow_host(node);
+    if candidate == position || !(near_shadow(position.node) || near_shadow(candidate.node)) {
+        return candidate;
+    }
+    let toward = order(dom, position, candidate);
+    let adjusted = shadow::avoid_crossing(tree, position, candidate, toward != Ordering::Greater);
+    // A collapsed adjustment gives the position itself, as Blink's caret
+    // selection does.
+    if toward == order(dom, candidate, adjusted)
+        || order(dom, adjusted, position) == Ordering::Equal
+    {
+        return position;
+    }
+    adjusted
+}
+
+fn most_backward_in_tree(cx: &Context, position: Position) -> Position {
     let start = position.node;
     let boundary = enclosing_visual_boundary(cx, start);
     let adjusted = adjust_for_backward_iteration(cx, position);
@@ -74,9 +122,7 @@ fn backward_step(
     Step::Continue
 }
 
-/// The most forward position rendering at the same place
-/// (`MostForwardCaretPosition`).
-pub(super) fn most_forward(cx: &Context, position: Position) -> Position {
+fn most_forward_in_tree(cx: &Context, position: Position) -> Position {
     let start = position.node;
     let boundary = enclosing_visual_boundary(cx, start);
     let initial = if position.is_after_anchor() {
@@ -291,12 +337,14 @@ fn scan_for_candidate(cx: &Context, position: Position, forward: bool) -> Option
     found
 }
 
-/// Whether `new` is in the block flow element around `original`.
+/// Whether `new` is in the block flow element around `original`. Being
+/// inside it counts only in the DOM (`Node::IsDescendantOf`): shadow content
+/// is not inside its host's ancestors.
 fn in_same_block(cx: &Context, original: Option<NodeId>, new: NodeId) -> bool {
     let Some(original) = original else {
         return false;
     };
-    if cx.tree.is_inclusive_descendant(new, original) && new != original {
+    if cx.tree.is_dom_inclusive_descendant(new, original) && new != original {
         return true;
     }
     enclosing_block_flow_element(cx, original) == enclosing_block_flow_element(cx, new)
@@ -494,7 +542,15 @@ fn is_display_inside_table(cx: &Context, node: NodeId) -> bool {
     cx.tree.is_table(node) && cx.has_layout(node)
 }
 
-/// Tree order of two positions; `Equal` for disconnected ones.
+/// Tree order of two positions; `Equal` for disconnected ones. The DOM
+/// tree compares positions in different tree scopes through their hosts.
 pub(super) fn order(cx: &Context, a: Position, b: Position) -> Ordering {
-    a.compare(b, &cx.tree).unwrap_or(Ordering::Equal)
+    a.compare(b, &cx.tree)
+        .or_else(|| {
+            cx.tree
+                .is_dom()
+                .then(|| shadow::order_across_scopes(&cx.tree, a, b))
+                .flatten()
+        })
+        .unwrap_or(Ordering::Equal)
 }

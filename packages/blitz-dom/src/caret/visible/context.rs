@@ -109,8 +109,13 @@ pub(super) struct Context<'a> {
     unselectable: RefCell<HashMap<NodeId, bool>>,
     /// The nearest laid-out inline root above a node, by node.
     inline_roots: RefCell<HashMap<NodeId, Option<NodeId>>>,
-    /// Steps left for this call's walks over the tree (see [`Self::spend`]).
-    budget: Cell<u32>,
+    /// Steps left for this call's walks over the tree (see [`Self::spend`]),
+    /// shared by the call's contexts.
+    budget: Rc<Cell<u32>>,
+    /// For a DOM-tree context, a flat-tree context over the same document:
+    /// Blink finds the most backward and forward positions of a DOM-tree
+    /// position in the flat tree.
+    flat: Option<Box<Context<'a>>>,
 }
 
 /// Steps one `modify()` call may take through positions and leaves. Blink's
@@ -121,15 +126,23 @@ const WORK_BUDGET: u32 = 4_000_000;
 
 impl<'a> Context<'a> {
     pub(super) fn new(doc: &'a BaseDocument) -> Self {
-        Self::with_tree(Tree::new(doc), WORK_BUDGET)
+        Self::with_tree(Tree::new(doc), Rc::new(Cell::new(WORK_BUDGET)), None)
     }
 
-    /// A context over the DOM tree, with what is left of `self`'s budget.
+    /// A context over the DOM tree, spending `self`'s budget.
     pub(super) fn dom(&self) -> Self {
-        Self::with_tree(Tree::dom(self.tree.doc()), self.budget.get())
+        let doc = self.tree.doc();
+        let budget = self.budget.clone();
+        let flat = Self::with_tree(Tree::new(doc), budget.clone(), None);
+        Self::with_tree(Tree::dom(doc), budget, Some(Box::new(flat)))
     }
 
-    fn with_tree(tree: Tree<'a>, budget: u32) -> Self {
+    /// The flat-tree twin of a DOM-tree context.
+    pub(super) fn flat(&self) -> Option<&Self> {
+        self.flat.as_deref()
+    }
+
+    fn with_tree(tree: Tree<'a>, budget: Rc<Cell<u32>>, flat: Option<Box<Self>>) -> Self {
         Self {
             tree,
             objects: RefCell::default(),
@@ -140,7 +153,8 @@ impl<'a> Context<'a> {
             empty_inlines: RefCell::default(),
             unselectable: RefCell::default(),
             inline_roots: RefCell::default(),
-            budget: Cell::new(budget),
+            budget,
+            flat,
         }
     }
 

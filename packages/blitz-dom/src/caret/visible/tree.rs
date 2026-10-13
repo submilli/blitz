@@ -114,6 +114,18 @@ impl<'a> Tree<'a> {
         Some((parent, index))
     }
 
+    /// Whether a node has a shadow root.
+    pub(super) fn is_shadow_host(&self, id: NodeId) -> bool {
+        self.node(id)
+            .element_data()
+            .is_some_and(|element| element.shadow_root.is_some())
+    }
+
+    /// Whether a node is in a shadow tree.
+    pub(super) fn is_in_shadow_tree(&self, id: NodeId) -> bool {
+        self.shadow_host(self.scope_root(id)).is_some()
+    }
+
     /// The host of a shadow root; `None` for other nodes.
     pub(super) fn shadow_host(&self, id: NodeId) -> Option<NodeId> {
         self.node(id)
@@ -193,18 +205,6 @@ impl<'a> Tree<'a> {
             }
             current = self.parent(current)?;
         }
-    }
-
-    /// Whether `id` is `ancestor` or one of its descendants in this tree.
-    pub(super) fn is_inclusive_descendant(&self, id: NodeId, ancestor: NodeId) -> bool {
-        let mut node = Some(id);
-        while let Some(current) = node {
-            if current == ancestor {
-                return true;
-            }
-            node = self.parent(current);
-        }
-        false
     }
 
     pub(super) fn is_text(&self, id: NodeId) -> bool {

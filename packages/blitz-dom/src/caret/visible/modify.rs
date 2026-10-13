@@ -10,11 +10,8 @@ use super::paragraph;
 use super::position::Position;
 use super::select::{self, SelectStep};
 use super::selection::Selection;
-use super::shadow;
 use super::visible_position;
-use crate::caret::{
-    Alter, AnchorType, CaretMemory, Direction, Granularity, Modified, ModifyRequest,
-};
+use crate::caret::{Alter, CaretMemory, Direction, Granularity, Modified, ModifyRequest, Reported};
 use crate::ranges::Boundary;
 use style::computed_values::direction::T as TextDirection;
 
@@ -30,6 +27,7 @@ pub(super) fn modify(
     } else {
         Affinity::Downstream
     };
+    let given = (anchor, focus);
     let mut anchor = Position::from_kept(&cx.tree, anchor, request.memory.anchor_type);
     let mut focus = Position::from_kept(&cx.tree, focus, request.memory.focus_type);
     let mut line_x = request.memory.line_x;
@@ -98,7 +96,7 @@ pub(super) fn modify(
             (anchor, focus, Affinity::Downstream)
         }
     };
-    report(cx, anchor, focus, affinity, vertical.then_some(x))
+    report(cx, anchor, focus, affinity, vertical.then_some(x), given)
 }
 
 fn vertical_step(
@@ -149,56 +147,52 @@ fn extend(
     }
 }
 
-/// The selection as the DOM reports it: visible again with its affinity,
-/// as parent-anchored boundary points.
+/// The selection a step leaves. Chrome keeps the step's flat-tree result
+/// as a visible selection in the DOM tree (`SelectionModifier::Selection`),
+/// which keeps a range inside its anchor's tree scope, and the next step
+/// starts from that. The selection reports the visible range of what it
+/// keeps (`FirstEphemeralRangeOf` of `ComputeVisibleSelectionInDomTree`):
+/// making the kept selection visible again canonicalizes an end the scope
+/// adjustment left beside a host, such as before a block host, which then
+/// reports as the start of the paragraph after it. A selection with no
+/// visible position in the DOM tree is dropped; `given` is the selection
+/// the step started from.
 fn report(
     cx: &Context,
     anchor: Position,
     focus: Position,
     affinity: Affinity,
     line_x: Option<f32>,
+    given: (Boundary, Boundary),
 ) -> Option<Modified> {
-    let reported = Selection::visible(cx, anchor, focus, affinity).unwrap_or(Selection {
-        anchor,
-        focus,
-        affinity,
-    });
-    if cx.exhausted() {
+    let dom = cx.dom();
+    let (anchor, focus) = (anchor.in_dom_tree(&cx.tree), focus.in_dom_tree(&cx.tree));
+    let kept = Selection::visible(&dom, anchor, focus, affinity);
+    let reported =
+        kept.and_then(|kept| Selection::visible(&dom, kept.anchor, kept.focus, kept.affinity));
+    if dom.exhausted() {
         return None;
     }
-    let anchor_first = reported.anchor_first(cx);
-    let reported_anchor = reported.anchor.to_boundary(&cx.tree)?;
-    let reported_focus = reported.focus.to_boundary(&cx.tree)?;
-    let (anchor, mut focus) =
-        shadow::avoid_crossing(&cx.tree, reported_anchor, reported_focus, anchor_first);
-    if focus != reported_focus {
-        // The adjusted end is made visible in the DOM tree, where the host
-        // it moved beside has only its light children.
-        let dom = cx.dom();
-        let position = Position::from_boundary(&dom.tree, focus);
-        if let Some(visible) = visible_position::create(&dom, Placed::downstream(position)) {
-            focus = visible.position.to_boundary(&dom.tree)?;
-        }
-        if dom.exhausted() {
-            return None;
-        }
-    }
-    // An end the adjustment moved is anchored by its offset.
-    let anchor_type = |position: Position, reported: Boundary, boundary: Boundary| {
-        if boundary == reported {
-            position.anchor_type(&cx.tree, boundary)
-        } else {
-            AnchorType::Offset
-        }
+    let (Some(kept), Some(reported)) = (kept, reported) else {
+        return Some(Modified::dropped(given));
     };
+    let tree = &dom.tree;
+    let (anchor, focus) = (
+        kept.anchor.to_boundary(tree)?,
+        kept.focus.to_boundary(tree)?,
+    );
     Some(Modified {
         anchor,
         focus,
+        reported: Some(Reported {
+            anchor: reported.anchor.to_boundary(tree)?,
+            focus: reported.focus.to_boundary(tree)?,
+        }),
         memory: CaretMemory {
             line_x,
-            upstream: affinity == Affinity::Upstream,
-            anchor_type: anchor_type(reported.anchor, reported_anchor, anchor),
-            focus_type: anchor_type(reported.focus, reported_focus, focus),
+            upstream: kept.affinity == Affinity::Upstream,
+            anchor_type: kept.anchor.anchor_type(tree, anchor),
+            focus_type: kept.focus.anchor_type(tree, focus),
         },
     })
 }
@@ -246,16 +240,17 @@ fn report_as_is(cx: &Context, anchor: Position, focus: Position, line_x: f32) ->
     }
     let anchor_boundary = anchor.to_boundary(&cx.tree)?;
     let focus_boundary = focus.to_boundary(&cx.tree)?;
-    Some(Modified {
-        anchor: anchor_boundary,
-        focus: focus_boundary,
-        memory: CaretMemory {
-            line_x: Some(line_x),
-            upstream: false,
-            anchor_type: anchor.anchor_type(&cx.tree, anchor_boundary),
-            focus_type: focus.anchor_type(&cx.tree, focus_boundary),
-        },
-    })
+    let memory = CaretMemory {
+        line_x: Some(line_x),
+        upstream: false,
+        anchor_type: anchor.anchor_type(&cx.tree, anchor_boundary),
+        focus_type: focus.anchor_type(&cx.tree, focus_boundary),
+    };
+    Some(Modified::reporting_kept(
+        anchor_boundary,
+        focus_boundary,
+        memory,
+    ))
 }
 
 /// The direction of the block around a position
