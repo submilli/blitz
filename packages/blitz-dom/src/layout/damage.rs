@@ -140,7 +140,9 @@ impl BaseDocument {
         // reconstruct branch of `resolve_layout_children` (which immediately
         // re-collects and resets `layout_parent` for every child it visits,
         // recursing through the fresh anonymous blocks which are born with
-        // `ALL_DAMAGE`) and by node removal (the subtree leaves the document).
+        // `ALL_DAMAGE`), by an inline root flattening a box that owned some
+        // (which resets `layout_parent` for every child and pseudo-element it
+        // walks) and by node removal (the subtree leaves the document).
         // So when this pass runs, a node's `layout_parent` chain is either
         // current or owned by a container which reconstructs this frame. A
         // stale key for a freed block yields `None` (slab keys are versioned).

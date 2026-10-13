@@ -1,0 +1,12 @@
+# Selection.modify steps at buttons, recorded in Chrome 154 (macOS):
+# key, HTML, child path from body, offset, steps, Chrome's selection after each step.
+# Probes: submilli-browser docs/reconstruction/probes/SUB-1576 (cases/caret.tsv).
+flex.fl	<style>body{font-family:Arial;font-size:16px}</style><p>aa<button style="display:inline-flex">xy</button>bb</p><p>cc</p>	1,0	0	forward:line;forward:line	#aa:2 | #aa:2
+grid.fl	<style>body{font-family:Arial;font-size:16px}</style><p>aa<button style="display:inline-grid">xy</button>bb</p><p>cc</p>	1,0	0	forward:line;forward:line	#aa:2 | #aa:2
+inline.fl	<style>body{font-family:Arial;font-size:16px}</style><p>aa<button style="display:inline">xy</button>bb</p><p>cc</p>	1,0	0	forward:line;forward:line	#cc:0 | #cc:2
+input.fl	<style>body{font-family:Arial;font-size:16px}</style><p>aa<input type=button value=xy>bb</p><p>cc</p>	1,0	0	forward:line;forward:line	#cc:0 | #cc:2
+flex.fc	<style>body{font-family:Arial;font-size:16px}</style><p>aa<button style="display:inline-flex">xy</button>bb</p>	1,0	2	forward:character;forward:character;forward:character	#xy:1 | #xy:2 | #bb:1
+inline.fc	<style>body{font-family:Arial;font-size:16px}</style><p>aa<button style="display:inline">xy</button>bb</p>	1,0	2	forward:character;forward:character;forward:character	#xy:1 | #xy:2 | #bb:1
+input.fc	<style>body{font-family:Arial;font-size:16px}</style><p>aa<input type=button value=xy>bb</p>	1,0	2	forward:character;forward:character	P:2 | #bb:1
+button.fc	<style>body{font-family:Arial;font-size:16px}</style><p>aa<button>xy</button>bb</p>	1,0	2	forward:character;forward:character;forward:character	#xy:1 | #xy:2 | #bb:1
+button.fl	<style>body{font-family:Arial;font-size:16px}</style><p>aa<button>xy</button>bb</p><p>cc</p>	1,0	0	forward:line;forward:line	#cc:0 | #cc:2

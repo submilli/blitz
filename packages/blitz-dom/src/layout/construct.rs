@@ -31,7 +31,7 @@ use crate::{
         TextBrush, TextInputData, TextLayout,
     },
     qual_name, stylo_to_parley,
-    traversal::{iter_children, iter_children_and_pseudos},
+    traversal::iter_children_and_pseudos,
 };
 
 use super::{
@@ -141,7 +141,11 @@ impl LayoutChildren {
             .push(child_id);
     }
 
-    fn create_anonymous_block(&mut self, container_node_id: NodeId, doc: &mut BaseDocument) {
+    pub(super) fn create_anonymous_block(
+        &mut self,
+        container_node_id: NodeId,
+        doc: &mut BaseDocument,
+    ) -> NodeId {
         use style::selector_parser::PseudoElement;
 
         const NAME: QualName = QualName {
@@ -190,6 +194,7 @@ impl LayoutChildren {
         self.children.push(node_id);
         self.anonymous_block_id = Some(node_id);
         self.anonymous_blocks.push(node_id);
+        node_id
     }
 }
 
@@ -403,7 +408,7 @@ fn collect_span_line_heights(
     let display = node.display_style().unwrap_or(Display::inline());
     match (display.outside(), display.inside()) {
         (DisplayOutside::None, DisplayInside::Contents) => {
-            for child_id in node.flat_children().iter().copied() {
+            for child_id in children_and_pseudos(node) {
                 collect_span_line_heights(nodes, font_ctx, child_id, root_line_height, scale, out);
             }
         }
@@ -567,6 +572,13 @@ fn collect_layout_children_with_wrap(
     }
 
     flush_pseudo_elements(doc, container_node_id);
+
+    // A button's content is laid out in its anonymous button content box.
+    if super::button::has_content_box(&doc.nodes[container_node_id])
+        && super::button::collect_content_box(doc, container_node_id, out)
+    {
+        return;
+    }
 
     if let Some(el) = doc.nodes[container_node_id].data.downcast_element() {
         // Handle text inputs
@@ -1124,14 +1136,19 @@ pub(crate) fn find_inline_layout_embedded_boxes(
 ) {
     flush_inline_pseudos_recursive(doc, inline_context_root_node_id);
 
+    let mut stale_anonymous_blocks = Vec::new();
     iter_children_and_pseudos!(doc.nodes[inline_context_root_node_id], |child_id| {
         find_inline_layout_embedded_boxes_recursive(
             &mut doc.nodes,
             inline_context_root_node_id,
             child_id,
             layout_children,
+            &mut stale_anonymous_blocks,
         );
     });
+    for anonymous_block in stale_anonymous_blocks {
+        doc.deallocate_anonymous_block(anonymous_block);
+    }
 
     fn flush_inline_pseudos_recursive(doc: &mut BaseDocument, node_id: NodeId) {
         doc.iter_children_mut(node_id, |child_id, doc| {
@@ -1155,6 +1172,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
         parent_id: NodeId,
         node_id: NodeId,
         layout_children: &mut ThinVec<NodeId>,
+        stale_anonymous_blocks: &mut Vec<NodeId>,
     ) {
         let node = &mut nodes[node_id];
 
@@ -1176,12 +1194,14 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                     }
                     (DisplayOutside::None, DisplayInside::Contents) => {
                         node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                        iter_children!(nodes[node_id], |child_id| {
+                        release_own_box(node, stale_anonymous_blocks);
+                        iter_children_and_pseudos!(nodes[node_id], |child_id| {
                             find_inline_layout_embedded_boxes_recursive(
                                 nodes,
                                 parent_id,
                                 child_id,
                                 layout_children,
+                                stale_anonymous_blocks,
                             );
                         });
                     }
@@ -1194,12 +1214,14 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                         }
                         InlineElement::Span | InlineElement::Hidden => {
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
+                            release_own_box(node, stale_anonymous_blocks);
                             iter_children_and_pseudos!(nodes[node_id], |child_id| {
                                 find_inline_layout_embedded_boxes_recursive(
                                     nodes,
                                     node_id,
                                     child_id,
                                     layout_children,
+                                    stale_anonymous_blocks,
                                 );
                             });
                         }
@@ -1220,6 +1242,20 @@ pub(crate) fn find_inline_layout_embedded_boxes(
             NodeData::Document(_) => unreachable!(),
         }
     }
+}
+
+/// A box flattened into its inline root's layout (a span, or a `display:
+/// contents` element) has no formatting context, layout children or
+/// anonymous blocks of its own, even if a `display` change left it some from
+/// a time it was a block, flex or grid container. Its old anonymous blocks
+/// are handed back to be freed.
+fn release_own_box(node: &mut Node, stale_anonymous_blocks: &mut Vec<NodeId>) {
+    node.flags.reset_construction_flags();
+    if let Some(element) = node.element_data_mut() {
+        element.take_inline_layout();
+    }
+    *node.layout_children.get_mut() = None;
+    stale_anonymous_blocks.extend(std::mem::take(&mut node.anonymous_blocks));
 }
 
 pub(crate) fn build_inline_layout_into(
@@ -1401,8 +1437,8 @@ pub(crate) fn build_inline_layout_into(
                                 .as_ref()
                                 .map_or(&[][..], |styles| styles.as_slice()),
                         );
-                        for child_id in node.flat_children().iter().copied() {
-                            // node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
+                        // Its pseudo-elements are boxes in its place too.
+                        for child_id in children_and_pseudos(node) {
                             build_inline_layout_recursive(
                                 builder,
                                 nodes,

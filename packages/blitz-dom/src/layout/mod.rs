@@ -20,6 +20,7 @@ use taffy::{
     compute_grid_layout, compute_leaf_layout, compute_oof_layout, prelude::*,
 };
 
+pub(crate) mod button;
 pub(crate) mod construct;
 pub(crate) mod damage;
 pub(crate) mod inline;
@@ -73,6 +74,27 @@ pub(crate) fn resolve_calc_value(calc_ptr: *const (), parent_size: f32) -> f32 {
     let calc = unsafe { &*(calc_ptr as *const CalcLengthPercentage) };
     let result = calc.resolve(CSSPixelLength::new(parent_size));
     result.px()
+}
+
+/// The block-start offset and height of a box's content box, inside its
+/// padding and border, given its border box height. Padding and border
+/// percentages resolve against the containing block's width.
+pub(super) fn content_block_extent(
+    style: &impl taffy::CoreStyle<CustomIdent = Atom>,
+    parent_width: Option<f32>,
+    border_box_height: f32,
+) -> (f32, f32) {
+    let padding = style
+        .padding()
+        .resolve_or_zero(parent_width, resolve_calc_value);
+    let border = style
+        .border()
+        .resolve_or_zero(parent_width, resolve_calc_value);
+    let top = padding.top + border.top;
+    (
+        top,
+        border_box_height - top - padding.bottom - border.bottom,
+    )
 }
 
 impl BaseDocument {
@@ -470,6 +492,10 @@ impl BaseDocument {
 
                 if node.flags.is_inline_root() {
                     return self.compute_inline_layout(dom_node_id(node_id), inputs, block_ctx);
+                }
+
+                if node.flags.is_button_root() {
+                    return button::compute_button_layout(self, node_id, inputs);
                 }
 
                 // The default CSS file will set

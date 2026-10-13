@@ -414,7 +414,7 @@ impl BaseDocument {
 
         let mut rects: Vec<BoundingRect> = Vec::new();
         for line in layout.lines() {
-            let line_metrics = line.metrics();
+            let (visible_start, visible_end) = visible_line_extent(&line, layout.is_rtl());
             // Union all of the target's fragments on this line into a single rect
             let mut line_rect: Option<(f64, f64, f64, f64)> = None;
             let mut add = |x0: f64, y0: f64, x1: f64, y1: f64| {
@@ -433,17 +433,6 @@ impl BaseDocument {
                             continue;
                         }
                         let run = glyph_run.run();
-                        let hanging = f64::from(line_metrics.hanging_advance);
-                        let line_start = f64::from(line_metrics.offset);
-                        let line_end = line_start + f64::from(line_metrics.advance);
-                        // White space hangs at the line's end edge, which is
-                        // the paragraph's (UAX #9 L1), whatever the run's
-                        // direction.
-                        let (visible_start, visible_end) = if layout.is_rtl() {
-                            (line_start + hanging, line_end)
-                        } else {
-                            (line_start, line_end - hanging)
-                        };
                         let x0 = f64::from(glyph_run.offset()).max(visible_start);
                         let x1 = f64::from(glyph_run.offset() + glyph_run.advance())
                             .min(visible_end)
@@ -482,6 +471,39 @@ impl BaseDocument {
         }
 
         Some(rects)
+    }
+}
+
+/// The inline extent of a line's content without its hanging white space,
+/// which hangs at the line's end edge, the paragraph's (UAX #9 L1), whatever
+/// its runs' direction. Taken from where Parley placed the items, which
+/// includes the room floats take and justification's extra spacing, both
+/// absent from the line's `advance`.
+fn visible_line_extent(line: &parley::Line<'_, crate::node::TextBrush>, rtl: bool) -> (f64, f64) {
+    use parley::PositionedLayoutItem;
+
+    let (start, end) =
+        line.items()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(start, end), item| {
+                let (x0, x1) = match item {
+                    PositionedLayoutItem::GlyphRun(run) => {
+                        (run.offset(), run.offset() + run.advance())
+                    }
+                    // Floats and out-of-flow boxes hold no room in the line.
+                    PositionedLayoutItem::InlineBox(inline_box) if inline_box.width == 0.0 => {
+                        return (start, end);
+                    }
+                    PositionedLayoutItem::InlineBox(inline_box) => {
+                        (inline_box.x, inline_box.x + inline_box.width)
+                    }
+                };
+                (start.min(f64::from(x0)), end.max(f64::from(x1)))
+            });
+    let hanging = f64::from(line.metrics().hanging_advance);
+    if rtl {
+        (start + hanging, end)
+    } else {
+        (start, end - hanging)
     }
 }
 

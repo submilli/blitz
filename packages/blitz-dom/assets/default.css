@@ -115,19 +115,31 @@ textarea:focus {
     outline: 2px solid #4D90FE;
 }
 
+/* Buttons as in Chrome (html.css on macOS): atomic inline-blocks in the
+ * control font, laid out around an anonymous button content box
+ * (https://html.spec.whatwg.org/multipage/rendering.html#button-layout).
+ * Unless the page styles their border or background, they are painted as
+ * Chrome's themed button inside this border. */
 button,
 input[type="submit"],
 input[type="reset"],
 input[type="button"] {
-    border: 1px solid #999;
-    border-radius: 1px;
-    padding: 1px 6px;
+    display: inline-block;
+    box-sizing: border-box;
+    font-size: 13.333333px;
+    font-style: normal;
+    font-weight: normal;
+    line-height: normal;
+    letter-spacing: normal;
+    word-spacing: normal;
+    text-transform: none;
+    text-indent: 0;
+    text-shadow: none;
+    text-align: center;
     color: black;
     background-color: #EFEFEF;
-    text-align: center;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    border: 2px outset black;
+    padding: 1px 6px;
 }
 
 /* Button-flavored inputs clip their contents to the border box and never

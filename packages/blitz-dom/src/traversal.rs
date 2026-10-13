@@ -5,18 +5,6 @@ use style::dom::TNode as _;
 
 use crate::{BaseDocument, Node};
 
-/// Iterate a node's children in the flat tree (layout's view: a shadow
-/// host's shadow content, a slot's assigned nodes).
-macro_rules! iter_children {
-    ($node_expr:expr, $cb:expr) => {{
-        let children = $node_expr.flat_children().to_vec();
-        for child_id in children.iter().copied() {
-            $cb(child_id)
-        }
-    }};
-}
-pub(crate) use iter_children;
-
 macro_rules! iter_children_and_pseudos {
     ($node_expr:expr, $cb:expr) => {{
         // Load node

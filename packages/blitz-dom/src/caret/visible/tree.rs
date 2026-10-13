@@ -308,13 +308,6 @@ impl<'a> Tree<'a> {
         self.has_local_name(id, &local_name!("br"))
     }
 
-    /// Chrome lays out a `<button>` as an inline-block, a block container
-    /// of its content; Blitz's UA style makes it an inline flex container.
-    /// The caret engine treats it as Chrome does.
-    pub(super) fn is_button(&self, id: NodeId) -> bool {
-        self.has_local_name(id, &local_name!("button"))
-    }
-
     pub(super) fn is_table(&self, id: NodeId) -> bool {
         self.has_local_name(id, &local_name!("table"))
     }

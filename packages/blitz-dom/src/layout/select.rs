@@ -3,7 +3,7 @@
 //! longest option label plus its button part, and one line tall; a list box
 //! is as wide as its widest row plus a scrollbar, and `size` rows tall.
 
-use super::resolve_calc_value;
+use super::{content_block_extent, resolve_calc_value};
 use crate::font_metrics::{RoundedFontMetrics, first_available_or_fallback_font_metrics};
 use crate::node::{
     DropDownLayout, ListBoxLayout, ListBoxRowLayout, SelectContent, SelectLayout, TextBrush,
@@ -17,7 +17,6 @@ use style::computed_values::direction::T as Direction;
 use style::properties::ComputedValues;
 use style::servo_arc::Arc;
 use style::values::computed::{Length, NonNegativeLengthPercentage, TextTransform};
-use taffy::ResolveOrZero as _;
 
 // Chrome's fixed metrics, in CSS px before `zoom`.
 
@@ -78,14 +77,8 @@ pub(super) fn leaf_layout(
     // included.
     output.size.width = output.size.width.min(MAX_LAYOUT_LENGTH);
     output.size.height = output.size.height.min(MAX_LAYOUT_LENGTH);
-    let padding = style
-        .padding()
-        .resolve_or_zero(inputs.parent_size.width, resolve_calc_value);
-    let border = style
-        .border()
-        .resolve_or_zero(inputs.parent_size.width, resolve_calc_value);
-    let top = padding.top + border.top;
-    let content_height = output.size.height - top - padding.bottom - border.bottom;
+    let (top, content_height) =
+        content_block_extent(style, inputs.parent_size.width, output.size.height);
     // Within the box: huge author padding must not carry the baseline to
     // infinity, where line breaking could never place the box.
     let baseline = select

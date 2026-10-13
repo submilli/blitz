@@ -325,19 +325,22 @@ fn steps_pass_spaces_removed_before_breaks() {
 }
 
 #[test]
-fn a_paragraph_step_ends_where_line_steps_would_cycle_unlike_chrome() {
-    // Blitz lays a `<button>` out unlike Chrome (SUB-1576), and here a line
-    // step down from its line comes back up: the paragraph step stops at
-    // the first repeated position instead of stepping until its work
-    // budget runs out (Chrome moves to "bb", 2).
+fn steps_pass_a_button_holding_an_empty_inline() {
+    // The empty `<a>` canonicalizes out of the button to "bb", 0. A line
+    // step from the inline-block's start reaches its second line, then
+    // "bb"'s, and a paragraph step goes straight to "bb"'s end.
     let doc = laid_out(
         "<p><em style='display:inline-block;width:15px'><img width=18 height=7>\
          <button>x<a></a></button></em>bb</p>",
     );
-    let em = q(&doc, "em");
+    let (em, bb) = (q(&doc, "em"), child(&doc, "p", 1));
+    assert_eq!(
+        carets(&doc, at(em, 0), &moves(FORWARD, Granularity::Line, 3)),
+        [at(em, 1), at(bb, 2), at(bb, 2)]
+    );
     assert_eq!(
         carets(&doc, at(em, 0), &moves(FORWARD, Granularity::Paragraph, 1)),
-        [at(em, 1)]
+        [at(bb, 2)]
     );
 }
 

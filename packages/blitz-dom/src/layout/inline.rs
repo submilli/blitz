@@ -335,15 +335,18 @@ impl BaseDocument {
                 ibox.height = ((margin.top + margin.bottom + output.size.height).max(0.0) * scale)
                     .min(f32::MAX);
                 // A drop-down select aligns its label's baseline, as Chrome's
-                // menu list does; other boxes sit on the baseline.
-                let is_select = self.nodes[NodeId::from_u64(ibox.id)]
-                    .element_data()
-                    .is_some_and(|element| element.is_laid_out_select());
+                // menu list does, and a button its content's; other boxes sit
+                // on the baseline.
+                let child = &self.nodes[NodeId::from_u64(ibox.id)];
+                let aligns_baseline = child.flags.is_button_root()
+                    || child
+                        .element_data()
+                        .is_some_and(|element| element.is_laid_out_select());
                 // Kept within the box, finite like its height.
                 ibox.baseline = output
                     .baselines
                     .first
-                    .filter(|_| is_select)
+                    .filter(|_| aligns_baseline)
                     .map(|baseline| (margin.top + baseline) * scale)
                     .filter(|baseline| baseline.is_finite())
                     .map(|baseline| baseline.clamp(0.0, ibox.height));

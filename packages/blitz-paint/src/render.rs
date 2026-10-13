@@ -1,6 +1,7 @@
 mod background;
 mod border;
 mod box_shadow;
+pub(crate) mod button;
 mod clip_path;
 mod form_controls;
 mod mask;
@@ -524,11 +525,18 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                     filter,
                     backdrop_filter,
                     |scene| {
-                        cx.draw_background(scene);
+                        let themed_button = cx.is_themed_button();
+                        if themed_button {
+                            cx.draw_themed_button(scene);
+                        } else {
+                            cx.draw_background(scene);
+                        }
                         cx.draw_inset_box_shadow(scene);
                         cx.draw_table_row_backgrounds(scene);
                         cx.draw_table_borders(scene);
-                        cx.draw_border(scene);
+                        if !themed_button {
+                            cx.draw_border(scene);
+                        }
                         cx.stroke_devtools(scene);
 
                         // TODO: allow layers with opacity to be unclipped (overflow: visible)

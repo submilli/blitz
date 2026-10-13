@@ -20,6 +20,13 @@ bitflags! {
     pub struct StyleFlags: u8 {
         /// Whether the node is a replaced element (e.g. an image or form control)
         const IS_REPLACED = 1 << 0;
+        /// Whether a block-level box with an auto width is sized to fit its
+        /// content, as a table is, rather than stretched (e.g. a button)
+        const SHRINKS_TO_FIT = 1 << 1;
+        /// Whether a block box establishes an independent formatting
+        /// context, as `display: flow-root` does (e.g. a button's anonymous
+        /// content box)
+        const IS_FLOW_ROOT = 1 << 2;
     }
 }
 
@@ -69,7 +76,10 @@ impl<T: Deref<Target = ComputedValues>> taffy::CoreStyle for TaffyStyloStyle<T> 
 
     #[inline]
     fn is_block(&self) -> bool {
+        // Taffy lays out a box in its parent's formatting context only when
+        // it is a block; a flow root is not.
         convert::is_block(self.style.get_box().display)
+            && !self.flags.contains(StyleFlags::IS_FLOW_ROOT)
     }
 
     #[inline]
@@ -222,7 +232,10 @@ impl<T: Deref<Target = ComputedValues>> taffy::BlockContainerStyle for TaffyStyl
 impl<T: Deref<Target = ComputedValues>> taffy::BlockItemStyle for TaffyStyloStyle<T> {
     #[inline]
     fn is_table(&self) -> bool {
+        // Taffy sizes table items to fit rather than stretching them, and
+        // lays them out in their own formatting context, as a button is.
         convert::is_table(self.style.clone_display())
+            || self.flags.contains(StyleFlags::SHRINKS_TO_FIT)
     }
 
     #[cfg(feature = "floats")]

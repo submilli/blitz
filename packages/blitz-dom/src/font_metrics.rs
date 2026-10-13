@@ -45,14 +45,16 @@ fn query_for_font_styles_then<'a>(
 }
 
 /// The used value of `line-height: normal` for the first available font matching
-/// `font_styles`: ascent + descent + line gap, at `font_size` (in CSS px).
+/// `font_styles`, or the default sans-serif font that text then shapes in:
+/// ascent + descent + line gap, at `font_size` (in CSS px).
 pub(crate) fn normal_line_height(
     font_ctx: &mut FontContext,
     font_styles: &FontStyles,
     font_size: f32,
     scale: f32,
 ) -> Option<f32> {
-    let metrics = first_available_font_metrics(font_ctx, font_styles, font_size, scale)?;
+    let metrics =
+        first_available_or_fallback_font_metrics(font_ctx, font_styles, font_size, scale)?;
     Some(metrics.ascent + metrics.descent + metrics.leading)
 }
 
@@ -66,21 +68,11 @@ pub(crate) struct RoundedFontMetrics {
 }
 
 /// The ascent, descent and line gap of the first available font matching
-/// `font_styles`, at `font_size` (in CSS px).
+/// `font_styles`, at `font_size` (in CSS px), falling back to the default
+/// sans-serif font when no family matches, as text shapes in it then.
 ///
 /// Each metric is rounded to a whole device pixel (at `scale` device px per CSS px),
 /// matching Chromium and Parley's pixel-quantized line metrics.
-pub(crate) fn first_available_font_metrics(
-    font_ctx: &mut FontContext,
-    font_styles: &FontStyles,
-    font_size: f32,
-    scale: f32,
-) -> Option<RoundedFontMetrics> {
-    font_metrics_of_query(font_ctx, font_styles, None, font_size, scale)
-}
-
-/// As [`first_available_font_metrics`], falling back to the default
-/// sans-serif font when no family matches, as text shapes in it then.
 pub(crate) fn first_available_or_fallback_font_metrics(
     font_ctx: &mut FontContext,
     font_styles: &FontStyles,

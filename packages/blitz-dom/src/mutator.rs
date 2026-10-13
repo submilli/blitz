@@ -1758,14 +1758,12 @@ impl<'doc> DocumentMutator<'doc> {
         };
 
         let tagname = data.name.local.as_ref();
+        #[cfg(feature = "file-input")]
         let type_attr = data.attr(local_name!("type"));
         let value = data.attr(local_name!("value"));
 
-        // Add content of "value" attribute as a text node child if:
-        //   - Tag name is
-        if let ("input", Some("button" | "submit" | "reset"), Some(value)) =
-            (tagname, type_attr, value)
-        {
+        // An input button shows its "value" attribute as a text node child.
+        if let Some(value) = value.filter(|_| tagname == "input" && data.is_button()) {
             let value = value.to_string();
             let Ok(id) = self.try_create_text_node(&value) else {
                 return;

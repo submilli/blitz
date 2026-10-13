@@ -63,6 +63,9 @@ bitflags! {
         const IS_TABLE_ROOT = 0b00000010;
         /// Whether the node is "in the document" (~= has a parent and isn't a template node)
         const IS_IN_DOCUMENT = 0b00000100;
+        /// Whether the node is a button laid out around an anonymous button
+        /// content box (see `layout::button`)
+        const IS_BUTTON_ROOT = 0b00001000;
     }
 }
 
@@ -78,6 +81,11 @@ impl NodeFlags {
     }
 
     #[inline(always)]
+    pub fn is_button_root(&self) -> bool {
+        self.contains(Self::IS_BUTTON_ROOT)
+    }
+
+    #[inline(always)]
     pub fn is_in_document(&self) -> bool {
         self.contains(Self::IS_IN_DOCUMENT)
     }
@@ -86,6 +94,7 @@ impl NodeFlags {
     pub fn reset_construction_flags(&mut self) {
         self.remove(Self::IS_INLINE_ROOT);
         self.remove(Self::IS_TABLE_ROOT);
+        self.remove(Self::IS_BUTTON_ROOT);
     }
 }
 
@@ -1360,6 +1369,13 @@ impl Node {
             .and_then(|stylo| stylo.primary_styles())
     }
 
+    /// Whether the node is a `<button>`, or an `<input>` button, whose
+    /// layout and paint follow the HTML standard's button rendering.
+    pub fn is_button(&self) -> bool {
+        self.element_data()
+            .is_some_and(|element| element.is_button())
+    }
+
     /// A lazy Taffy style backed by this node's primary stylo style.
     ///
     /// Panics if the node has no computed styles: layout always runs after
@@ -1376,6 +1392,14 @@ impl Node {
             if crate::layout::replaced::is_replaced_element(&el.name.local) {
                 flags |= stylo_taffy::StyleFlags::IS_REPLACED;
             }
+        }
+        // A button's auto width fits its content, even at block level
+        // (https://html.spec.whatwg.org/multipage/rendering.html#button-layout).
+        if self.is_button() {
+            flags |= stylo_taffy::StyleFlags::SHRINKS_TO_FIT;
+        }
+        if crate::layout::button::is_content_box(self) {
+            flags |= stylo_taffy::StyleFlags::IS_FLOW_ROOT;
         }
 
         stylo_taffy::TaffyStyloStyle::new(styles, flags)

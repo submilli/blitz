@@ -947,6 +947,24 @@ impl ElementData {
         std::mem::take(&mut self.inline_layout_data)
     }
 
+    /// A `<button>`, or an `<input>` of type `button`, `submit` or `reset`,
+    /// whatever its `display`: the elements the HTML standard renders as
+    /// buttons. <https://html.spec.whatwg.org/multipage/rendering.html#button-layout>
+    pub fn is_button(&self) -> bool {
+        if self.name.ns != crate::ns!(html) {
+            return false;
+        }
+        match self.name.local {
+            local_name!("button") => true,
+            local_name!("input") => self.attr(local_name!("type")).is_some_and(|kind| {
+                ["button", "submit", "reset"]
+                    .iter()
+                    .any(|button| kind.eq_ignore_ascii_case(button))
+            }),
+            _ => false,
+        }
+    }
+
     pub fn is_submit_button(&self) -> bool {
         if self.name.ns != crate::ns!(html) {
             return false;

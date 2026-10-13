@@ -101,15 +101,13 @@ fn in_same_line_box(cx: &Context, a: Placed, b: Placed) -> bool {
     Rc::ptr_eq(&first.ifc, &second.ifc) && first.line() == second.line()
 }
 
+/// An inline-level block container: an inline-block, or an inline button,
+/// which is laid out as one.
 fn is_inline_block(cx: &Context, node: NodeId) -> bool {
-    let button = cx.tree.is_button(node);
-    let display = cx
-        .tree
-        .node(node)
-        .display_style()
-        .unwrap_or(Display::inline());
+    let data = cx.tree.node(node);
+    let display = data.display_style().unwrap_or(Display::inline());
     display.outside() == DisplayOutside::Inline
-        && (display.inside() == DisplayInside::FlowRoot || button)
+        && (display.inside() == DisplayInside::FlowRoot || data.flags.is_button_root())
 }
 
 /// The outermost block whose inline content holds the node at or after a

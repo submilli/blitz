@@ -9,6 +9,7 @@ use crate::layout::construct::{InlineElement, inline_element};
 use crate::node::NodeData;
 use crate::{BaseDocument, NodeId};
 use icu_segmenter::GraphemeClusterSegmenter;
+use markup5ever::local_name;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -289,13 +290,17 @@ impl<'a> Context<'a> {
         let data = self.tree.node(node);
         let element = data.element_data()?;
         let display = data.display_style().unwrap_or(Display::inline());
-        let replaced = is_replaced(&self.tree, node, element);
+        let replaced = is_replaced(element);
+        // Even a `display: inline` button is laid out as an inline-block.
+        let button_root = data.flags.is_button_root();
         match (display.outside(), display.inside()) {
             (DisplayOutside::None, _) => None,
             _ if self.tree.is_br(node) => Some(Kind::Br),
-            (DisplayOutside::Inline, DisplayInside::Flow) if !replaced => Some(Kind::Inline),
+            (DisplayOutside::Inline, DisplayInside::Flow) if !replaced && !button_root => {
+                Some(Kind::Inline)
+            }
             (DisplayOutside::Inline, inside) => Some(Kind::Atomic {
-                block_flow: !replaced && inside == DisplayInside::FlowRoot,
+                block_flow: !replaced && (inside == DisplayInside::FlowRoot || button_root),
             }),
             (_, inside) => Some(Kind::Block {
                 block_flow: !replaced
@@ -312,8 +317,7 @@ impl<'a> Context<'a> {
         let Some(element) = self.tree.node(node).element_data() else {
             return false;
         };
-        matches!(kind, Kind::Atomic { .. } | Kind::Block { .. })
-            && !is_replaced(&self.tree, node, element)
+        matches!(kind, Kind::Atomic { .. } | Kind::Block { .. }) && !is_replaced(element)
     }
 
     /// Whether an element's used `user-select` is `none`: `auto` uses
@@ -470,10 +474,11 @@ impl<'a> Context<'a> {
     }
 }
 
-/// A replaced element or control, which lays out no children of its own;
-/// not a button (see [`Tree::is_button`]).
-fn is_replaced(tree: &Tree, node: NodeId, element: &crate::node::ElementData) -> bool {
-    inline_element(element) == InlineElement::Atom && !tree.is_button(node)
+/// A replaced element or control, which lays out no children of its own.
+/// A `<button>` is atomic in its line but lays its children out, whatever
+/// its `display`; an input button's label is not page content.
+fn is_replaced(element: &crate::node::ElementData) -> bool {
+    inline_element(element) == InlineElement::Atom && element.name.local != local_name!("button")
 }
 
 fn is_laid_out_inline_root(doc: &BaseDocument, node: NodeId) -> bool {
