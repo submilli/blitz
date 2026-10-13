@@ -25,6 +25,7 @@ impl BaseDocument {
         ) {
             return visible::modify_selection(self, anchor, focus, request);
         }
+        let (anchor, focus, request) = visible::prepare_to_modify(self, anchor, focus, request);
         let flows = DocumentFlows::new(self);
         let mut focus_caret = flows.locate(focus)?;
         focus_caret.upstream = request.memory.upstream;

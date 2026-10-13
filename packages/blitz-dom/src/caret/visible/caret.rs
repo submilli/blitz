@@ -57,6 +57,11 @@ impl Caret {
         self.ifc.items[self.item].line
     }
 
+    /// Whether the item it draws in is laid out right to left.
+    pub(super) fn rtl(&self) -> bool {
+        self.ifc.items[self.item].rtl
+    }
+
     /// `ToPositionInDOMTreeWithAffinity`.
     pub(super) fn to_position(&self, cx: &Context) -> Option<Placed> {
         let item = &self.ifc.items[self.item];

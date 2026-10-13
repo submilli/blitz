@@ -30,24 +30,27 @@ impl ControlSelection {
     /// Parley uses scalar UTF-8 positions. Keep surrogate-interior positions in
     /// this DOM state; their paint projection uses the following scalar edge.
     pub(crate) fn project(self, text: &str) -> (usize, usize) {
-        let byte = |offset| {
-            let mut units = 0;
-            for (index, ch) in text.char_indices() {
-                if units >= offset {
-                    return index;
-                }
-                units += ch.len_utf16();
-            }
-            text.len()
-        };
-        let start = byte(self.start);
-        let end = byte(self.end);
+        let start = utf16_to_byte(text, self.start);
+        let end = utf16_to_byte(text, self.end);
         if self.direction == SelectionDirection::Backward {
             (end, start)
         } else {
             (start, end)
         }
     }
+}
+
+/// The UTF-8 offset of a UTF-16 offset into `text`, clamped to its end. An
+/// offset inside a surrogate pair takes the following scalar's edge.
+pub(crate) fn utf16_to_byte(text: &str, utf16: usize) -> usize {
+    let mut units = 0;
+    for (byte, character) in text.char_indices() {
+        if units >= utf16 {
+            return byte;
+        }
+        units += character.len_utf16();
+    }
+    text.len()
 }
 
 fn supports_selection(element: &ElementData) -> bool {

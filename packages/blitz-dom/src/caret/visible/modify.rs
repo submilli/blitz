@@ -34,7 +34,7 @@ pub(super) fn modify(
     let line = request.granularity == Granularity::Line;
     if line && request.alter == Alter::Move && anchor == focus {
         // Line steps are logical (see below).
-        let forward = is_forward(request.direction, true);
+        let forward = request.direction.is_forward(|| false);
         match select_line_step(cx, focus, forward, line_x) {
             Some(InSelect::Reported(modified)) => return modified,
             Some(InSelect::Left { from, x }) => (anchor, focus, line_x) = (from, from, Some(x)),
@@ -50,7 +50,7 @@ pub(super) fn modify(
     // left by line or paragraph are logical; a line boundary follows the
     // block's direction.
     let ltr = vertical || direction_of(cx, selection.focus) == TextDirection::Ltr;
-    let forward = is_forward(request.direction, ltr);
+    let forward = request.direction.is_forward(|| !ltr);
     let x = line_x.unwrap_or_else(|| {
         let focus = selection.visible_end(cx, selection.focus);
         caret::line_direction_point(cx, focus)
@@ -197,15 +197,6 @@ fn report(
     })
 }
 
-fn is_forward(direction: Direction, ltr: bool) -> bool {
-    match direction {
-        Direction::Forward => true,
-        Direction::Backward => false,
-        Direction::Right => ltr,
-        Direction::Left => !ltr,
-    }
-}
-
 /// What a line step from a caret in a select does.
 enum InSelect {
     /// It moves within the select, or stays: the selection to report.
@@ -255,7 +246,7 @@ fn report_as_is(cx: &Context, anchor: Position, focus: Position, line_x: f32) ->
 
 /// The direction of the block around a position
 /// (`DirectionOfEnclosingBlockOf`).
-fn direction_of(cx: &Context, position: Position) -> TextDirection {
+pub(super) fn direction_of(cx: &Context, position: Position) -> TextDirection {
     let node = position.container(&cx.tree).unwrap_or(position.node);
     canonical::enclosing_block_flow_element(cx, node)
         .and_then(|block| cx.tree.node(block).primary_styles())

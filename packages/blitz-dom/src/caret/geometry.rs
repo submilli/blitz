@@ -129,6 +129,14 @@ impl LayoutGeometry {
         u32::try_from(index).unwrap_or(u32::MAX)
     }
 
+    /// Whether the cluster holding a layout byte is laid out right to left;
+    /// `None` when no positioned cluster holds it.
+    pub(super) fn rtl_at(&self, byte: usize) -> Option<bool> {
+        self.containing(byte)
+            .filter(|cluster| byte < cluster.end)
+            .map(|cluster| cluster.rtl)
+    }
+
     pub(super) fn inline_box(&self, id: u64) -> Option<BoxEdge> {
         self.boxes.get(&id).copied()
     }

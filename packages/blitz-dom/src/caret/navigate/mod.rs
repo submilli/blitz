@@ -3,8 +3,9 @@
 //! Moving a non-collapsed selection by character collapses it; by word or
 //! sentence it moves from the focus; by line, paragraph or a boundary it
 //! moves from the start or end. Extension moves the focus, except that word,
-//! line and paragraph steps never carry it across the anchor, boundary steps
-//! grow the selection at the side they move toward, and the focus stays in
+//! line and paragraph steps never carry it across the anchor, a range's
+//! boundary steps start from its start or end, line, paragraph and document
+//! boundaries grow it at the side they move toward, and the focus stays in
 //! the anchor's tree (a selection does not cross a shadow boundary). Line
 //! and paragraph steps keep a horizontal position across consecutive moves.
 //! Documents move by line, paragraph and line boundary in
@@ -13,7 +14,7 @@
 
 use super::flow::Flow;
 use super::segments;
-use super::{Alter, Direction, Granularity, ModifyRequest};
+use super::{Alter, Granularity, ModifyRequest};
 use crate::NodeId;
 use std::cmp::Ordering;
 
@@ -90,12 +91,7 @@ pub(super) fn modify(
     focus.upstream &= flows.flow(focus.flow)?.is_soft_wrap(focus.index);
     let anchor = if anchor == focus { focus } else { anchor };
     let rtl = flows.flow(focus.flow)?.rtl();
-    let forward = match request.direction {
-        Direction::Forward => true,
-        Direction::Backward => false,
-        Direction::Right => !rtl,
-        Direction::Left => rtl,
-    };
+    let forward = request.direction.is_forward(|| rtl);
     let (start, end) = (anchor.min(focus), anchor.max(focus));
     let granularity = request.granularity;
     let mover = Mover { flows, forward };
@@ -120,17 +116,20 @@ pub(super) fn modify(
         return Some((collapsed(target), vertical.then_some(x)));
     }
     if start != end && granularity.is_boundary() {
-        let carets = if forward {
-            let focus = mover.step(end, granularity, 0.0)?;
+        let target = mover.step(if forward { end } else { start }, granularity, 0.0)?;
+        // Toward its anchor's side, a range grows (Blink's
+        // `ShouldAlwaysGrowSelectionWhenExtendingToBoundary`): the end the
+        // step leaves becomes the anchor.
+        let toward_anchor = forward == (anchor > focus);
+        let carets = if toward_anchor && granularity.grows_range() {
             Carets {
-                anchor: start,
-                focus: clamp_to_tree(flows, start, focus),
+                anchor: clamp_to_tree(flows, focus, target),
+                focus,
             }
         } else {
-            let anchor = mover.step(start, granularity, 0.0)?;
             Carets {
-                anchor: clamp_to_tree(flows, end, anchor),
-                focus: end,
+                anchor,
+                focus: clamp_to_tree(flows, anchor, target),
             }
         };
         return Some((carets, None));
@@ -187,6 +186,15 @@ impl Granularity {
         )
     }
 
+    /// A boundary that grows a range on macOS (Blink's `IsBoundary`),
+    /// which a sentence boundary is not.
+    fn grows_range(self) -> bool {
+        matches!(
+            self,
+            Self::LineBoundary | Self::ParagraphBoundary | Self::DocumentBoundary
+        )
+    }
+
     fn keeps_anchor_side(self) -> bool {
         matches!(self, Self::Word | Self::Line | Self::Paragraph)
     }
@@ -229,7 +237,9 @@ impl Mover<'_> {
         if let Some(index) = next {
             return Some(Caret::at(caret.flow, index));
         }
-        Some(self.adjacent_edge(caret.flow).unwrap_or(caret))
+        // At the document's edge the step cannot move, which leaves the
+        // selection as it is (Blink's null `NextPositionOf`).
+        self.adjacent_edge(caret.flow)
     }
 
     fn word(&self, caret: Caret) -> Option<Caret> {

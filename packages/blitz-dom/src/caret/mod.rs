@@ -43,6 +43,20 @@ pub enum Direction {
     Right,
 }
 
+impl Direction {
+    /// Whether a step goes forward in the DOM. Left and right are visual:
+    /// over right-to-left text, as `rtl` tells (asked only for them), they
+    /// go backward and forward.
+    pub(crate) fn is_forward(self, rtl: impl FnOnce() -> bool) -> bool {
+        match self {
+            Self::Forward => true,
+            Self::Backward => false,
+            Self::Right => !rtl(),
+            Self::Left => rtl(),
+        }
+    }
+}
+
 /// `modify()`'s `granularity` argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Granularity {
@@ -63,6 +77,15 @@ pub struct ModifyRequest {
     pub alter: Alter,
     pub direction: Direction,
     pub granularity: Granularity,
+    /// Whether the document selection is directional. Chrome's macOS
+    /// selection is after extend steps, `extend()`, `setBaseAndExtent()`
+    /// and `selectAllChildren()`, and not after move steps, `addRange()`
+    /// or a script change of its Range. Extending a range that is not
+    /// directional first puts its anchor at the end opposite the side the
+    /// step moves toward (`SelectionModifier::PrepareToModifySelection`).
+    /// A text control's selection is directional unless its
+    /// `selectionDirection` is "none", whatever this says.
+    pub directional: bool,
     /// What the previous result kept for this step; any other selection
     /// change discards it ([`CaretMemory::default`]).
     pub memory: CaretMemory,

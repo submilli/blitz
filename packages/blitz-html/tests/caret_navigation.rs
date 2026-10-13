@@ -304,6 +304,7 @@ fn element_positions_and_empty_documents() {
         alter: Alter::Move,
         direction: FORWARD,
         granularity: Granularity::Character,
+        directional: true,
         memory: CaretMemory::default(),
     };
     assert_eq!(
@@ -343,6 +344,7 @@ fn deeply_nested_inline_content_is_navigable() {
         alter: Alter::Move,
         direction: FORWARD,
         granularity: Granularity::DocumentBoundary,
+        directional: true,
         memory: CaretMemory::default(),
     };
     let moved = doc.modify_selection(at(p, 0), at(p, 0), request).unwrap();
@@ -384,6 +386,7 @@ fn text_controls_move_over_their_editor_layout() {
                 alter,
                 direction,
                 granularity,
+                directional: true,
                 memory: CaretMemory {
                     line_x,
                     upstream,
@@ -694,6 +697,7 @@ fn stored_upstream_affinity_applies_only_at_a_soft_wrap() {
         alter: Alter::Move,
         direction: FORWARD,
         granularity: Granularity::Line,
+        directional: true,
         memory: CaretMemory {
             upstream: true,
             ..CaretMemory::default()

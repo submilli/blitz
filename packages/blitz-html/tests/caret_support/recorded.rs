@@ -76,6 +76,7 @@ fn request(step: &str, memory: CaretMemory) -> ModifyRequest {
         alter,
         direction,
         granularity,
+        directional: true,
         memory,
     }
 }

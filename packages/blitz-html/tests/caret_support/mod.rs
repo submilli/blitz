@@ -37,6 +37,7 @@ pub fn walk(
                 alter,
                 direction,
                 granularity,
+                directional: true,
                 memory,
             };
             if let Some(moved) = doc.modify_selection(anchor, focus, request) {
@@ -65,6 +66,7 @@ pub fn reported(
                 alter,
                 direction,
                 granularity,
+                directional: true,
                 memory,
             };
             if last_reported.is_some()

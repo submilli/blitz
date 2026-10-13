@@ -1,12 +1,12 @@
 //! Caret movement inside a focused text control, over its editor layout.
 //! Positions are UTF-16 offsets into the control's value.
 
-use super::ModifyRequest;
 use super::flow::{Entry, Flow, UnitKind};
 use super::geometry::LayoutGeometry;
 use super::navigate::{self, Caret, Carets, Flows};
 use super::order::Key;
-use crate::form_selection::{ControlSelection, SelectionDirection};
+use super::{Alter, ModifyRequest};
+use crate::form_selection::{ControlSelection, SelectionDirection, utf16_to_byte};
 use crate::{BaseDocument, DocumentMutator, NodeId, ranges::Boundary};
 use icu_segmenter::GraphemeClusterSegmenter;
 
@@ -31,9 +31,11 @@ impl DocumentMutator<'_> {
     ) -> Option<ControlModified> {
         let selection = self.doc.control_selection(id)?;
         let flow = SingleFlow(control_flow(self.doc, id)?);
-        let (anchor, focus) = match selection.direction {
-            SelectionDirection::Backward => (selection.end, selection.start),
-            _ => (selection.start, selection.end),
+        let anchor_start = self.doc.control_anchor_is_start(id, &selection, request)?;
+        let (anchor, focus) = if anchor_start {
+            (selection.start, selection.end)
+        } else {
+            (selection.end, selection.start)
         };
         let mut focus = flow.caret(focus)?;
         focus.upstream = request.memory.upstream;
@@ -57,6 +59,49 @@ impl DocumentMutator<'_> {
         };
         self.set_control_selection(id, selection);
         Some(ControlModified { line_x, upstream })
+    }
+}
+
+impl BaseDocument {
+    /// Whether a step starts from a control's selection with its anchor at
+    /// the start. A range whose direction is "none" is not directional: an
+    /// extension grows it at the side it moves toward
+    /// (`PrepareToModifySelection`).
+    fn control_anchor_is_start(
+        &self,
+        id: NodeId,
+        selection: &ControlSelection,
+        request: ModifyRequest,
+    ) -> Option<bool> {
+        let oriented = request.alter == Alter::Extend && selection.start < selection.end;
+        Some(match selection.direction {
+            SelectionDirection::Forward => true,
+            SelectionDirection::Backward => false,
+            SelectionDirection::None if !oriented => true,
+            SelectionDirection::None => {
+                // Bounded by the control's value; its layout exists, since
+                // the step's flow was built from it.
+                let rtl = self.control_selection_rtl(id, selection)?;
+                request.direction.is_forward(|| rtl)
+            }
+        })
+    }
+
+    /// `DirectionOfSelection` for a control's range: right to left when
+    /// the text at its first and last characters is, left to right when
+    /// both are, else the control's direction.
+    fn control_selection_rtl(&self, id: NodeId, selection: &ControlSelection) -> Option<bool> {
+        let node = self.get_node(id)?;
+        let input = node.element_data()?.text_input_data()?;
+        let layout = input.editor.try_layout()?;
+        let text = input.editor.raw_text();
+        let geometry = LayoutGeometry::new(layout, node);
+        let first = geometry.rtl_at(utf16_to_byte(text, selection.start));
+        let last = geometry.rtl_at(utf16_to_byte(text, selection.end).saturating_sub(1));
+        Some(match (first, last) {
+            (Some(first), Some(last)) if first == last => first,
+            _ => layout.is_rtl(),
+        })
     }
 }
 

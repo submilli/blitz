@@ -20,6 +20,7 @@ mod line;
 mod modify;
 mod paragraph;
 mod position;
+mod prepare;
 mod select;
 mod selection;
 mod shadow;
@@ -27,6 +28,7 @@ mod text;
 mod tree;
 mod visible_position;
 
+use super::ModifyRequest;
 use crate::BaseDocument;
 use crate::ranges::Boundary;
 
@@ -37,7 +39,25 @@ pub(super) fn modify_selection(
     doc: &BaseDocument,
     anchor: Boundary,
     focus: Boundary,
-    request: super::ModifyRequest,
+    request: ModifyRequest,
 ) -> Option<super::Modified> {
-    modify::modify(&context::Context::new(doc), anchor, focus, request)
+    let cx = context::Context::new(doc);
+    let (anchor, focus, request) = prepare::prepare(&cx, anchor, focus, request);
+    modify::modify(&cx, anchor, focus, request)
+}
+
+/// The selection a step over caret stops starts from: a range that is not
+/// directional, oriented toward the side an extension moves to (see
+/// [`ModifyRequest::directional`]).
+pub(super) fn prepare_to_modify(
+    doc: &BaseDocument,
+    anchor: Boundary,
+    focus: Boundary,
+    request: ModifyRequest,
+) -> (Boundary, Boundary, ModifyRequest) {
+    // Most steps need no orienting; they skip building a context.
+    if !prepare::applies(anchor, focus, request) {
+        return (anchor, focus, request);
+    }
+    prepare::prepare(&context::Context::new(doc), anchor, focus, request)
 }

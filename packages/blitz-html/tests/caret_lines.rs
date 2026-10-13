@@ -459,6 +459,7 @@ fn a_kept_position_beside_a_removed_node_becomes_an_offset() {
             alter: Alter::Move,
             direction: BACKWARD,
             granularity: Granularity::Line,
+            directional: true,
             memory: CaretMemory::default(),
         };
         let moved = doc.modify_selection(at(def, 1), at(def, 1), up).unwrap();
