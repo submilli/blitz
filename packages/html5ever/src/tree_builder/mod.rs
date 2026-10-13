@@ -25,6 +25,7 @@ use crate::tokenizer::{Doctype, EndTag, StartTag, Tag, TokenSink, TokenSinkResul
 
 use std::borrow::Cow::{self, Borrowed};
 use std::cell::{Cell, Ref, RefCell};
+use std::rc::Rc;
 use std::collections::VecDeque;
 use std::iter::{Enumerate, Rev};
 use std::{fmt, slice};
@@ -148,6 +149,10 @@ pub struct TreeBuilder<Handle, Sink> {
     /// The start tag stopped before, with the foster-parenting flag its
     /// element is inserted with.
     paused: RefCell<Option<(Tag, bool)>>,
+
+    /// Chrome's parser depth limit, and the flag telling the sink an
+    /// insertion is past it (see [`TreeBuilder::limit_tree_depth`]).
+    depth_limit: Option<(usize, Rc<Cell<bool>>)>,
     // WARNING: If you add new fields that contain Handles, you
     // must add them to trace_handles() below to preserve memory
     // safety!
@@ -183,6 +188,7 @@ where
             foster_parenting: Default::default(),
             pause_before: None,
             paused: Default::default(),
+            depth_limit: None,
             context_elem: Default::default(),
             current_line: Cell::new(1),
         }
@@ -225,6 +231,7 @@ where
             foster_parenting: Default::default(),
             pause_before: None,
             paused: Default::default(),
+            depth_limit: None,
             context_elem: RefCell::new(Some(context_elem)),
             current_line: Cell::new(1),
         };
@@ -449,6 +456,24 @@ where
         self.pause_before = Some(PauseBefore { name, template });
     }
 
+    /// Follow Chrome's parser depth limit (`HTMLConstructionSite::Attach`):
+    /// while more than `limit` elements are open, an element or comment is
+    /// attached to its parent's parent. Text, foster-parented nodes and
+    /// nodes the adoption agency moves are not (Blink inserts those without
+    /// `Attach`), and past the limit a `template`'s content goes beside it,
+    /// not into its contents. `past_limit` is true while the sink appends
+    /// such a node; the sink attaches it to the parent's parent.
+    pub fn limit_tree_depth(&mut self, limit: usize, past_limit: Rc<Cell<bool>>) {
+        self.depth_limit = Some((limit, past_limit));
+    }
+
+    /// Whether an element or comment inserted now goes past the depth limit.
+    fn past_depth_limit(&self) -> bool {
+        self.depth_limit
+            .as_ref()
+            .is_some_and(|(limit, _)| self.open_elems.borrow().len() > *limit)
+    }
+
     /// A copy of the start tag the tree builder stopped before.
     pub fn paused_tag(&self) -> Option<Tag> {
         self.paused.borrow().as_ref().map(|(tag, _)| tag.clone())
@@ -485,16 +510,22 @@ where
     }
 
     /// https://html.spec.whatwg.org/multipage/#appropriate-place-for-inserting-a-node
+    ///
+    /// `attach`: an element or comment, which Chrome's depth limit applies to.
     fn appropriate_place_for_insertion(
         &self,
         override_target: Option<Handle>,
+        attach: bool,
     ) -> InsertionPoint<Handle> {
         use self::tag_sets::*;
 
         declare_tag_set!(foster_target = "table" "tbody" "tfoot" "thead" "tr");
         let target = override_target.unwrap_or_else(|| self.current_node().clone());
         if !(self.foster_parenting.get() && self.elem_in(&target, foster_target)) {
-            if self.html_elem_named(&target, local_name!("template")) {
+            // Past the depth limit, Chrome attaches to the template's parent
+            // before it would redirect into the contents.
+            let past_limit = attach && self.past_depth_limit();
+            if !past_limit && self.html_elem_named(&target, local_name!("template")) {
                 // No foster parenting (inside template).
                 let contents = self.sink.get_template_contents(&target);
                 return InsertionPoint::LastChild(contents);
@@ -520,6 +551,23 @@ where
         }
         let html_elem = self.html_elem();
         InsertionPoint::LastChild(html_elem.clone())
+    }
+
+    /// Insert an element or comment as Blink's `Attach` does.
+    fn attach_at(&self, insertion_point: InsertionPoint<Handle>, child: NodeOrText<Handle>) {
+        let past_limit = match (&self.depth_limit, &insertion_point) {
+            (Some((_, flag)), InsertionPoint::LastChild(_)) if self.past_depth_limit() => {
+                Some(flag.clone())
+            },
+            _ => None,
+        };
+        if let Some(flag) = &past_limit {
+            flag.set(true);
+        }
+        self.insert_at(insertion_point, child);
+        if let Some(flag) = past_limit {
+            flag.set(false);
+        }
     }
 
     fn insert_at(&self, insertion_point: InsertionPoint<Handle>, child: NodeOrText<Handle>) {
@@ -777,8 +825,15 @@ where
 
     // Insert at the "appropriate place for inserting a node".
     fn insert_appropriately(&self, child: NodeOrText<Handle>, override_target: Option<Handle>) {
-        let insertion_point = self.appropriate_place_for_insertion(override_target);
+        let insertion_point = self.appropriate_place_for_insertion(override_target, false);
         self.insert_at(insertion_point, child);
+    }
+
+    /// Insert an element or comment at the appropriate place, as Blink's
+    /// `Attach` does.
+    fn attach_appropriately(&self, child: NodeOrText<Handle>) {
+        let insertion_point = self.appropriate_place_for_insertion(None, true);
+        self.attach_at(insertion_point, child);
     }
 
     fn adoption_agency(&self, subject: LocalName) {
@@ -1397,7 +1452,7 @@ where
 
     fn append_comment(&self, text: StrTendril) -> ProcessResult<Handle> {
         let comment = self.sink.create_comment(text);
-        self.insert_appropriately(AppendNode(comment), None);
+        self.attach_appropriately(AppendNode(comment));
         ProcessResult::Done
     }
 
@@ -1451,7 +1506,7 @@ where
             had_duplicate_attributes,
         );
 
-        let insertion_point = self.appropriate_place_for_insertion(None);
+        let insertion_point = self.appropriate_place_for_insertion(None, true);
         let (node1, node2) = match insertion_point {
             InsertionPoint::LastChild(ref p) | InsertionPoint::BeforeSibling(ref p) => {
                 (p.clone(), None)
@@ -1476,7 +1531,7 @@ where
                 .associate_with_form(&elem, &form, (&node1, node2.as_ref()));
         }
 
-        self.insert_at(insertion_point, AppendNode(elem.clone()));
+        self.attach_at(insertion_point, AppendNode(elem.clone()));
 
         match push {
             PushFlag::Push => self.push(&elem),
@@ -1517,7 +1572,7 @@ where
         ns: Namespace,
         only_add_to_element_stack: bool,
     ) -> Handle {
-        let adjusted_insertion_location = self.appropriate_place_for_insertion(None);
+        let adjusted_insertion_location = self.appropriate_place_for_insertion(None, true);
         let qname = QualName::new(None, ns, tag.name.clone());
         let elem = create_element_with_flags(
             &self.sink,
@@ -1527,7 +1582,7 @@ where
         );
 
         if !only_add_to_element_stack {
-            self.insert_at(adjusted_insertion_location, AppendNode(elem.clone()));
+            self.attach_at(adjusted_insertion_location, AppendNode(elem.clone()));
         }
 
         self.push(&elem);
@@ -1540,7 +1595,7 @@ where
     ///
     /// A start tag whose tag name is "template"
     fn should_attach_declarative_shadow(&self, tag: &Tag) -> bool {
-        let adjusted_insertion_location = self.appropriate_place_for_insertion(None);
+        let adjusted_insertion_location = self.appropriate_place_for_insertion(None, true);
 
         let (intended_parent, _node2) = match adjusted_insertion_location {
             InsertionPoint::LastChild(ref p) | InsertionPoint::BeforeSibling(ref p) => {

@@ -13,6 +13,7 @@ use style::Atom;
 use style::values::computed::CSSPixelLength;
 use style::values::computed::length_percentage::CalcLengthPercentage;
 use stylo_taffy::TaffyStyloStyle;
+use stylo_taffy::convert::layout_length;
 use taffy::{
     BlockContext, CoreStyle as _, DetailedLayoutInfo, FlexDirection, LayoutContainingBlock,
     LayoutPartialTree, NodeId, ResolveOrZero, RoundTree, RunMode, TraversePartialTree,
@@ -20,6 +21,7 @@ use taffy::{
     compute_grid_layout, compute_leaf_layout, compute_oof_layout, prelude::*,
 };
 
+pub(crate) mod box_depth;
 pub(crate) mod button;
 pub(crate) mod construct;
 pub(crate) mod damage;
@@ -70,10 +72,17 @@ fn tag_intrinsic_sizes(
     (IntrinsicSizes::default(), DEFAULT_OBJECT_SIZE)
 }
 
+/// Saturate a box's size as Chrome's `LayoutUnit`s do, so that percentages
+/// of it, and the sums its ancestors make of it, stay finite.
+fn saturate_size(size: &mut taffy::Size<f32>) {
+    size.width = layout_length(size.width);
+    size.height = layout_length(size.height);
+}
+
 pub(crate) fn resolve_calc_value(calc_ptr: *const (), parent_size: f32) -> f32 {
     let calc = unsafe { &*(calc_ptr as *const CalcLengthPercentage) };
     let result = calc.resolve(CSSPixelLength::new(parent_size));
-    result.px()
+    layout_length(result.px())
 }
 
 /// The block-start offset and height of a box's content box, inside its
@@ -117,6 +126,7 @@ impl BaseDocument {
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> taffy::tree::LayoutOutput {
         let mut output = self.dispatch_child_layout(node_id, inputs, block_ctx);
+        saturate_size(&mut output.size);
         if inputs.run_mode == RunMode::PerformLayout {
             compute_oof_layout(self, node_id, &mut output);
             if self
@@ -562,7 +572,11 @@ impl LayoutPartialTree for BaseDocument {
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
-        *self.node_from_id_mut(node_id).unrounded_layout_mut() = *layout;
+        let mut layout = *layout;
+        layout.location.x = layout_length(layout.location.x);
+        layout.location.y = layout_length(layout.location.y);
+        saturate_size(&mut layout.size);
+        *self.node_from_id_mut(node_id).unrounded_layout_mut() = layout;
     }
 
     fn resolve_calc_value(&self, calc_ptr: *const (), parent_size: f32) -> f32 {

@@ -241,7 +241,7 @@ where
                         if self.is_fragment() {
                             self.sink.mark_script_already_started(&elem);
                         }
-                        self.insert_appropriately(AppendNode(elem.clone()), None);
+                        self.attach_appropriately(AppendNode(elem.clone()));
                         self.open_elems.borrow_mut().push(elem);
                         self.to_raw_text_mode(ScriptData)
                     },

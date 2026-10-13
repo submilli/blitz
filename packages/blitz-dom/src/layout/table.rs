@@ -23,6 +23,7 @@ use crate::BaseDocument;
 
 use super::damage::{CONSTRUCT_BOX, CONSTRUCT_DESCENDENT, CONSTRUCT_FC};
 use super::resolve_calc_value;
+use stylo_taffy::convert::layout_length;
 
 pub struct TableTreeWrapper<'doc> {
     pub(crate) doc: &'doc mut BaseDocument,
@@ -130,7 +131,7 @@ fn side_width(width: app_units::Au, style: BorderStyle) -> f32 {
     if style.none_or_hidden() {
         0.0
     } else {
-        width.to_f32_px()
+        layout_length(width.to_f32_px())
     }
 }
 
@@ -156,7 +157,7 @@ fn percent_plus_length(
             // is kept alive by `calc_values` for as long as the TableContext exists.
             unsafe { taffy::Dimension::from_raw(taffy::CompactLength::calc(ptr)) }
         }
-        UnpackedLengthPercentage::Length(len) => style_helpers::length(len.px()),
+        UnpackedLengthPercentage::Length(len) => style_helpers::length(layout_length(len.px())),
         UnpackedLengthPercentage::Percentage(p) => style_helpers::percent(p.0),
     };
     calc_values.push(value);
@@ -274,7 +275,7 @@ pub(crate) fn build_table_context(
         // (from which only the outer border-spacing has been removed via padding). Fold
         // the inner border-spacing into the percentage using `calc(N% - N * spacing)`.
         let spacing_x = match border_collapse {
-            BorderCollapse::Separate => border_spacing.width.px(),
+            BorderCollapse::Separate => layout_length(border_spacing.width.px()),
             BorderCollapse::Collapse => 0.0,
         };
         let inner_spacing = spacing_x * num_columns.saturating_sub(1) as f32;
@@ -311,8 +312,8 @@ pub(crate) fn build_table_context(
         BorderCollapse::Separate => {
             // In the separated borders model, `border-spacing` also applies between
             // the table border and the outermost cells, in addition to between cells.
-            let spacing_x = border_spacing.width.px();
-            let spacing_y = border_spacing.height.px();
+            let spacing_x = layout_length(border_spacing.width.px());
+            let spacing_y = layout_length(border_spacing.height.px());
             let padding = style.padding.resolve_or_zero(None, resolve_calc_value);
             style.padding = taffy::Rect {
                 left: style_helpers::length(padding.left + spacing_x),

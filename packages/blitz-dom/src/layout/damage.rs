@@ -49,14 +49,42 @@ impl BaseDocument {
     /// children. Anonymous boxes only exist in the layout tree and are
     /// therefore never visited; their caches are invalidated by walking
     /// `layout_parent` upward from each damaged node instead.
-    pub(crate) fn propagate_damage_flags(&mut self, node_id: NodeId) -> RestyleDamage {
-        let mut damage = if let Some(data) = self.nodes[node_id]
+    pub(crate) fn propagate_damage_flags(&mut self, root: NodeId) -> RestyleDamage {
+        // An explicit stack, not recursion: script can nest nodes as deep as
+        // the node limit, past what the native stack holds.
+        let mut stack: Vec<DamageFrame> = Vec::new();
+        let mut returned = match self.enter_damage_frame(root) {
+            Ok(frame) => {
+                stack.push(frame);
+                RestyleDamage::empty()
+            }
+            Err(damage) => return damage,
+        };
+        while let Some(frame) = stack.last_mut() {
+            frame.from_children |= std::mem::take(&mut returned);
+            if let Some(child) = frame.next_child() {
+                match self.enter_damage_frame(child) {
+                    Ok(child_frame) => stack.push(child_frame),
+                    Err(damage) => returned = damage,
+                }
+                continue;
+            }
+            let frame = stack.pop().expect("the loop holds a frame");
+            returned = self.finish_damage_frame(frame);
+        }
+        returned
+    }
+
+    /// Start propagating damage at `node_id`, or the damage it passes to its
+    /// parent when there is nothing below it to visit.
+    fn enter_damage_frame(&mut self, node_id: NodeId) -> Result<DamageFrame, RestyleDamage> {
+        let damage = if let Some(data) = self.nodes[node_id]
             .try_stylo_element_data_mut()
             .and_then(|s| s.get_mut())
         {
             data.damage
         } else {
-            return RestyleDamage::empty();
+            return Err(RestyleDamage::empty());
         };
 
         // Skip subtrees which contain no damage. Anonymous nodes are never
@@ -66,21 +94,32 @@ impl BaseDocument {
         {
             let node = &self.nodes[node_id];
             if damage.is_empty() && !node.has_damaged_descendants() && !node.is_anonymous() {
-                return RestyleDamage::empty();
+                return Err(RestyleDamage::empty());
             }
         }
 
-        let mut damage_from_children = RestyleDamage::empty();
-        let children = std::mem::take(&mut self.nodes[node_id].children);
-        for child in children.iter() {
-            damage_from_children |= self.propagate_damage_flags(*child);
-        }
-        if let Some(before_id) = self.nodes[node_id].before() {
-            damage_from_children |= self.propagate_damage_flags(before_id);
-        }
-        if let Some(after_id) = self.nodes[node_id].after() {
-            damage_from_children |= self.propagate_damage_flags(after_id);
-        }
+        let node = &mut self.nodes[node_id];
+        Ok(DamageFrame {
+            node_id,
+            damage,
+            children: std::mem::take(&mut node.children),
+            before: node.before(),
+            after: node.after(),
+            next: 0,
+            from_children: RestyleDamage::empty(),
+        })
+    }
+
+    /// Finish `frame` once its children have passed their damage up, and
+    /// return the damage it passes to its parent.
+    fn finish_damage_frame(&mut self, frame: DamageFrame) -> RestyleDamage {
+        let DamageFrame {
+            node_id,
+            mut damage,
+            children,
+            from_children: mut damage_from_children,
+            ..
+        } = frame;
 
         // A child's `order` changed: this container re-collects (and so re-sorts)
         // its layout children. Only the direct parent consumes the flag, and the
@@ -198,42 +237,64 @@ impl BaseDocument {
     /// anonymous boxes through their owner's `anonymous_blocks`. An anonymous
     /// box's `children` are DOM nodes already reached through its owner, so
     /// they are not recursed into.
-    pub(crate) fn clear_damage_and_dirty_flags(&mut self, node_id: NodeId) {
-        // Anonymous boxes can be freed during construction while still
-        // listed in their owner's `anonymous_blocks`.
-        let Some(node) = self.nodes.get_mut(node_id) else {
-            return;
-        };
-        let is_anonymous = node.is_anonymous();
-        let has_damage = node.damage().is_some_and(|d| !d.is_empty());
-        if !has_damage && !node.has_damaged_descendants() && !is_anonymous {
-            return;
+    pub(crate) fn clear_damage_and_dirty_flags(&mut self, root: NodeId) {
+        // An explicit stack, as in `propagate_damage_flags`. Clearing a node
+        // before its descendants does not change which of them are visited:
+        // each is skipped on its own flags.
+        let mut pending = vec![root];
+        while let Some(node_id) = pending.pop() {
+            // Anonymous boxes can be freed during construction while still
+            // listed in their owner's `anonymous_blocks`.
+            let Some(node) = self.nodes.get_mut(node_id) else {
+                continue;
+            };
+            let is_anonymous = node.is_anonymous();
+            let has_damage = node.damage().is_some_and(|d| !d.is_empty());
+            if !has_damage && !node.has_damaged_descendants() && !is_anonymous {
+                continue;
+            }
+            pending.extend(node.anonymous_blocks.iter().copied());
+            if !is_anonymous {
+                pending.extend(node.children.iter().copied());
+            }
+            pending.extend(node.before());
+            pending.extend(node.after());
+            node.clear_damage_mut();
+            node.unset_damaged_descendants();
+            node.unset_dirty_descendants();
         }
-        let anonymous_blocks = std::mem::take(&mut node.anonymous_blocks);
-        let children = std::mem::take(&mut node.children);
-        let (before, after) = (node.before(), node.after());
+    }
+}
 
-        for anon_id in anonymous_blocks.iter() {
-            self.clear_damage_and_dirty_flags(*anon_id);
-        }
-        if !is_anonymous {
-            for child in children.iter() {
-                self.clear_damage_and_dirty_flags(*child);
+/// A node `propagate_damage_flags` is visiting: its DOM children (taken out
+/// of the node until it finishes) and pseudo-elements, and the damage they
+/// have passed up so far.
+struct DamageFrame {
+    node_id: NodeId,
+    damage: RestyleDamage,
+    children: crate::node::Children,
+    before: Option<NodeId>,
+    after: Option<NodeId>,
+    /// The next of `children`, then `before`, then `after` to visit.
+    next: usize,
+    from_children: RestyleDamage,
+}
+
+impl DamageFrame {
+    fn next_child(&mut self) -> Option<NodeId> {
+        loop {
+            let index = self.next;
+            self.next += 1;
+            let child = match index.checked_sub(self.children.len()) {
+                None => Some(self.children[index]),
+                Some(0) => self.before,
+                Some(1) => self.after,
+                Some(_) => return None,
+            };
+            if child.is_some() {
+                return child;
             }
         }
-        if let Some(before_id) = before {
-            self.clear_damage_and_dirty_flags(before_id);
-        }
-        if let Some(after_id) = after {
-            self.clear_damage_and_dirty_flags(after_id);
-        }
-
-        let node = &mut self.nodes[node_id];
-        node.anonymous_blocks = anonymous_blocks;
-        node.children = children;
-        node.clear_damage_mut();
-        node.unset_damaged_descendants();
-        node.unset_dirty_descendants();
     }
 }
 

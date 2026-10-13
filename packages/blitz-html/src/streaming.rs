@@ -83,7 +83,7 @@ impl StreamingParser {
         );
         Self {
             tokenizer: Some(Tokenizer::new(
-                BoundedHtml(tree_builder),
+                BoundedHtml::new(tree_builder),
                 TokenizerOpts::default(),
             )),
             input: BufferQueue::default(),

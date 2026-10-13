@@ -13,11 +13,17 @@ use html5ever::{ParseOpts, TokenizerResult};
 use xml5ever::tokenizer::{ProcessResult, XmlTokenizer};
 use xml5ever::tree_builder::XmlTreeBuilder;
 
-use crate::html_sink::{DocAccess, HtmlSink, ParserHandle};
+use crate::html_sink::{DocAccess, HtmlSink, MAX_OPEN_ELEMENTS, ParserHandle};
 
 pub(crate) struct BoundedHtml<A: DocAccess>(pub TreeBuilder<ParserHandle, HtmlSink<A>>);
 
 impl<A: DocAccess> BoundedHtml<A> {
+    /// Drive `tree` under Chrome's parser depth limit.
+    pub fn new(mut tree: TreeBuilder<ParserHandle, HtmlSink<A>>) -> Self {
+        tree.limit_tree_depth(MAX_OPEN_ELEMENTS, tree.sink.past_depth_limit.clone());
+        Self(tree)
+    }
+
     pub fn exhausted(&self) -> bool {
         self.0.sink.node_limit_exceeded()
     }
@@ -64,7 +70,7 @@ pub(crate) fn parse_html<A: DocAccess>(
         }
         None => (TreeBuilder::new(sink, opts.tree_builder), opts.tokenizer),
     };
-    let tokenizer = Tokenizer::new(BoundedHtml(tree), tokenizer_opts);
+    let tokenizer = Tokenizer::new(BoundedHtml::new(tree), tokenizer_opts);
     let input = BufferQueue::default();
     input.push_back(StrTendril::from_slice(markup));
     while !tokenizer.sink.exhausted() {
@@ -135,7 +141,7 @@ mod tests {
         let mut mutator = doc.mutate();
         let sink = DocumentHtmlParser::new(&mut mutator);
         let tokenizer = Tokenizer::new(
-            BoundedHtml(TreeBuilder::new(sink, Default::default())),
+            BoundedHtml::new(TreeBuilder::new(sink, Default::default())),
             Default::default(),
         );
         let input = BufferQueue::default();

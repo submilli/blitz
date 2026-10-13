@@ -88,6 +88,13 @@ impl HtmlParserProvider for HtmlProvider {
     }
 }
 
+/// Chrome's parser depth limit (Blink's `kMaximumHTMLParserDOMTreeDepth`):
+/// an element or comment inserted while more open elements than this are on
+/// html5ever's stack attaches to its parent's parent, so their nesting stops
+/// 512 levels below the parse's root element (measured in Chrome 155; see
+/// `TreeBuilder::limit_tree_depth`).
+pub(crate) const MAX_OPEN_ELEMENTS: usize = 512;
+
 /// How a tree sink reaches the document it builds.
 pub trait DocAccess {
     /// Run `f` with a mutator. Implementations may create a fresh mutator
@@ -145,6 +152,9 @@ pub struct HtmlSink<A: DocAccess> {
     /// Elements this parse gave an `on*` attribute since the embedder last
     /// took them (see `StreamingParser::take_handler_elements`).
     pub(crate) handler_elements: RefCell<Vec<NodeId>>,
+    /// Set by the tree builder while the node it appends goes past
+    /// [`MAX_OPEN_ELEMENTS`] (see `TreeBuilder::limit_tree_depth`).
+    pub(crate) past_depth_limit: Rc<Cell<bool>>,
 }
 
 /// The one-shot parser over a borrowed mutator.
@@ -164,6 +174,92 @@ impl<A: DocAccess> HtmlSink<A> {
             allocations: None,
             constructed: RefCell::new(None),
             handler_elements: RefCell::new(Vec::new()),
+            past_depth_limit: Rc::default(),
+        }
+    }
+
+    /// Where Chrome's depth limit puts a node appended to `parent`: its
+    /// parent's parent. A parent with no parent keeps the node, and a
+    /// template then takes it into its contents (or declarative shadow
+    /// root), which html5ever skipped past the limit (Blink's
+    /// `HTMLConstructionSite::Attach`, then `Insert`).
+    fn parent_past_depth_limit(&self, handle: &ParserHandle, parent: NodeId) -> NodeId {
+        if let Some(grandparent) = self.with(|m| m.parent_id(parent)) {
+            return grandparent;
+        }
+        let name = self.elem_name(handle);
+        if name.local == html5ever::local_name!("template") && name.ns == html5ever::ns!(html) {
+            return self
+                .get_template_contents(handle)
+                .node_id()
+                .unwrap_or(parent);
+        }
+        parent
+    }
+
+    /// Append `child` to `parent`, merging text into a last text child.
+    fn append_to(&self, parent: NodeId, child: NodeOrText<ParserHandle>) {
+        match child {
+            NodeOrText::AppendNode(child) => {
+                if let Some(id) = child.node_id() {
+                    self.with(|m| {
+                        if Self::closes_cycle(m, parent, id) {
+                            return;
+                        }
+                        m.append_children(parent, &[id]);
+                        if let Some(form) = child.0.parser_form.take() {
+                            m.associate_parser_form(id, form);
+                        }
+                    });
+                }
+            }
+            NodeOrText::AppendText(text) => {
+                let appended = self.with(|m| {
+                    m.last_child_id(parent)
+                        .is_some_and(|last| m.append_text_to_node(last, &text).is_ok())
+                });
+                if !appended {
+                    if let Some(child) = self.allocate(|m| m.try_create_text_node(text.as_ref())) {
+                        self.with(|m| m.append_children(parent, &[child]));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Insert `child` before `sibling`, merging text into a previous text
+    /// sibling.
+    fn insert_before(&self, sibling: NodeId, child: NodeOrText<ParserHandle>) {
+        match child {
+            NodeOrText::AppendNode(child) => {
+                if let Some(id) = child.node_id() {
+                    self.with(|m| {
+                        // Script may have detached the sibling.
+                        let Some(parent) = m.doc.get_node(sibling).and_then(|node| node.parent)
+                        else {
+                            return;
+                        };
+                        if Self::closes_cycle(m, parent, id) {
+                            return;
+                        }
+                        m.insert_nodes_before(sibling, &[id]);
+                        if let Some(form) = child.0.parser_form.take() {
+                            m.associate_parser_form(id, form);
+                        }
+                    });
+                }
+            }
+            NodeOrText::AppendText(text) => {
+                let appended = self.with(|m| {
+                    m.previous_sibling_id(sibling)
+                        .is_some_and(|previous| m.append_text_to_node(previous, &text).is_ok())
+                });
+                if !appended {
+                    if let Some(child) = self.allocate(|m| m.try_create_text_node(text.as_ref())) {
+                        self.with(|m| m.insert_nodes_before(sibling, &[child]));
+                    }
+                }
+            }
         }
     }
 
@@ -512,73 +608,23 @@ impl<A: DocAccess> TreeSink for HtmlSink<A> {
         )
     }
 
-    fn append(&self, parent: &Self::Handle, child: NodeOrText<Self::Handle>) {
-        let Some(parent) = parent.node_id().filter(|_| !self.exhausted.get()) else {
+    fn append(&self, handle: &Self::Handle, child: NodeOrText<Self::Handle>) {
+        let Some(parent) = handle.node_id().filter(|_| !self.exhausted.get()) else {
             return;
         };
-        match child {
-            NodeOrText::AppendNode(child) => {
-                if let Some(id) = child.node_id() {
-                    self.with(|m| {
-                        if Self::closes_cycle(m, parent, id) {
-                            return;
-                        }
-                        m.append_children(parent, &[id]);
-                        if let Some(form) = child.0.parser_form.take() {
-                            m.associate_parser_form(id, form);
-                        }
-                    });
-                }
-            }
-            NodeOrText::AppendText(text) => {
-                let appended = self.with(|m| {
-                    m.last_child_id(parent)
-                        .is_some_and(|last| m.append_text_to_node(last, &text).is_ok())
-                });
-                if !appended {
-                    if let Some(child) = self.allocate(|m| m.try_create_text_node(text.as_ref())) {
-                        self.with(|m| m.append_children(parent, &[child]));
-                    }
-                }
-            }
-        }
+        let parent = if self.past_depth_limit.get() {
+            self.parent_past_depth_limit(handle, parent)
+        } else {
+            parent
+        };
+        self.append_to(parent, child);
     }
 
     fn append_before_sibling(&self, sibling: &Self::Handle, child: NodeOrText<Self::Handle>) {
         let Some(sibling) = sibling.node_id().filter(|_| !self.exhausted.get()) else {
             return;
         };
-        match child {
-            NodeOrText::AppendNode(child) => {
-                if let Some(id) = child.node_id() {
-                    self.with(|m| {
-                        // Script may have detached the sibling.
-                        let Some(parent) = m.doc.get_node(sibling).and_then(|node| node.parent)
-                        else {
-                            return;
-                        };
-                        if Self::closes_cycle(m, parent, id) {
-                            return;
-                        }
-                        m.insert_nodes_before(sibling, &[id]);
-                        if let Some(form) = child.0.parser_form.take() {
-                            m.associate_parser_form(id, form);
-                        }
-                    });
-                }
-            }
-            NodeOrText::AppendText(text) => {
-                let appended = self.with(|m| {
-                    m.previous_sibling_id(sibling)
-                        .is_some_and(|previous| m.append_text_to_node(previous, &text).is_ok())
-                });
-                if !appended {
-                    if let Some(child) = self.allocate(|m| m.try_create_text_node(text.as_ref())) {
-                        self.with(|m| m.insert_nodes_before(sibling, &[child]));
-                    }
-                }
-            }
-        }
+        self.insert_before(sibling, child);
     }
 
     fn append_based_on_parent_node(

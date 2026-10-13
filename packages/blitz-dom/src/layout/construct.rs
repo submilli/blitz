@@ -35,6 +35,7 @@ use crate::{
 };
 
 use super::{
+    box_depth::{clear_omitted_layout, omit_subtree_boxes, past_box_depth},
     damage::ALL_DAMAGE,
     list::{BULLET_FONT_FAMILY, collect_list_item_children},
     replaced::is_replaced_element,
@@ -131,7 +132,7 @@ impl LayoutChildren {
             // its anonymous layout wrapper. Omit that box rather than exceed
             // the document limit or feed an unstyled text node to layout.
             if doc.check_node_allocation(1).is_err() {
-                clear_omitted_layout(doc, child_id);
+                clear_omitted_layout(&mut doc.nodes, child_id);
                 return;
             }
             self.create_anonymous_block(container_node_id, doc);
@@ -198,27 +199,6 @@ impl LayoutChildren {
     }
 }
 
-/// A reconstruction may have freed these nodes' former anonymous parents.
-/// Omitted boxes must expose empty geometry and retain no positioning links.
-fn clear_omitted_layout(doc: &mut BaseDocument, root: NodeId) {
-    let mut pending = vec![root];
-    while let Some(id) = pending.pop() {
-        let node = &mut doc.nodes[id];
-        pending.extend(node.flat_children().iter().copied());
-        pending.extend(node.before());
-        pending.extend(node.after());
-        node.layout_parent.set(None);
-        node.oof_containing_block.set(None);
-        node.flags.remove(NodeFlags::IS_INLINE_ROOT);
-        node.hoisted_children.get_mut().clear();
-        node.sc_contribution_cache.get_mut().clear();
-        node.stacking_context = None;
-        if let Some(layout) = node.try_layout_data_mut() {
-            *layout = Default::default();
-        }
-    }
-}
-
 fn push_children_and_pseudos(layout_children: &mut ThinVec<NodeId>, node: &Node) {
     if let Some(before) = node.before() {
         layout_children.push(before);
@@ -262,11 +242,12 @@ fn push_hoisted_child(
     child_id: NodeId,
     out: &mut LayoutChildren,
     wrap: Option<WrapContext>,
+    depth: usize,
 ) {
     let child = &doc.nodes[child_id];
     let child_display = child.display_style().unwrap_or(Display::inline());
     if matches!(child_display.inside(), DisplayInside::Contents) {
-        collect_layout_children_with_wrap(doc, child_id, out, wrap);
+        collect_contents_children(doc, child_id, out, wrap, depth);
         return;
     }
     if let Some(wrap_ctx) = wrap {
@@ -292,9 +273,10 @@ fn push_hoisted_children_and_pseudos(
     container_node_id: NodeId,
     out: &mut LayoutChildren,
     wrap: Option<WrapContext>,
+    depth: usize,
 ) {
     if let Some(before) = doc.nodes[container_node_id].before() {
-        push_hoisted_child(doc, before, out, wrap);
+        push_hoisted_child(doc, before, out, wrap, depth + 1);
     }
     // Copy the (flat-tree) children to avoid borrow checker issues.
     let children = doc.nodes[container_node_id].flat_children().to_vec();
@@ -303,10 +285,10 @@ fn push_hoisted_children_and_pseudos(
         if child.data.kind() == NodeKind::Comment || child.is_collapsible_whitespace_node() {
             continue;
         }
-        push_hoisted_child(doc, child_id, out, wrap);
+        push_hoisted_child(doc, child_id, out, wrap, depth + 1);
     }
     if let Some(after) = doc.nodes[container_node_id].after() {
-        push_hoisted_child(doc, after, out, wrap);
+        push_hoisted_child(doc, after, out, wrap, depth + 1);
     }
 }
 
@@ -391,6 +373,8 @@ fn children_and_pseudos(node: &Node) -> impl Iterator<Item = NodeId> + '_ {
 ///
 /// This has to happen before the Parley `TreeBuilder` is created as the builder
 /// holds a mutable borrow of the `FontContext`.
+///
+/// `depth`: how many levels `node_id` sits below the inline root.
 fn collect_span_line_heights(
     nodes: &crate::NodeTree,
     font_ctx: &mut FontContext,
@@ -398,7 +382,11 @@ fn collect_span_line_heights(
     root_line_height: f32,
     scale: f32,
     out: &mut HashMap<NodeId, f32>,
+    depth: usize,
 ) {
+    if past_box_depth(depth) {
+        return;
+    }
     let node = &nodes[node_id];
     let (NodeData::Element(element_data) | NodeData::AnonymousBlock(element_data)) = &node.data
     else {
@@ -409,7 +397,15 @@ fn collect_span_line_heights(
     match (display.outside(), display.inside()) {
         (DisplayOutside::None, DisplayInside::Contents) => {
             for child_id in children_and_pseudos(node) {
-                collect_span_line_heights(nodes, font_ctx, child_id, root_line_height, scale, out);
+                collect_span_line_heights(
+                    nodes,
+                    font_ctx,
+                    child_id,
+                    root_line_height,
+                    scale,
+                    out,
+                    depth + 1,
+                );
             }
         }
         (DisplayOutside::Inline, DisplayInside::Flow) if is_inline_style_span(element_data) => {
@@ -419,7 +415,15 @@ fn collect_span_line_heights(
                 out.insert(node_id, line_height);
             }
             for child_id in children_and_pseudos(node) {
-                collect_span_line_heights(nodes, font_ctx, child_id, root_line_height, scale, out);
+                collect_span_line_heights(
+                    nodes,
+                    font_ctx,
+                    child_id,
+                    root_line_height,
+                    scale,
+                    out,
+                    depth + 1,
+                );
             }
         }
         _ => {}
@@ -454,6 +458,7 @@ fn classify_flow_children(
     doc: &BaseDocument,
     container_node_id: NodeId,
     classification: &mut FlowClassification,
+    depth: usize,
 ) {
     let node = &doc.nodes[container_node_id];
     // ::before/::after pseudos with display:contents are transparent for box
@@ -495,7 +500,9 @@ fn classify_flow_children(
             // Transparent for box generation: the contents node casts
             // no vote itself — its children decide.
             classification.has_contents = true;
-            classify_flow_children(doc, child_id, classification);
+            if !past_box_depth(depth + 1) {
+                classify_flow_children(doc, child_id, classification, depth + 1);
+            }
         } else if matches!(display.inside(), DisplayInside::None) {
             // display:none children generate no boxes and cast no vote.
             continue;
@@ -548,14 +555,34 @@ pub(crate) fn collect_layout_children(
     container_node_id: NodeId,
     out: &mut LayoutChildren,
 ) {
-    collect_layout_children_with_wrap(doc, container_node_id, out, None)
+    collect_layout_children_with_wrap(doc, container_node_id, out, None, 0)
 }
 
+/// Hoist the children of `contents_id`, a `display: contents` element
+/// `depth` levels below the box being constructed, unless that is past
+/// the box depth limit (`box_depth`).
+fn collect_contents_children(
+    doc: &mut BaseDocument,
+    contents_id: NodeId,
+    out: &mut LayoutChildren,
+    wrap: Option<WrapContext>,
+    depth: usize,
+) {
+    if past_box_depth(depth) {
+        omit_subtree_boxes(&mut doc.nodes, contents_id);
+        return;
+    }
+    collect_layout_children_with_wrap(doc, contents_id, out, wrap, depth);
+}
+
+/// `depth`: how many `display: contents` levels `container_node_id` sits
+/// below the box being constructed.
 fn collect_layout_children_with_wrap(
     doc: &mut BaseDocument,
     container_node_id: NodeId,
     out: &mut LayoutChildren,
     wrap: Option<WrapContext>,
+    depth: usize,
 ) {
     // Record the `display` the box is being constructed with
     if let Some(display) = doc.nodes[container_node_id].display_style() {
@@ -692,7 +719,7 @@ fn collect_layout_children_with_wrap(
             // display:contents is transparent for box generation: hoist the
             // children THEMSELVES (not their layout children) into the
             // parent, recursing only through nested contents nodes.
-            push_hoisted_children_and_pseudos(doc, container_node_id, out, wrap);
+            push_hoisted_children_and_pseudos(doc, container_node_id, out, wrap, depth);
         }
         DisplayInside::Flex | DisplayInside::Grid => {
             // ::before/::after pseudos must be checked too: a pseudo with
@@ -723,6 +750,7 @@ fn collect_layout_children_with_wrap(
                     out,
                     true,
                     text_item_needs_wrap,
+                    depth,
                 );
             }
 
@@ -760,7 +788,7 @@ fn collect_layout_children_with_wrap(
         // as block/flex/grid items).
         _ => {
             let mut classification = FlowClassification::default();
-            classify_flow_children(doc, container_node_id, &mut classification);
+            classify_flow_children(doc, container_node_id, &mut classification, depth);
 
             if classification.all_out_of_flow {
                 // Contents-transparent: a display:contents child may be
@@ -770,7 +798,7 @@ fn collect_layout_children_with_wrap(
                     container_node_id,
                     needs_wrap: text_item_needs_wrap,
                 });
-                return push_hoisted_children_and_pseudos(doc, container_node_id, out, wrap);
+                return push_hoisted_children_and_pseudos(doc, container_node_id, out, wrap, depth);
             }
 
             // TODO: fix display:contents
@@ -811,6 +839,7 @@ fn collect_layout_children_with_wrap(
                 out,
                 false,
                 block_item_needs_wrap,
+                depth,
             );
         }
     }
@@ -983,6 +1012,7 @@ fn collect_complex_layout_children(
     out: &mut LayoutChildren,
     hide_whitespace: bool,
     needs_wrap: fn(NodeKind, DisplayOutside) -> bool,
+    depth: usize,
 ) {
     doc.iter_children_and_pseudos_mut(container_node_id, |child_id, doc| {
         // Get node kind (text, element, comment, etc)
@@ -1016,7 +1046,7 @@ fn collect_complex_layout_children(
                 container_node_id,
                 needs_wrap,
             });
-            collect_layout_children_with_wrap(doc, child_id, out, wrap)
+            collect_contents_children(doc, child_id, out, wrap, depth + 1)
         }
         // Push nodes that need wrapping into the current "anonymous block container".
         // If there is not an open one then we create one.
@@ -1134,7 +1164,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
     inline_context_root_node_id: NodeId,
     layout_children: &mut ThinVec<NodeId>,
 ) {
-    flush_inline_pseudos_recursive(doc, inline_context_root_node_id);
+    flush_inline_pseudos_recursive(doc, inline_context_root_node_id, 0);
 
     let mut stale_anonymous_blocks = Vec::new();
     iter_children_and_pseudos!(doc.nodes[inline_context_root_node_id], |child_id| {
@@ -1144,13 +1174,18 @@ pub(crate) fn find_inline_layout_embedded_boxes(
             child_id,
             layout_children,
             &mut stale_anonymous_blocks,
+            1,
         );
     });
     for anonymous_block in stale_anonymous_blocks {
         doc.deallocate_anonymous_block(anonymous_block);
     }
 
-    fn flush_inline_pseudos_recursive(doc: &mut BaseDocument, node_id: NodeId) {
+    /// `depth`: how many levels `node_id` sits below the inline root.
+    fn flush_inline_pseudos_recursive(doc: &mut BaseDocument, node_id: NodeId, depth: usize) {
+        if past_box_depth(depth + 1) {
+            return;
+        }
         doc.iter_children_mut(node_id, |child_id, doc| {
             flush_pseudo_elements(doc, child_id);
             let display = doc.nodes[child_id]
@@ -1162,18 +1197,24 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                 (_, _) => false,
             };
             if do_recurse {
-                flush_inline_pseudos_recursive(doc, child_id);
+                flush_inline_pseudos_recursive(doc, child_id, depth + 1);
             }
         });
     }
 
+    /// `depth`: how many levels `node_id` sits below the inline root.
     fn find_inline_layout_embedded_boxes_recursive(
         nodes: &mut crate::NodeTree,
         parent_id: NodeId,
         node_id: NodeId,
         layout_children: &mut ThinVec<NodeId>,
         stale_anonymous_blocks: &mut Vec<NodeId>,
+        depth: usize,
     ) {
+        if past_box_depth(depth) {
+            omit_subtree_boxes(nodes, node_id);
+            return;
+        }
         let node = &mut nodes[node_id];
 
         // Set layout_parent for node.
@@ -1202,6 +1243,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                                 child_id,
                                 layout_children,
                                 stale_anonymous_blocks,
+                                depth + 1,
                             );
                         });
                     }
@@ -1222,6 +1264,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                                     child_id,
                                     layout_children,
                                     stale_anonymous_blocks,
+                                    depth + 1,
                                 );
                             });
                         }
@@ -1300,6 +1343,7 @@ pub(crate) fn build_inline_layout_into(
             root_line_height,
             scale,
             &mut span_line_heights,
+            1,
         );
     }
 
@@ -1349,6 +1393,7 @@ pub(crate) fn build_inline_layout_into(
             before_id,
             text_transform,
             &span_line_heights,
+            1,
         );
     }
     for child_id in root_node.flat_children().iter().copied() {
@@ -1359,6 +1404,7 @@ pub(crate) fn build_inline_layout_into(
             child_id,
             text_transform,
             &span_line_heights,
+            1,
         );
     }
     if let Some(after_id) = root_node.after() {
@@ -1369,12 +1415,14 @@ pub(crate) fn build_inline_layout_into(
             after_id,
             text_transform,
             &span_line_heights,
+            1,
         );
     }
 
     text_layout.text = builder.build_into(&mut text_layout.layout);
     return;
 
+    /// `depth`: how many levels `node_id` sits below the inline root.
     fn build_inline_layout_recursive(
         builder: &mut TreeBuilder<TextBrush>,
         nodes: &crate::NodeTree,
@@ -1382,7 +1430,11 @@ pub(crate) fn build_inline_layout_into(
         node_id: NodeId,
         parent_text_transform: TextTransform,
         span_line_heights: &HashMap<NodeId, f32>,
+        depth: usize,
     ) {
+        if past_box_depth(depth) {
+            return;
+        }
         let node = &nodes[node_id];
 
         // Set layout_parent for node.
@@ -1446,6 +1498,7 @@ pub(crate) fn build_inline_layout_into(
                                 child_id,
                                 text_transform,
                                 span_line_heights,
+                                depth + 1,
                             );
                         }
                         builder.pop_style_span();
@@ -1504,6 +1557,7 @@ pub(crate) fn build_inline_layout_into(
                                         before_id,
                                         text_transform,
                                         span_line_heights,
+                                        depth + 1,
                                     );
                                 }
 
@@ -1515,6 +1569,7 @@ pub(crate) fn build_inline_layout_into(
                                         child_id,
                                         text_transform,
                                         span_line_heights,
+                                        depth + 1,
                                     );
                                 }
                                 if let Some(after_id) = node.after() {
@@ -1525,6 +1580,7 @@ pub(crate) fn build_inline_layout_into(
                                         after_id,
                                         text_transform,
                                         span_line_heights,
+                                        depth + 1,
                                     );
                                 }
 

@@ -9,7 +9,7 @@ use taffy::{
     LayoutPartialTree as _, OofCandidates, ResolveOrZero as _,
 };
 
-use super::content_height;
+use super::{content_advance, content_height};
 use crate::BaseDocument;
 use crate::layout::resolve_calc_value;
 use crate::node::TextBrush;
@@ -283,7 +283,10 @@ impl LineFloats {
     /// Start the next line in `slot`.
     fn enter(&mut self, state: &mut BreakerState, slot: &taffy::ContentSlot, scale: f32) {
         self.segment = slot.segment_id;
-        state.set_line_max_advance(slot.width * scale);
+        // Kept within the line's container, as Parley requires, when the
+        // slot's sums of huge lengths round past it.
+        let advance = content_advance(slot.width * scale).min(state.layout_max_advance());
+        state.set_line_max_advance(advance);
         state.set_line_x(slot.x * scale);
         state.set_line_y((slot.y * scale) as f64);
     }

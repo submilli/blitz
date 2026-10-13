@@ -34,6 +34,7 @@ use style::values::generics::transform::{Scale, Translate};
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
 use style_dom::ElementState;
 use style_traits::values::ToCss;
+use stylo_taffy::convert::layout_length;
 use taffy::{Cache, prelude::Layout};
 use thin_vec::ThinVec;
 
@@ -66,6 +67,10 @@ bitflags! {
         /// Whether the node is a button laid out around an anonymous button
         /// content box (see `layout::button`)
         const IS_BUTTON_ROOT = 0b00001000;
+        /// Whether box construction omitted the node's box or its
+        /// descendants' for `layout::box_depth::MAX_BOX_DEPTH`: constructing
+        /// its box again rebuilds its subtree
+        const HAS_OMITTED_BOXES = 0b00010000;
     }
 }
 
@@ -95,7 +100,17 @@ impl NodeFlags {
         self.remove(Self::IS_INLINE_ROOT);
         self.remove(Self::IS_TABLE_ROOT);
         self.remove(Self::IS_BUTTON_ROOT);
+        self.remove(Self::HAS_OMITTED_BOXES);
     }
+}
+
+/// See [`Node::is_or_contains_block`].
+enum BlockParticipation {
+    /// An in-flow block-level box.
+    Block,
+    /// An in-flow inline box whose children may contain a block.
+    InlineFlow,
+    Neither,
 }
 
 /// Where a node sits in the flat tree, relative to its DOM parent.
@@ -573,6 +588,22 @@ impl Node {
     }
 
     pub fn is_or_contains_block(&self) -> bool {
+        // An explicit stack: inline content can nest as deep as the node
+        // limit, past what the native stack holds.
+        let mut pending = vec![self.id];
+        while let Some(id) = pending.pop() {
+            let node = &self.tree()[id];
+            match node.block_participation() {
+                BlockParticipation::Block => return true,
+                BlockParticipation::InlineFlow => pending.extend(node.children.iter().copied()),
+                BlockParticipation::Neither => {}
+            }
+        }
+        false
+    }
+
+    /// How this node bears on whether an inline ancestor contains a block.
+    fn block_participation(&self) -> BlockParticipation {
         let style = self.primary_styles();
         let style = style.as_ref();
 
@@ -585,7 +616,7 @@ impl Node {
             Position::Static | Position::Relative | Position::Sticky
         );
         if !is_in_flow {
-            return false;
+            return BlockParticipation::Neither;
         }
         // Floated boxes do not break up the inline flow: they participate in the
         // inline formatting context as out-of-flow inline boxes
@@ -593,24 +624,16 @@ impl Node {
             .map(|s| s.clone_float().is_floating())
             .unwrap_or(false);
         if is_floating {
-            return false;
+            return BlockParticipation::Neither;
         }
         let display = style
             .map(|s| s.clone_display())
             .unwrap_or(StyloDisplay::inline());
         match display.outside() {
-            DisplayOutside::None => false,
-            DisplayOutside::Block => true,
-            _ => {
-                if display.inside() == DisplayInside::Flow {
-                    self.children
-                        .iter()
-                        .copied()
-                        .any(|child_id| self.tree()[child_id].is_or_contains_block())
-                } else {
-                    false
-                }
-            }
+            DisplayOutside::None => BlockParticipation::Neither,
+            DisplayOutside::Block => BlockParticipation::Block,
+            _ if display.inside() == DisplayInside::Flow => BlockParticipation::InlineFlow,
+            _ => BlockParticipation::Neither,
         }
     }
 
@@ -1870,10 +1893,11 @@ impl Node {
             .or_else(|| self.layout_parent.get())
     }
 
-    /// Computes the Document-relative coordinates of the `Node`
+    /// Computes the Document-relative coordinates of the `Node`, saturated
+    /// at each step as Chrome's `LayoutUnit` sums are.
     pub fn absolute_position(&self, x: f32, y: f32) -> crate::util::Point<f32> {
-        let x = x + self.final_layout().location.x - self.scroll_offset().x as f32;
-        let y = y + self.final_layout().location.y - self.scroll_offset().y as f32;
+        let x = layout_length(x + self.final_layout().location.x - self.scroll_offset().x as f32);
+        let y = layout_length(y + self.final_layout().location.y - self.scroll_offset().y as f32);
 
         // Recurse up the positioning hierarchy
         self.containing_block()
@@ -1882,15 +1906,18 @@ impl Node {
     }
 
     /// Computes the Document-relative coordinates of the `Node` from the unrounded
-    /// (sub-pixel) layout, for CSSOM geometry APIs such as `getBoundingClientRect`
+    /// (sub-pixel) layout, for CSSOM geometry APIs such as `getBoundingClientRect`,
+    /// saturated like [`absolute_position`](Self::absolute_position)
     pub fn unrounded_absolute_position(&self, x: f32, y: f32) -> crate::util::Point<f32> {
         let mut position = crate::util::Point { x, y };
         let mut current = Some(self);
         while let Some(node) = current {
-            position.x =
-                position.x + node.unrounded_layout().location.x - node.scroll_offset().x as f32;
-            position.y =
-                position.y + node.unrounded_layout().location.y - node.scroll_offset().y as f32;
+            position.x = layout_length(
+                position.x + node.unrounded_layout().location.x - node.scroll_offset().x as f32,
+            );
+            position.y = layout_length(
+                position.y + node.unrounded_layout().location.y - node.scroll_offset().y as f32,
+            );
             current = node.containing_block().and_then(|id| node.tree().get(id));
         }
         position

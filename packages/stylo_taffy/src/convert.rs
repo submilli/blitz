@@ -61,6 +61,21 @@ use stylo::Atom;
 use taffy::CompactLength;
 use taffy::style_helpers::*;
 
+/// The largest length layout works with, 2^25 px. Chrome lays out in
+/// `LayoutUnit`s, 1/64 px in an `i32`, which saturate there; keeping each
+/// length in that range also keeps the sums layout makes of them finite.
+pub const MAX_LAYOUT_LENGTH: f32 = 33_554_432.0;
+
+/// `px` saturated to the lengths layout works with, as Chrome's
+/// `LayoutUnit::FromFloatRound` saturates.
+#[inline]
+pub fn layout_length(px: f32) -> f32 {
+    if px.is_nan() {
+        return 0.0;
+    }
+    px.clamp(-MAX_LAYOUT_LENGTH, MAX_LAYOUT_LENGTH)
+}
+
 #[inline]
 pub fn length_percentage(val: &stylo::LengthPercentage) -> taffy::LengthPercentage {
     match val.unpack() {
@@ -70,7 +85,7 @@ pub fn length_percentage(val: &stylo::LengthPercentage) -> taffy::LengthPercenta
             // SAFETY: calc is a valid value for LengthPercentage
             unsafe { taffy::LengthPercentage::from_raw(val) }
         }
-        stylo::UnpackedLengthPercentage::Length(len) => length(len.px()),
+        stylo::UnpackedLengthPercentage::Length(len) => length(layout_length(len.px())),
         stylo::UnpackedLengthPercentage::Percentage(percentage) => percent(percentage.0),
     }
 }
@@ -86,7 +101,7 @@ pub fn dimension(val: &stylo::Size) -> taffy::Dimension {
         stylo::Size::FitContent => taffy::Dimension::fit_content(),
         stylo::Size::FitContentFunction(val) => match val.0.unpack() {
             stylo::UnpackedLengthPercentage::Length(len) => {
-                taffy::Dimension::fit_content_px(len.px())
+                taffy::Dimension::fit_content_px(layout_length(len.px()))
             }
             stylo::UnpackedLengthPercentage::Percentage(percentage) => {
                 taffy::Dimension::fit_content_percent(percentage.0)
@@ -164,7 +179,7 @@ pub fn border(
     if style.none_or_hidden() {
         return taffy::style_helpers::zero();
     }
-    taffy::style_helpers::length(width.0.to_f32_px())
+    taffy::style_helpers::length(layout_length(width.0.to_f32_px()))
 }
 
 #[inline]

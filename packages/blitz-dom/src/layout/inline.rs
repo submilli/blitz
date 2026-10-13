@@ -16,6 +16,7 @@ use taffy::{BlockItemStyle as _, Clear, Float, prelude::TaffyMaxContent};
 use super::resolve_calc_value;
 use crate::BaseDocument;
 use crate::stylo_to_parley;
+use stylo_taffy::convert::layout_length;
 
 #[cfg(feature = "floats")]
 mod floats;
@@ -358,10 +359,12 @@ impl BaseDocument {
             .primary_styles()
             .map(|s| s.clone_text_indent())
             .unwrap_or_else(GenericTextIndent::zero);
-        let resolved_text_indent = text_indent
-            .length
-            .resolve(CSSPixelLength::new(known_dimensions.width.unwrap_or(0.0)))
-            .px();
+        let resolved_text_indent = layout_length(
+            text_indent
+                .length
+                .resolve(CSSPixelLength::new(known_dimensions.width.unwrap_or(0.0)))
+                .px(),
+        );
         inline_layout.layout.set_text_indent(
             resolved_text_indent,
             // NOTE: hanging and each_line don't current work because parsing them is cfg'd out in Stylo
@@ -488,6 +491,7 @@ impl BaseDocument {
                     .maybe_clamp(min_width, max_width)
                     - pbw
             });
+        let width = content_advance(width);
 
         #[cfg(not(feature = "floats"))]
         let _ = block_ctx; // Suppress unused variable warning
@@ -845,6 +849,16 @@ pub(super) fn content_height(layout: &parley::Layout<crate::node::TextBrush>) ->
         return height;
     };
     height.max(last.metrics().block_max_coord)
+}
+
+/// A scaled width lines can be broken at: finite and not negative, as
+/// Parley requires. Padding and borders wider than the box leave its content
+/// box empty, as Chrome's do (CSS Box 3 §3: content sizes floor at zero).
+pub(super) fn content_advance(width: f32) -> f32 {
+    if width.is_nan() {
+        return 0.0;
+    }
+    width.clamp(0.0, f32::MAX)
 }
 
 #[inline(always)]

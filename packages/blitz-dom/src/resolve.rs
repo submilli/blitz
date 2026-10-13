@@ -23,6 +23,7 @@ use taffy::AvailableSpace;
 use crate::{
     BaseDocument,
     layout::{
+        box_depth::{box_depth, construct_at_box_depth, past_box_depth},
         construct::{
             ConstructionTask, ConstructionTaskData, ConstructionTaskResult,
             ConstructionTaskResultData, LayoutChildren, build_inline_layout_into,
@@ -30,7 +31,7 @@ use crate::{
         },
         damage::{ALL_DAMAGE, CONSTRUCT_BOX, CONSTRUCT_DESCENDENT, CONSTRUCT_FC},
     },
-    node::TextBrush,
+    node::{NodeFlags, TextBrush},
 };
 
 impl BaseDocument {
@@ -145,6 +146,7 @@ impl BaseDocument {
 
         let mut subdoc_is_animating = false;
         for &node_id in &self.sub_document_nodes {
+            let box_depth_base = self.box_depth_base + box_depth(&self.nodes, node_id) + 1;
             let node = &mut self.nodes[node_id];
             let layout = node.final_layout();
             let size = (layout.content_box_width(), layout.content_box_height());
@@ -163,6 +165,7 @@ impl BaseDocument {
                 );
                 drop(sub_viewport);
 
+                sub_doc.box_depth_base = box_depth_base;
                 sub_doc.resolve(current_time_for_animations);
 
                 subdoc_is_animating |= sub_doc.is_animating();
@@ -254,19 +257,38 @@ impl BaseDocument {
 
     /// Ensure that the layout_children field is populated for all nodes
     pub fn resolve_layout_children(&mut self) {
-        resolve_layout_children_recursive(self, self.root_node().id);
+        resolve_layout_children_recursive(self, self.root_node().id, self.box_depth_base, false);
 
-        fn resolve_layout_children_recursive(doc: &mut BaseDocument, node_id: NodeId) {
+        /// `rebuild`: construct the box even if undamaged, because an
+        /// ancestor at the box depth limit (`box_depth`) omitted it. Returns
+        /// whether boxes were omitted or rebuilt for the limit at or below
+        /// the node: damage did not invalidate the layouts cached above them.
+        fn resolve_layout_children_recursive(
+            doc: &mut BaseDocument,
+            node_id: NodeId,
+            depth: usize,
+            rebuild: bool,
+        ) -> bool {
             // Anonymous blocks and pseudo-elements can be removed from the slab
             // between render passes. Bail out rather than panicking on a stale key.
             if doc.nodes.get(node_id).is_none() {
-                return;
+                return false;
             }
 
             let mut damage = doc.nodes[node_id].damage().unwrap_or(ALL_DAMAGE);
-            let _flags = doc.nodes[node_id].flags;
+            let omitted = doc.nodes[node_id]
+                .flags
+                .contains(NodeFlags::HAS_OMITTED_BOXES);
 
-            if damage.intersects(CONSTRUCT_FC | CONSTRUCT_BOX) {
+            if past_box_depth(depth + 1) {
+                return construct_at_box_depth(doc, node_id, damage, rebuild);
+            }
+
+            // A box omitted, or whose descendants were omitted, when it sat
+            // deeper is constructed again, with them.
+            let rebuild = rebuild || omitted;
+            let mut changed = rebuild;
+            if damage.intersects(CONSTRUCT_FC | CONSTRUCT_BOX) || rebuild {
                 //} || flags.contains(NodeFlags::IS_INLINE_ROOT) {
 
                 // Deallocate the anonymous blocks created for this node in the
@@ -285,7 +307,7 @@ impl BaseDocument {
 
                 // Recurse into newly collected layout children
                 for child_id in layout_children.iter().copied() {
-                    resolve_layout_children_recursive(doc, child_id);
+                    changed |= resolve_layout_children_recursive(doc, child_id, depth + 1, rebuild);
                     doc.nodes[child_id].layout_parent.set(Some(node_id));
                     if let Some(mut data) = doc.nodes[child_id]
                         .try_stylo_element_data_mut()
@@ -311,7 +333,8 @@ impl BaseDocument {
                         if !doc.nodes.contains_key(child_id) {
                             continue;
                         }
-                        resolve_layout_children_recursive(doc, child_id);
+                        changed |=
+                            resolve_layout_children_recursive(doc, child_id, depth + 1, false);
                         doc.nodes[child_id].layout_parent.set(Some(node_id));
                     }
 
@@ -322,7 +345,12 @@ impl BaseDocument {
                 // damage.insert(RestyleDamage::RELAYOUT | RestyleDamage::REPAINT);
             }
 
-            doc.nodes[node_id].set_damage(damage);
+            let node = &mut doc.nodes[node_id];
+            node.set_damage(damage);
+            if changed {
+                node.invalidate_layout_cache();
+            }
+            changed
         }
     }
 

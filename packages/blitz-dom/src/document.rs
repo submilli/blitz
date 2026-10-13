@@ -215,6 +215,11 @@ pub struct BaseDocument {
     /// How deeply this document is nested within other documents
     /// (0 for a root document). Used to limit `<iframe>` nesting depth.
     pub(crate) subdocument_depth: usize,
+    /// The box depth this document's root sits at: its `<iframe>`'s, in
+    /// the documents around it. A subdocument is painted within its
+    /// parent's paint recursion, so a frame chain shares one box depth
+    /// limit (`layout::box_depth`).
+    pub(crate) box_depth_base: usize,
 
     // Events
     pub(crate) tx: Sender<DocumentEvent>,
@@ -522,6 +527,7 @@ impl BaseDocument {
             style_threading: config.style_threading,
             incremental_layout: config.incremental.unwrap_or(true),
             subdocument_depth: config.subdocument_depth,
+            box_depth_base: 0,
             devtool_settings: DevtoolSettings::default(),
             url: base_url,
             ua_stylesheets: HashMap::new(),

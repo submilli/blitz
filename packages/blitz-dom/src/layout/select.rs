@@ -17,6 +17,7 @@ use style::computed_values::direction::T as Direction;
 use style::properties::ComputedValues;
 use style::servo_arc::Arc;
 use style::values::computed::{Length, NonNegativeLengthPercentage, TextTransform};
+use stylo_taffy::convert::MAX_LAYOUT_LENGTH;
 
 // Chrome's fixed metrics, in CSS px before `zoom`.
 
@@ -38,9 +39,6 @@ const GROUP_LABEL_PADDING_BOTTOM: f32 = 1.0;
 const EMPTY_ROW_PADDING_BOTTOM: f32 = 1.0;
 /// Chrome measures a grouped option in a drop-down with this indent.
 const GROUPED_OPTION_INDENT: &str = "    ";
-/// Chrome's largest layout length (`LayoutUnit::Max`), which bounds a list
-/// box of many rows.
-const MAX_LAYOUT_LENGTH: f32 = 33_554_432.0;
 /// Chrome's layout lengths are in 64ths of a pixel.
 const LAYOUT_UNITS_PER_PX: f32 = 64.0;
 

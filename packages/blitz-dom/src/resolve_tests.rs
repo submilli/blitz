@@ -128,3 +128,49 @@ fn physical_pointer_input_focuses_buttons_and_keeps_disabled_controls_unfocused(
     EventDriver::new(&mut doc, NoopEventHandler).handle_ui_event(UiEvent::PointerDown(pointer));
     assert_ne!(doc.get_focussed_node_id(), Some(disabled));
 }
+
+/// A chain of `depth` `div`s under `parent`; returns them, outermost first.
+fn div_chain(doc: &mut BaseDocument, parent: NodeId, depth: usize) -> Vec<NodeId> {
+    let mut divs = Vec::with_capacity(depth);
+    let mut node = parent;
+    for _ in 0..depth {
+        node = element(doc, node, "div");
+        divs.push(node);
+    }
+    divs
+}
+
+#[test]
+fn a_frame_chain_shares_one_box_depth_limit() {
+    // A subdocument is painted within its parent's paint recursion, so its
+    // boxes continue the depth of its iframe's.
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(|| {
+            let mut parent = BaseDocument::new(DocumentConfig::default());
+            parent.embedder_loads_iframes = true;
+            let root = parent.root_node().id;
+            let html = element(&mut parent, root, "html");
+            let body = element(&mut parent, html, "body");
+            let divs = div_chain(&mut parent, body, 1_000);
+            let frame = element(&mut parent, *divs.last().unwrap(), "iframe");
+
+            let mut child = BaseDocument::new(DocumentConfig::default());
+            let child_root = child.root_node().id;
+            let child_html = element(&mut child, child_root, "html");
+            let child_body = element(&mut child, child_html, "body");
+            let child_divs = div_chain(&mut child, child_body, 100);
+            parent.set_sub_document(frame, Box::new(child));
+            parent.resolve(0.0);
+
+            let child = parent.subdoc(frame).unwrap().inner();
+            // html, body and the divs put the iframe's box 1,003 deep.
+            assert_eq!(child.box_depth_base, 1_004);
+            let has_box = |id: NodeId| child.get_node(id).unwrap().layout_parent.get().is_some();
+            assert!(has_box(child_divs[10]));
+            assert!(!has_box(child_divs[50]));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
