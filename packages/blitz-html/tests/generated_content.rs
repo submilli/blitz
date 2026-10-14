@@ -46,6 +46,8 @@ fn a_contents_pseudo_of_a_table_has_no_box() {
     assert!(wrapper.flags.is_inline_root());
     assert!(wrapper.final_layout().size.width > 0.0);
     assert!(wrapper.final_layout().size.height > 0.0);
+    assert!(table.final_layout().size.width > 0.0);
+    assert!(table.final_layout().size.height > 0.0);
     assert_eq!(
         wrapper
             .element_data()
