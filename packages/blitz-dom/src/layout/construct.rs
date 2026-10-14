@@ -305,7 +305,11 @@ fn push_non_whitespace_children_and_pseudos(layout_children: &mut ThinVec<NodeId
 
 /// Resolve the used `line-height` (in CSS px) of an element. `normal` is resolved
 /// from the metrics of the element's first available font.
-fn resolve_line_height(font_ctx: &mut FontContext, style: &ComputedValues, scale: f32) -> f32 {
+pub(super) fn resolve_line_height(
+    font_ctx: &mut FontContext,
+    style: &ComputedValues,
+    scale: f32,
+) -> f32 {
     let font = style.get_font();
     let font_size = font.font_size.used_size.0.px();
     match font.line_height {
@@ -1554,6 +1558,7 @@ pub(crate) fn build_inline_layout_into(
                                 // dbg!(&style);
 
                                 builder.push_style_span(style);
+                                super::inline_edges::push_edge(builder, node, true);
 
                                 if let Some(before_id) = node.before() {
                                     build_inline_layout_recursive(
@@ -1590,6 +1595,7 @@ pub(crate) fn build_inline_layout_into(
                                     );
                                 }
 
+                                super::inline_edges::push_edge(builder, node, false);
                                 builder.pop_style_span();
                             }
                         }

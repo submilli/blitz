@@ -306,6 +306,21 @@ impl BaseDocument {
 
         // Update inline boxes
         for ibox in inline_layout.layout.inline_boxes_mut() {
+            if ibox.kind.is_span_edge() {
+                (ibox.height, ibox.baseline) = super::inline_edges::font_box(
+                    &self.nodes[NodeId::from_u64(ibox.id)],
+                    &self.nodes[node_id],
+                    &mut self.font_ctx.lock().unwrap(),
+                    scale,
+                );
+                ibox.width = super::inline_edges::measure_edge(
+                    &self.nodes[NodeId::from_u64(ibox.id)],
+                    ibox.kind,
+                    child_inputs.parent_size.width,
+                    scale,
+                );
+                continue;
+            }
             let style = self.nodes[NodeId::from_u64(ibox.id)].layout_style();
             let margin = style
                 .margin()
@@ -619,6 +634,9 @@ impl BaseDocument {
         for line in inline_layout.layout.lines() {
             for item in line.items() {
                 if let parley::layout::PositionedLayoutItem::InlineBox(ibox) = item {
+                    if ibox.kind.is_span_edge() {
+                        continue;
+                    }
                     let order = ibox_order;
                     ibox_order += 1;
                     let node = &self.nodes[NodeId::from_u64(ibox.id)];

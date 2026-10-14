@@ -86,6 +86,12 @@ impl LayoutGeometry {
                         }
                     }
                     PositionedLayoutItem::InlineBox(inline) => {
+                        if matches!(
+                            inline.kind,
+                            parley::InlineBoxKind::SpanStart | parley::InlineBoxKind::SpanEnd
+                        ) {
+                            continue;
+                        }
                         let edge = BoxEdge {
                             left: x(inline.x),
                             right: x(inline.x + inline.width),

@@ -4,6 +4,7 @@ use crate::{BaseDocument, NodeId};
 use kurbo::{Affine, Point};
 use style::values::specified::box_::{DisplayInside, DisplayOutside};
 
+mod inline_edges;
 mod observers;
 mod visibility;
 pub use observers::{IntersectionGeometry, ResizeGeometry};
@@ -446,6 +447,23 @@ impl BaseDocument {
                     }
                     PositionedLayoutItem::InlineBox(inline_box) => {
                         if !is_in_target(NodeId::from_u64(inline_box.id)) {
+                            continue;
+                        }
+                        if inline_box.kind.is_span_edge() {
+                            if let Some((x0, y0, x1, y1)) = inline_edges::border_rect(
+                                self,
+                                node_id,
+                                &inline_box,
+                                root_layout.size.width
+                                    - root_layout.padding.left
+                                    - root_layout.padding.right
+                                    - root_layout.border.left
+                                    - root_layout.border.right,
+                                &line,
+                                scale as f32,
+                            ) {
+                                add(x0, y0, x1, y1);
+                            }
                             continue;
                         }
                         let x0 = inline_box.x as f64;
