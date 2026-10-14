@@ -4,6 +4,7 @@
 //! or `TAG:offset`.
 
 use super::laid_out;
+use crate::common::laid_out_with_browser_fonts;
 use crate::common::q;
 use blitz_dom::caret::{Alter, CaretMemory, Direction, Granularity, ModifyRequest};
 use blitz_dom::{BaseDocument, NodeId, ranges::Boundary};
@@ -13,7 +14,20 @@ pub fn run(html: &str, path: &str, offset: usize, steps: &str) -> String {
     let doc = laid_out(&format!(
         "<!doctype html><html><head></head><body>{html}</body></html>"
     ));
-    let mut node = q(&doc, "body");
+    run_on(&doc, path, offset, steps)
+}
+
+/// `run` with the fonts the browser lays pages out with, the bullet font
+/// among them.
+pub fn run_with_browser_fonts(html: &str, path: &str, offset: usize, steps: &str) -> String {
+    let doc = laid_out_with_browser_fonts(&format!(
+        "<!doctype html><html><head></head><body>{html}</body></html>"
+    ));
+    run_on(&doc, path, offset, steps)
+}
+
+fn run_on(doc: &BaseDocument, path: &str, offset: usize, steps: &str) -> String {
+    let mut node = q(doc, "body");
     for index in path.split(',').filter(|i| !i.is_empty()) {
         let Some(&child) = doc
             .get_node(node)
@@ -44,7 +58,7 @@ pub fn run(html: &str, path: &str, offset: usize, steps: &str) -> String {
         if let Some(moved) = doc.modify_selection(anchor, focus, request) {
             (anchor, focus, memory) = (moved.anchor, moved.focus, moved.memory);
         }
-        let (a, f) = (name(&doc, anchor), name(&doc, focus));
+        let (a, f) = (name(doc, anchor), name(doc, focus));
         results.push(if a == f { f } else { format!("{a}..{f}") });
     }
     results.join(" | ")

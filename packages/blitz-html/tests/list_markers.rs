@@ -5,13 +5,14 @@
 
 mod common;
 
-use blitz_dom::{BaseDocument, FontRole, build_font_ctx};
-use common::{parse, q};
+use blitz_dom::BaseDocument;
+use common::{laid_out_at_scale, q};
 
 /// Cases that still differ from Chrome, with our positions.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     // Chrome lays out a disclosure marker as text in a fallback font of the
-    // system, as Arial has no triangles; Blitz uses its bundled bullet font.
+    // system, as Arial has no triangles; Blitz uses its bundled bullet font,
+    // whose taller ascent also lowers the line (submilli SUB-1706).
     ("disclosure-open@7", "6.17,0"),
     ("disclosure-closed@7", "6.17,0"),
     ("disclosure-open@10", "8.81,0"),
@@ -28,8 +29,8 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("disclosure-closed@32", "28.19,2"),
     ("disclosure-open@50", "44.05,3"),
     ("disclosure-closed@50", "44.05,3"),
-    // Blitz has no upper-roman counter style and lays out a square
-    // (submilli SUB-1706).
+    // Blitz has no upper-roman counter style and lays out a square in the
+    // bullet font (submilli SUB-1706).
     ("upper-roman@7", "7.03,0"),
     ("upper-roman@10", "10.05,0"),
     ("upper-roman@13", "13.06,0"),
@@ -102,26 +103,15 @@ fn symbol_markers_of_huge_fonts_lay_out() {
     }
 }
 
-/// `html` laid out with the bundled Liberation Sans for every family and
-/// the bullet font, as the browser lays pages out.
 fn page(html: &str) -> BaseDocument {
     scaled_page(html, 1.0)
 }
 
-/// `html` laid out like `page`, at `scale` device pixels per CSS pixel.
 fn scaled_page(html: &str, scale: f32) -> BaseDocument {
-    let mut doc = parse(&format!(
-        "<!doctype html><html><head></head><body>{html}</body></html>"
-    ));
-    let mut viewport = doc.viewport().clone();
-    viewport.set_hidpi_scale(scale);
-    doc.set_viewport(viewport);
-    *doc.font_ctx().lock().unwrap() = build_font_ctx(&[(
-        FontRole::SansSerif,
-        include_bytes!("../../blitz-dom/assets/test-fonts/LiberationSans-Regular.ttf"),
-    )]);
-    doc.resolve(0.0);
-    doc
+    laid_out_at_scale(
+        &format!("<!doctype html><html><head></head><body>{html}</body></html>"),
+        scale,
+    )
 }
 
 /// The first client rect of `#s` relative to the border box of `#t`.

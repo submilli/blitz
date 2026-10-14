@@ -35,6 +35,26 @@ pub fn laid_out(html: &str) -> BaseDocument {
     doc
 }
 
+/// Parse `html` and lay it out with the bundled Liberation Sans for every
+/// family and the bullet font, as the browser lays pages out.
+pub fn laid_out_with_browser_fonts(html: &str) -> BaseDocument {
+    laid_out_at_scale(html, 1.0)
+}
+
+/// `laid_out_with_browser_fonts` at `scale` device pixels per CSS pixel.
+pub fn laid_out_at_scale(html: &str, scale: f32) -> BaseDocument {
+    let mut doc = parse(html);
+    let mut viewport = doc.viewport().clone();
+    viewport.set_hidpi_scale(scale);
+    doc.set_viewport(viewport);
+    *doc.font_ctx().lock().unwrap() = blitz_dom::build_font_ctx(&[(
+        blitz_dom::FontRole::SansSerif,
+        include_bytes!("../../blitz-dom/assets/test-fonts/LiberationSans-Regular.ttf"),
+    )]);
+    doc.resolve(0.0);
+    doc
+}
+
 pub fn q(doc: &BaseDocument, selector: &str) -> NodeId {
     doc.query_selector(selector)
         .unwrap()

@@ -1,12 +1,13 @@
 //! `Selection.modify` steps at inside list markers against Chrome 155
-//! (macOS), in `fixtures/caret_markers.tsv`. A line step keeps a horizontal
-//! position; over a symbol marker it reaches generated content, and over the
-//! marker's end margin the content after it.
+//! (macOS), in `fixtures/caret_markers.tsv`, laid out with the browser's
+//! fonts. A line step keeps a horizontal position; over a symbol marker it
+//! reaches generated content, and over the marker's end margin the content
+//! after it.
 
 mod caret_support;
 mod common;
 
-use caret_support::recorded::run;
+use caret_support::recorded::run_with_browser_fonts;
 
 #[test]
 fn steps_at_inside_markers_match_chrome() {
@@ -18,7 +19,7 @@ fn steps_at_inside_markers_match_chrome() {
         else {
             panic!("malformed line: {line}");
         };
-        let ours = run(html, path, offset.parse().unwrap(), steps);
+        let ours = run_with_browser_fonts(html, path, offset.parse().unwrap(), steps);
         if ours != chrome {
             differing.push(format!("{key}: Chrome {chrome}, ours {ours}"));
         }

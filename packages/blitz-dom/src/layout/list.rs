@@ -19,7 +19,8 @@ use crate::{
 };
 
 pub(super) const BULLET_FONT_FAMILY: &str = "Bullet, monospace, sans-serif";
-/// The family name of the bundled bullet font.
+/// The family name of the bundled bullet font, the first of
+/// `BULLET_FONT_FAMILY`.
 const BULLET_FAMILY_NAME: &str = "Bullet";
 
 pub(super) fn collect_list_item_children(
@@ -153,8 +154,8 @@ pub(super) fn inside_marker_content<'a>(
     })
 }
 
-/// The text style of an inside marker that is a single character followed
-/// by a space.
+/// The text style of an inside marker that is a single character followed by
+/// a space.
 ///
 /// Bullet glyphs live in the bundled bullet font. Without it a marker like
 /// disclosure-closed (U+25B8) falls back to the item's own font and renders
@@ -167,10 +168,10 @@ pub(super) fn inside_marker_content<'a>(
 /// `ascent` rounded, or none at font size 0, with a -1px start margin and a
 /// 1em end margin. Letter and word spacing do not change it, so the marker
 /// takes none, except for the word spacing that widens its space to that
-/// width. Its glyph comes from the item's fonts, so that the line keeps
-/// their metrics, as Chrome's does. The space keeps the item's white space handling, so a space
-/// starting the item's content collapses into it, as Chrome collapses that
-/// space after a marker.
+/// width. Its glyph comes from the item's fonts, so that the line keeps their
+/// metrics, as Chrome's does. The space keeps the item's white space
+/// handling, so a space starting the item's content collapses into it, as
+/// Chrome collapses that space after a marker.
 fn inside_char_marker_style(
     layout_ctx: &mut LayoutContext<TextBrush>,
     font_ctx: &mut FontContext,
