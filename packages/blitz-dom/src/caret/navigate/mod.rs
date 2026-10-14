@@ -262,7 +262,15 @@ impl Mover<'_> {
         } else {
             segments::previous_word_start(flow.text(), offset)
         };
-        flow.stop_near(flow.index_at(found?))
+        let mut found = found?;
+        if self.forward {
+            // A paragraph separator is a word boundary of its own, so a
+            // step at a paragraph's end reaches the next paragraph's start.
+            if let Some(separator) = flow.text()[offset..found].find('\n') {
+                found = offset + separator + 1;
+            }
+        }
+        flow.stop_near(flow.index_at(found))
     }
 
     /// The next sentence boundary, continuing into adjacent flows.

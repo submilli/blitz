@@ -25,25 +25,37 @@ impl BaseDocument {
         ) {
             return visible::modify_selection(self, anchor, focus, request);
         }
-        let (anchor, focus, request) = visible::prepare_to_modify(self, anchor, focus, request);
-        let flows = DocumentFlows::new(self);
-        let mut focus_caret = flows.locate(focus)?;
-        focus_caret.upstream = request.memory.upstream;
-        let carets = Carets {
-            anchor: flows.locate(anchor)?,
-            focus: focus_caret,
-        };
-        let (moved, line_x) = navigate::modify(&flows, carets, request)?;
-        let memory = CaretMemory {
-            line_x,
-            upstream: moved.focus.upstream,
-            ..CaretMemory::default()
-        };
-        Some(Modified::reporting_kept(
-            flows.point(moved.anchor)?,
-            flows.point(moved.focus)?,
-            memory,
-        ))
+        visible::modify_flow_selection(self, anchor, focus, request, |anchor, focus, request| {
+            let flows = DocumentFlows::new(self);
+            let mut focus_caret = flows.locate(focus)?;
+            focus_caret.upstream = request.memory.upstream;
+            let carets = Carets {
+                anchor: flows.locate(anchor)?,
+                focus: focus_caret,
+            };
+            let (moved, line_x) = navigate::modify(&flows, carets, request)?;
+            let memory = CaretMemory {
+                line_x,
+                upstream: moved.focus.upstream,
+                ..CaretMemory::default()
+            };
+            // A fixed end is the visible selection's position, rather than
+            // the flow stop that renders there.
+            let point = |caret| {
+                if caret == carets.anchor {
+                    Some(anchor)
+                } else if caret == carets.focus {
+                    Some(focus)
+                } else {
+                    flows.point(caret)
+                }
+            };
+            Some(Modified::reporting_kept(
+                point(moved.anchor)?,
+                point(moved.focus)?,
+                memory,
+            ))
+        })
     }
 }
 

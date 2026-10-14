@@ -117,7 +117,7 @@ fn vertical_step(
 /// The selection after extending to `position`: a line or paragraph step
 /// never carries the focus across the anchor, and a boundary step grows a
 /// range at the side it moves toward.
-fn extend(
+pub(super) fn extend(
     cx: &Context,
     selection: &Selection,
     position: Position,
@@ -127,7 +127,7 @@ fn extend(
     let mut position = position;
     let keeps_anchor_side = matches!(
         request.granularity,
-        Granularity::Line | Granularity::Paragraph
+        Granularity::Word | Granularity::Line | Granularity::Paragraph
     );
     if !selection.is_caret() && keeps_anchor_side {
         let extended = Selection {
@@ -138,7 +138,11 @@ fn extend(
             position = selection.anchor;
         }
     }
-    if selection.is_caret() || request.granularity != Granularity::LineBoundary {
+    let grows_range = matches!(
+        request.granularity,
+        Granularity::LineBoundary | Granularity::ParagraphBoundary | Granularity::DocumentBoundary
+    );
+    if selection.is_caret() || !grows_range {
         return (selection.anchor, position);
     }
     match (forward, selection.anchor_first(cx)) {
@@ -157,7 +161,7 @@ fn extend(
 /// reports as the start of the paragraph after it. A selection with no
 /// visible position in the DOM tree is dropped; `given` is the selection
 /// the step started from.
-fn report(
+pub(super) fn report(
     cx: &Context,
     anchor: Position,
     focus: Position,

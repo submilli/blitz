@@ -5,8 +5,10 @@
 //! Chrome on macOS, so callers must flush style and layout first. Movement
 //! by line, paragraph and line boundary ports Chrome's editing model over
 //! DOM positions and line boxes, and bounds its work (the `visible`
-//! module). Other movement, and all movement in text controls, runs over
-//! the caret stops of laid-out inline content (the `flow` module). Each
+//! module). Document character steps walk visually distinct positions;
+//! other document flow steps preserve visible selection ends around
+//! navigation over inline caret stops. Text controls navigate only their
+//! editor's flow. Each
 //! call rebuilds its view of the document and keeps no state.
 
 mod align;

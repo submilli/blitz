@@ -468,7 +468,7 @@ pub(super) fn line_direction_point(cx: &Context, placed: Placed) -> f32 {
 /// border edges.
 fn box_caret_x(cx: &Context, position: Position) -> Option<f32> {
     let node = position.node;
-    cx.object(node)?;
+    let object = cx.object(node)?;
     let size = cx.size(node)?;
     let data = cx.tree.node(node);
     let mut left = data.unrounded_absolute_position(0.0, 0.0).x;
@@ -477,7 +477,11 @@ fn box_caret_x(cx: &Context, position: Position) -> Option<f32> {
         left = content_origin(data).0;
         width = content_width(data);
     }
-    if position.editing_offset(&cx.tree) > 0 {
+    // LayoutBlock::LocalCaretRect uses the empty element's line start,
+    // regardless of offset; an after-position on an empty block is not
+    // a caret at its far border edge.
+    let empty_block = object.block_container && !cx.tree.has_children(node);
+    if !empty_block && position.editing_offset(&cx.tree) > 0 {
         left += width - CARET_WIDTH;
     }
     Some(left)

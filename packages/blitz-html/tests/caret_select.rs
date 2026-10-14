@@ -8,8 +8,8 @@ mod common;
 
 use caret_support::recorded::run;
 
-/// Steps that still differ from Chrome, with ours: word and character steps
-/// stop at atomic inlines (images and controls alike), which ours pass.
+/// Word steps that still differ from Chrome: Chrome stops beside atomic
+/// inlines (images and controls alike), which ours pass.
 // submilli SUB-1676.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("dd.fw", "#aa:2 | #bb:2"),
@@ -17,7 +17,6 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ("dd.bw2", "P:2 | #aa:0 | #aa:0 | #aa:0"),
     ("dd.fwsp", "#aa :2 | # bb:3 | # bb:3 | # bb:3"),
     ("lb.fw2", "#aa:2 | #bb:2 | #bb:2"),
-    ("lb.fc", "P:1 | #cc:0"),
     ("inp.fw2", "#aa:2 | #bb:2 | #bb:2"),
     ("img.fw2", "#aa:2 | #bb:2 | #bb:2"),
 ];

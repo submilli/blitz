@@ -1,0 +1,99 @@
+space-paragraph-backward-character	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;backward:character:extend;backward:line:extend	P:2..#cd :2 | P:2..#cd :1 | #ab :2
+space-paragraph-forward-character	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;forward:character:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-paragraph-backward-word	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;backward:word:extend;backward:line:extend	P:2..#cd :2 | P:2..P:3 | #ab :2
+space-paragraph-forward-word	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;forward:word:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-paragraph-backward-sentence	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;backward:sentence:extend;backward:line:extend	P:2..#cd :2 | P:2..P:3 | #ab :2
+space-paragraph-forward-sentence	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;forward:sentence:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-paragraph-backward-sentenceboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;backward:sentenceboundary:extend;backward:line:extend	P:2..#cd :2 | #ab :2..#ab :0 | #ab :2..#ab :0
+space-paragraph-forward-sentenceboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;forward:sentenceboundary:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-paragraph-backward-paragraphboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;backward:paragraphboundary:extend;backward:line:extend	P:2..#cd :2 | #ab :0..#cd :2 | #ab :0..#ab :2
+space-paragraph-forward-paragraphboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;forward:paragraphboundary:extend;backward:line:extend	P:2..#cd :2 | P:2..#cd :2 | #ab :2
+space-paragraph-backward-documentboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;backward:documentboundary:extend;backward:line:extend	P:2..#cd :2 | #ab :0..#cd :2 | #ab :0..#ab :2
+space-paragraph-forward-documentboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:paragraph:extend;forward:documentboundary:extend;backward:line:extend	P:2..#cd :2 | P:2..#ef:2 | P:2..#cd :2
+space-line-backward-character	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;backward:character:extend;backward:line:extend	P:2..#cd :2 | P:2..#cd :1 | #ab :2
+space-line-forward-character	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;forward:character:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-line-backward-word	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;backward:word:extend;backward:line:extend	P:2..#cd :2 | P:2..P:3 | #ab :2
+space-line-forward-word	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;forward:word:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-line-backward-sentence	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;backward:sentence:extend;backward:line:extend	P:2..#cd :2 | P:2..P:3 | #ab :2
+space-line-forward-sentence	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;forward:sentence:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-line-backward-sentenceboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;backward:sentenceboundary:extend;backward:line:extend	P:2..#cd :2 | #ab :2..#ab :0 | #ab :2..#ab :0
+space-line-forward-sentenceboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;forward:sentenceboundary:extend;backward:line:extend	P:2..#cd :2 | P:2..P:7 | P:2..P:3
+space-line-backward-paragraphboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;backward:paragraphboundary:extend;backward:line:extend	P:2..#cd :2 | #ab :0..#cd :2 | #ab :0..#ab :2
+space-line-forward-paragraphboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;forward:paragraphboundary:extend;backward:line:extend	P:2..#cd :2 | P:2..#cd :2 | #ab :2
+space-line-backward-documentboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;backward:documentboundary:extend;backward:line:extend	P:2..#cd :2 | #ab :0..#cd :2 | #ab :0..#ab :2
+space-line-forward-documentboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:line:extend;forward:documentboundary:extend;backward:line:extend	P:2..#cd :2 | P:2..#ef:2 | P:2..#cd :2
+space-lineboundary-backward-character	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;backward:character:extend;backward:line:extend	#ab :2 | #ab :2..#ab :1 | #ab :2..#ab :0
+space-lineboundary-forward-character	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;forward:character:extend;backward:line:extend	#ab :2 | P:2..P:3 | #ab :2
+space-lineboundary-backward-word	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;backward:word:extend;backward:line:extend	#ab :2 | #ab :2..#ab :0 | #ab :2..#ab :0
+space-lineboundary-forward-word	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;forward:word:extend;backward:line:extend	#ab :2 | P:2..P:3 | #ab :2
+space-lineboundary-backward-sentence	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;backward:sentence:extend;backward:line:extend	#ab :2 | #ab :2..#ab :0 | #ab :2..#ab :0
+space-lineboundary-forward-sentence	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;forward:sentence:extend;backward:line:extend	#ab :2 | P:2..P:3 | #ab :2
+space-lineboundary-backward-sentenceboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;backward:sentenceboundary:extend;backward:line:extend	#ab :2 | #ab :2..#ab :0 | #ab :2..#ab :0
+space-lineboundary-forward-sentenceboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;forward:sentenceboundary:extend;backward:line:extend	#ab :2 | P:2..P:3 | #ab :2
+space-lineboundary-backward-paragraphboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;backward:paragraphboundary:extend;backward:line:extend	#ab :2 | #ab :2..#ab :0 | #ab :2..#ab :0
+space-lineboundary-forward-paragraphboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;forward:paragraphboundary:extend;backward:line:extend	#ab :2 | #ab :2 | #ab :2..#ab :0
+space-lineboundary-backward-documentboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;backward:documentboundary:extend;backward:line:extend	#ab :2 | #ab :2..#ab :0 | #ab :2..#ab :0
+space-lineboundary-forward-documentboundary	<p>ab <span> </span><br>cd <i> </i><b> </b><br>ef</p>	0,1,0	0	forward:lineboundary:extend;forward:documentboundary:extend;backward:line:extend	#ab :2 | P:2..#ef:2 | P:2..#cd :2
+hrs-backward-character-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:character;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:1 | #abc:0
+hrs-backward-character-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:character:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..BODY:1 | #abc:0
+hrs-forward-character-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:character;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | BODY:2
+hrs-forward-character-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:character:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | #abc:0
+hrs-backward-word-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:word;backward:line	BODY:3 | BODY:3 | BODY:2 | #abc:3 | #abc:0
+hrs-backward-word-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:word:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..#abc:3 | #abc:0
+hrs-forward-word-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:word;backward:line	BODY:3 | BODY:3 | BODY:2 | #def:0 | BODY:3
+hrs-forward-word-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:word:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..P:0 | #abc:0
+hrs-backward-sentence-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:sentence;backward:line	BODY:3 | BODY:3 | BODY:2 | #abc:0 | #abc:0
+hrs-backward-sentence-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:sentence:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..#abc:0 | #abc:0
+hrs-forward-sentence-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:sentence;backward:line	BODY:3 | BODY:3 | BODY:2 | #def:0 | BODY:3
+hrs-forward-sentence-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:sentence:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..P:0 | #abc:0
+hrs-backward-sentenceboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:sentenceboundary;backward:line	BODY:3 | BODY:3 | BODY:2 | #abc:0 | #abc:0
+hrs-backward-sentenceboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:sentenceboundary:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..#abc:0 | #abc:0
+hrs-forward-sentenceboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:sentenceboundary;backward:line	BODY:3 | BODY:3 | BODY:2 | #def:3 | BODY:3
+hrs-forward-sentenceboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:sentenceboundary:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..#def:3 | #abc:3
+hrs-backward-paragraphboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:paragraphboundary;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:1 | #abc:0
+hrs-backward-paragraphboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:paragraphboundary:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..BODY:1 | #abc:0
+hrs-forward-paragraphboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:paragraphboundary;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | #abc:1
+hrs-forward-paragraphboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:paragraphboundary:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | #abc:0
+hrs-backward-documentboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:documentboundary;backward:line	BODY:3 | BODY:3 | BODY:2 | #abc:0 | #abc:0
+hrs-backward-documentboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:documentboundary:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..#abc:0 | #abc:0
+hrs-forward-documentboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:documentboundary;backward:line	BODY:3 | BODY:3 | BODY:2 | #def:3 | BODY:3
+hrs-forward-documentboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:documentboundary:extend;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..#def:3 | #abc:3
+hrs-range-backward-backward-character	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:character:extend;backward:character;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..BODY:1 | BODY:1 | #abc:0
+hrs-range-forward-backward-character	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:character:extend;backward:character;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | BODY:1 | #abc:0
+hrs-range-backward-forward-character	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:character:extend;forward:character;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..BODY:1 | BODY:2 | #abc:0
+hrs-range-forward-forward-character	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:character:extend;forward:character;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | BODY:2 | BODY:2
+hrs-range-backward-backward-word	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:character:extend;backward:word;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..BODY:1 | #abc:0 | #abc:0
+hrs-range-forward-backward-word	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:character:extend;backward:word;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | #abc:3 | #abc:0
+hrs-range-backward-forward-word	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;backward:character:extend;forward:word;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2..BODY:1 | #def:0 | BODY:3
+hrs-range-forward-forward-word	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line;backward:lineboundary;backward:line;forward:character:extend;forward:word;backward:line	BODY:3 | BODY:3 | BODY:2 | BODY:2 | #def:0 | BODY:3
+hrs-reverse-backward-sentenceboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:sentenceboundary;backward:line	#def:1..BODY:3 | #abc:0 | #abc:0
+hrs-reverse-backward-sentenceboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:sentenceboundary:extend;backward:line	#def:1..BODY:3 | #def:1..#abc:0 | #abc:0
+hrs-reverse-forward-sentenceboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:sentenceboundary;backward:line	#def:1..BODY:3 | #def:3 | BODY:3
+hrs-reverse-forward-sentenceboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:sentenceboundary:extend;backward:line	#def:1..BODY:3 | #def:1..#def:3 | BODY:3
+hrs-reverse-backward-paragraphboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:paragraphboundary;backward:line	#def:1..BODY:3 | BODY:2 | BODY:2
+hrs-reverse-backward-paragraphboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:paragraphboundary:extend;backward:line	#def:1..BODY:3 | #def:1..BODY:2 | BODY:2
+hrs-reverse-forward-paragraphboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:paragraphboundary;backward:line	#def:1..BODY:3 | #def:3 | BODY:3
+hrs-reverse-forward-paragraphboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:paragraphboundary:extend;backward:line	#def:1..BODY:3 | #def:3..BODY:3 | BODY:2
+hrs-reverse-backward-documentboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:documentboundary;backward:line	#def:1..BODY:3 | #abc:0 | #abc:0
+hrs-reverse-backward-documentboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:documentboundary:extend;backward:line	#def:1..BODY:3 | #def:1..#abc:0 | #abc:0
+hrs-reverse-forward-documentboundary-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:documentboundary;backward:line	#def:1..BODY:3 | #def:3 | BODY:3
+hrs-reverse-forward-documentboundary-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:documentboundary:extend;backward:line	#def:1..BODY:3 | #def:3..BODY:3 | BODY:2
+hrs-reverse-backward-character-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:character;backward:line	#def:1..BODY:3 | BODY:3 | BODY:2
+hrs-reverse-backward-character-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:character:extend;backward:line	#def:1..BODY:3 | #def:1..BODY:2 | BODY:2
+hrs-reverse-forward-character-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:character;backward:line	#def:1..BODY:3 | #def:1 | BODY:3
+hrs-reverse-forward-character-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:character:extend;backward:line	#def:1..BODY:3 | #def:1..#def:0 | BODY:3
+hrs-reverse-backward-word-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:word;backward:line	#def:1..BODY:3 | #abc:3 | #abc:0
+hrs-reverse-backward-word-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:word:extend;backward:line	#def:1..BODY:3 | #def:1..#abc:3 | #abc:0
+hrs-reverse-forward-word-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:word;backward:line	#def:1..BODY:3 | #def:3 | BODY:3
+hrs-reverse-forward-word-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:word:extend;backward:line	#def:1..BODY:3 | #def:1 | BODY:3
+hrs-reverse-backward-sentence-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:sentence;backward:line	#def:1..BODY:3 | #abc:0 | #abc:0
+hrs-reverse-backward-sentence-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;backward:sentence:extend;backward:line	#def:1..BODY:3 | #def:1..#abc:0 | #abc:0
+hrs-reverse-forward-sentence-move	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:sentence;backward:line	#def:1..BODY:3 | #def:3 | BODY:3
+hrs-reverse-forward-sentence-extend	<p>abc</p><hr><hr><p>def</p>	3,0	1	backward:line:extend;forward:sentence:extend;backward:line	#def:1..BODY:3 | #def:1..#def:3 | BODY:3
+finite-button-0	<p>t<button style="padding:0px">aa bb</button>u</p>	0,1,0	1	forward:character;forward:word:extend;backward:character;forward:word:extend	#aa bb:2 | #aa bb:2..#u:1 | #aa bb:2 | #aa bb:2..#u:1
+finite-button-2	<p>t<button style="padding:2px">aa bb</button>u</p>	0,1,0	1	forward:character;forward:word:extend;backward:character;forward:word:extend	#aa bb:2 | #aa bb:2..#u:1 | #aa bb:2 | #aa bb:2..#u:1
+finite-button-20	<p>t<button style="padding:20px">aa bb</button>u</p>	0,1,0	1	forward:character;forward:word:extend;backward:character;forward:word:extend	#aa bb:2 | #aa bb:2..#u:1 | #aa bb:2 | #aa bb:2..#u:1
+finite-button-200	<p>t<button style="padding:200px">aa bb</button>u</p>	0,1,0	1	forward:character;forward:word:extend;backward:character;forward:word:extend	#aa bb:2 | #aa bb:2..#u:1 | #aa bb:2 | #aa bb:2..#u:1
+float-none	<p>ab<img style="float:left;user-select:none;width:10px;height:10px">cd</p>	0,0	0	forward:character;forward:character;forward:character;forward:character	#ab:1 | #ab:2 | P:1 | P:2
+float-auto	<p>ab<img style="float:left;width:10px;height:10px">cd</p>	0,0	0	forward:character;forward:character;forward:character;forward:character	#ab:1 | #ab:2 | P:1 | P:2
+inline-none	<p>ab<img style="user-select:none;width:10px;height:10px">cd</p>	0,0	0	forward:character;forward:character;forward:character;forward:character	#ab:1 | #ab:2 | P:2 | #cd:1

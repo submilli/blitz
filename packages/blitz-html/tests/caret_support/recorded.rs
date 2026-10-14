@@ -52,11 +52,35 @@ fn run_on(doc: &BaseDocument, path: &str, offset: usize, steps: &str) -> String 
     let (mut anchor, mut focus) = (start, start);
     // What consecutive steps keep, as `selection.js` keeps it.
     let mut memory = CaretMemory::default();
+    let mut directional = false;
     let mut results = Vec::new();
     for step in steps.split(';') {
-        let request = request(step, memory);
+        let request = ModifyRequest {
+            directional,
+            ..request(step, memory)
+        };
         if let Some(moved) = doc.modify_selection(anchor, focus, request) {
-            (anchor, focus, memory) = (moved.anchor, moved.focus, moved.memory);
+            let next_directional = request.alter == Alter::Extend;
+            let unchanged = moved.anchor == anchor
+                && moved.focus == focus
+                && moved.memory.upstream == memory.upstream
+                && moved.memory.anchor_type == memory.anchor_type
+                && moved.memory.focus_type == memory.focus_type
+                && directional == next_directional;
+            let line_x = if unchanged {
+                moved.memory.line_x.or(memory.line_x)
+            } else {
+                moved.memory.line_x
+            };
+            (anchor, focus, memory) = (
+                moved.anchor,
+                moved.focus,
+                CaretMemory {
+                    line_x,
+                    ..moved.memory
+                },
+            );
+            directional = next_directional;
         }
         let (a, f) = (name(doc, anchor), name(doc, focus));
         results.push(if a == f { f } else { format!("{a}..{f}") });
@@ -79,6 +103,10 @@ fn request(step: &str, memory: CaretMemory) -> ModifyRequest {
         Some("paragraph") => Granularity::Paragraph,
         Some("word") => Granularity::Word,
         Some("character") => Granularity::Character,
+        Some("sentence") => Granularity::Sentence,
+        Some("sentenceboundary") => Granularity::SentenceBoundary,
+        Some("paragraphboundary") => Granularity::ParagraphBoundary,
+        Some("documentboundary") => Granularity::DocumentBoundary,
         other => panic!("unknown granularity {other:?} in step {step:?}"),
     };
     let alter = match parts.get(2).copied() {

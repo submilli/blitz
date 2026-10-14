@@ -37,13 +37,15 @@ fn floats_on_later_lines_do_not_end_the_line() {
 }
 
 #[test]
-fn unselectable_floats_take_no_stops() {
+fn opaque_floats_keep_their_boundary_positions_even_when_unselectable() {
     let doc =
         laid_out("<p>ab<img style='float:left;user-select:none;width:10px;height:10px'>cd</p>");
-    let (ab, cd) = (child(&doc, "p", 0), child(&doc, "p", 2));
+    let (p, ab) = (q(&doc, "p"), child(&doc, "p", 0));
+    // Offline Chrome 155 (SUB-1582): an opaque float's before/after
+    // positions are candidates when its parent is selectable.
     assert_eq!(
         carets(&doc, at(ab, 0), &moves(FORWARD, Granularity::Character, 4)),
-        [at(ab, 1), at(ab, 2), at(cd, 0), at(cd, 1)]
+        [at(ab, 1), at(ab, 2), at(p, 1), at(p, 2)]
     );
 }
 

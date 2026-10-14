@@ -6,13 +6,15 @@
 //! Floats and positioned boxes take no text content in their formatting
 //! context, so the positions beside one map to where the content around it
 //! is, and lines are found by walking the DOM's leaves where a context has
-//! none. The rest of caret movement works over [`super::flow`]s.
+//! none. Character steps walk visually distinct positions; other steps
+//! preserve visible selection ends around navigation over [`super::flow`]s.
 
 mod bidi;
 mod boundary;
 mod canonical;
 mod caret;
 mod context;
+mod flow;
 mod hit;
 mod ifc;
 mod iterator;
@@ -46,18 +48,5 @@ pub(super) fn modify_selection(
     modify::modify(&cx, anchor, focus, request)
 }
 
-/// The selection a step over caret stops starts from: a range that is not
-/// directional, oriented toward the side an extension moves to (see
-/// [`ModifyRequest::directional`]).
-pub(super) fn prepare_to_modify(
-    doc: &BaseDocument,
-    anchor: Boundary,
-    focus: Boundary,
-    request: ModifyRequest,
-) -> (Boundary, Boundary, ModifyRequest) {
-    // Most steps need no orienting; they skip building a context.
-    if !prepare::applies(anchor, focus, request) {
-        return (anchor, focus, request);
-    }
-    prepare::prepare(&context::Context::new(doc), anchor, focus, request)
-}
+/// Flow movement starts from and reports Chrome's visible selection.
+pub(super) use flow::modify_selection as modify_flow_selection;
