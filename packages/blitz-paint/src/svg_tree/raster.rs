@@ -113,7 +113,7 @@ fn downscale(
         usize::try_from(plan.mip_texels().ok_or(GraphError::Size)?)
             .map_err(|_| GraphError::Memory)?,
     )?;
-    budget.take_work(plan.base_texels().area().saturating_mul(64))?;
+    budget.take_work(plan.stream_work())?;
     let image = plan.share(Arc::new(input)).ok_or(GraphError::Memory)?;
     let graph = SvgGraph::new(
         vec![Node {
@@ -203,7 +203,7 @@ fn nearest_mip(
     )?;
     // Mip streaming, extraction and the cache-sized resize are additional
     // to the final destination; admit them before any of those allocations.
-    budget.take_work(plan.base_texels().area().saturating_mul(64))?;
+    budget.take_work(plan.stream_work())?;
     let cache_area = u64::from(cached[0]) * u64::from(cached[1]);
     budget.take(usize::try_from(cache_area.saturating_mul(3)).map_err(|_| GraphError::Memory)?)?;
     budget.take_work(cache_area.saturating_mul(16))?;
@@ -246,14 +246,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn large_held_rasters_fit_the_unchanged_sampling_budget() {
+        let raster =
+            RasterImageData::new(2048, 2048, Arc::new([0, 255, 0, 255].repeat(2048 * 2048)));
+        let destination = Rect::new(0.0, 0.0, 32.0, 32.0);
+        for fixed in [true, false] {
+            let mut budget = Budget {
+                fixed_image_sampling: fixed,
+                ..Default::default()
+            };
+            budget
+                .raster(&raster, &mut std::collections::HashSet::new())
+                .unwrap();
+            let mut scene = anyrender::Scene::new();
+            paint(
+                &mut scene,
+                &raster,
+                Affine::scale(1.0 / 64.0),
+                destination,
+                &mut budget,
+            )
+            .unwrap();
+            assert!(!scene.commands.is_empty());
+        }
+    }
+
+    #[test]
     fn repeated_cache_resizes_share_one_cumulative_pixel_and_work_budget() {
         let raster = RasterImageData::new(16, 16, Arc::new([0, 255, 0, 255].repeat(16 * 16)));
         let source = Rect::new(0.0, 0.0, 16.0, 16.0);
         let destination = Rect::new(0.0, 0.0, 5.0, 5.0);
         for (fixed, pixels, work, error) in [
             (true, 1000, 1_000_000, GraphError::Memory),
-            (true, 5000, 20_000, GraphError::Work),
-            (false, 5000, 25_000, GraphError::Work),
+            (true, 5000, 14_000, GraphError::Work),
+            (false, 5000, 15_000, GraphError::Work),
         ] {
             let mut budget = Budget {
                 fixed_image_sampling: fixed,

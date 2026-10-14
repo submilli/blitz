@@ -3579,7 +3579,7 @@ dependencies = [
 [[package]]
 name = "glifo"
 version = "0.2.0"
-source = "git+https://github.com/submilli/vello?rev=b6b2d243c3caa31384b3b3f1f7069bc4af667905#b6b2d243c3caa31384b3b3f1f7069bc4af667905"
+source = "git+https://github.com/submilli/vello?rev=dcdef0f6731130ef8c9f88cc063ae3da46bc9512#dcdef0f6731130ef8c9f88cc063ae3da46bc9512"
 dependencies = [
  "bytemuck",
  "foldhash 0.2.0",
@@ -8833,7 +8833,7 @@ dependencies = [
 [[package]]
 name = "vello_common"
 version = "0.1.0"
-source = "git+https://github.com/submilli/vello?rev=b6b2d243c3caa31384b3b3f1f7069bc4af667905#b6b2d243c3caa31384b3b3f1f7069bc4af667905"
+source = "git+https://github.com/submilli/vello?rev=dcdef0f6731130ef8c9f88cc063ae3da46bc9512#dcdef0f6731130ef8c9f88cc063ae3da46bc9512"
 dependencies = [
  "bytemuck",
  "fearless_simd",
@@ -8848,7 +8848,7 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.1.0"
-source = "git+https://github.com/submilli/vello?rev=b6b2d243c3caa31384b3b3f1f7069bc4af667905#b6b2d243c3caa31384b3b3f1f7069bc4af667905"
+source = "git+https://github.com/submilli/vello?rev=dcdef0f6731130ef8c9f88cc063ae3da46bc9512#dcdef0f6731130ef8c9f88cc063ae3da46bc9512"
 dependencies = [
  "bytemuck",
  "crossbeam-channel",
