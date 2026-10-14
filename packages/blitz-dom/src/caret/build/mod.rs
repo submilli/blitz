@@ -134,11 +134,11 @@ struct Builder<'a> {
 impl Builder<'_> {
     /// An inside list marker precedes the root's content in its layout.
     fn marker(&mut self, root: NodeId) {
-        let Some(text) = inside_marker(self.doc, root) else {
+        let Some(marker) = inside_marker(self.doc, root) else {
             return;
         };
         let style = TextStyle::of(None);
-        for ch in text.chars() {
+        for ch in marker.text.chars() {
             self.align(ch, style);
         }
     }

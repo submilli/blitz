@@ -106,15 +106,20 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// An inside list marker precedes the root's content in its layout.
+    /// An inside list marker precedes the root's content in its layout. A
+    /// symbol marker's space is its end margin: like the space between
+    /// items, it is no item's, so a point over it is nearest the symbol or
+    /// the content after it.
     fn marker(&mut self, root: NodeId) {
-        let Some(text) = inside_marker(self.doc, root) else {
+        let Some(marker) = inside_marker(self.doc, root) else {
             return;
         };
         let style = TextStyle::of(None);
         let start = self.mapping.text.len();
-        for ch in text.chars() {
-            if let Some(range) = self.aligner.char(ch, style) {
+        let content = marker.text.chars().count() - usize::from(marker.margin);
+        for (index, ch) in marker.text.chars().enumerate() {
+            let range = self.aligner.char(ch, style);
+            if let Some(range) = range.filter(|_| index < content) {
                 self.push_content(
                     ch,
                     range.start,

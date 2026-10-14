@@ -3,6 +3,7 @@
 //! characters with laid-out text.
 
 use crate::layout::construct::{InlineElement, inline_element};
+use crate::layout::list::is_symbol_marker;
 use crate::node::{ListItemLayoutPosition, Marker, NodeData};
 use crate::{BaseDocument, NodeId};
 use style::values::computed::Display;
@@ -79,16 +80,33 @@ pub(super) fn children_for_stack(
         .chain(pseudo(node.before()))
 }
 
-/// The text of an inside list marker, which precedes the root's content in
-/// its layout.
-pub(super) fn inside_marker(doc: &BaseDocument, root: NodeId) -> Option<String> {
-    let item = doc.nodes[root].element_data()?.list_item_data.as_deref()?;
+/// An inside list marker, which precedes the root's content in its layout.
+pub(super) struct InsideMarker {
+    /// The marker's laid-out text.
+    pub(super) text: String,
+    /// The text is a symbol and a space standing for the end margin of
+    /// Chrome's symbol marker (see `layout::list::inside_char_marker_style`),
+    /// which is not marker content.
+    pub(super) margin: bool,
+}
+
+pub(super) fn inside_marker(doc: &BaseDocument, root: NodeId) -> Option<InsideMarker> {
+    let node = &doc.nodes[root];
+    let item = node.element_data()?.list_item_data.as_deref()?;
     if !matches!(item.position, ListItemLayoutPosition::Inside) {
         return None;
     }
     Some(match &item.marker {
-        Marker::Char(ch) => format!("{ch} "),
-        Marker::String(text) => text.clone(),
+        Marker::Char(ch) => InsideMarker {
+            text: format!("{ch} "),
+            margin: node
+                .primary_styles()
+                .is_some_and(|style| is_symbol_marker(&style)),
+        },
+        Marker::String(text) => InsideMarker {
+            text: text.clone(),
+            margin: false,
+        },
     })
 }
 

@@ -37,7 +37,7 @@ use crate::{
 use super::{
     box_depth::{clear_omitted_layout, omit_subtree_boxes, past_box_depth},
     damage::ALL_DAMAGE,
-    list::{BULLET_FONT_FAMILY, collect_list_item_children},
+    list::{collect_list_item_children, inside_char_marker_style},
     replaced::is_replaced_element,
     table::build_table_context,
 };
@@ -1301,6 +1301,14 @@ fn release_own_box(node: &mut Node, stale_anonymous_blocks: &mut Vec<NodeId>) {
     stale_anonymous_blocks.extend(std::mem::take(&mut node.anonymous_blocks));
 }
 
+/// An inside list marker, laid out before the item's content.
+enum InsideMarker<'a> {
+    /// A character and a space, in their own style.
+    Char(char, Box<parley::TextStyle<'static, 'static, TextBrush>>),
+    /// Text in the item's style.
+    Text(&'a str),
+}
+
 pub(crate) fn build_inline_layout_into(
     nodes: &crate::NodeTree,
     layout_ctx: &mut LayoutContext<TextBrush>,
@@ -1347,6 +1355,32 @@ pub(crate) fn build_inline_layout_into(
         );
     }
 
+    // An inside list marker is the first content of the item's layout.
+    let inside_marker = match root_node
+        .element_data()
+        .and_then(|el| el.list_item_data.as_deref())
+    {
+        Some(ListItemLayout {
+            marker: Marker::Char(symbol),
+            position: ListItemLayoutPosition::Inside,
+        }) => Some(InsideMarker::Char(
+            *symbol,
+            Box::new(inside_char_marker_style(
+                layout_ctx,
+                font_ctx,
+                root_node_style.as_deref().map(|style| &**style),
+                &parley_style,
+                *symbol,
+                scale,
+            )),
+        )),
+        Some(ListItemLayout {
+            marker: Marker::String(text),
+            position: ListItemLayoutPosition::Inside,
+        }) => Some(InsideMarker::Text(text)),
+        _ => None,
+    };
+
     // Create a parley tree builder
     let mut builder = layout_ctx.tree_builder(font_ctx, scale, true, &parley_style);
     if let Some(style) = root_node_style.as_deref() {
@@ -1361,29 +1395,15 @@ pub(crate) fn build_inline_layout_into(
         .map(|s| s.clone_text_transform() & TextTransform::CASE_TRANSFORMS)
         .unwrap_or(TextTransform::NONE);
 
-    // Render position-inside list items
-    if let Some(ListItemLayout {
-        marker,
-        position: ListItemLayoutPosition::Inside,
-    }) = root_node
-        .element_data()
-        .and_then(|el| el.list_item_data.as_deref())
-    {
-        match marker {
-            // Bullet glyphs live in the bundled bullet font. The position-outside
-            // path already asks for it; without the same span here a marker like
-            // disclosure-closed (U+25B8) falls back to the element's own font and
-            // renders as a missing glyph.
-            Marker::Char(char) => {
-                let mut marker_style = parley_style.clone();
-                marker_style.font_family = BULLET_FONT_FAMILY.into();
-                builder.push_style_span(marker_style);
-                builder.push_text(&format!("{char} "));
-                builder.pop_style_span();
-            }
-            Marker::String(str) => builder.push_text(str),
+    match inside_marker {
+        Some(InsideMarker::Char(symbol, style)) => {
+            builder.push_style_span(*style);
+            builder.push_text(&format!("{symbol} "));
+            builder.pop_style_span();
         }
-    };
+        Some(InsideMarker::Text(text)) => builder.push_text(text),
+        None => {}
+    }
 
     if let Some(before_id) = root_node.before() {
         build_inline_layout_recursive(

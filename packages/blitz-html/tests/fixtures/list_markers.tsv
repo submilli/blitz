@@ -1,0 +1,131 @@
+# Inside list markers, measured in Chrome 155 (macOS): key, HTML, and the first
+# client rect of #s relative to the item #t's border box (x,y, rounded to 0.01px).
+# Probes: submilli-browser docs/reconstruction/probes/SUB-1580 (cases/geometry.tsv).
+disc@0	<ul style='font:0px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	-1,0
+circle@0	<ul style='font:0px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	-1,0
+square@0	<ul style='font:0px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	-1,0
+decimal@0	<ul style='font:0px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+lower-alpha@0	<ul style='font:0px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+upper-alpha@0	<ul style='font:0px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+"\bb"@0	<ul style='font:0px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+"ab "@0	<ul style='font:0px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+none@0	<ul style='font:0px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@0	<ul style='font:0px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-closed@0	<ul style='font:0px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+upper-roman@0	<ul style='font:0px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disc@7	<ul style='font:7px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	10,0
+circle@7	<ul style='font:7px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	10,0
+square@7	<ul style='font:7px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	10,0
+decimal@7	<ul style='font:7px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	7.8,0
+lower-alpha@7	<ul style='font:7px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	7.8,0
+upper-alpha@7	<ul style='font:7px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	8.56,0
+"\bb"@7	<ul style='font:7px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	3.91,0
+"ab "@7	<ul style='font:7px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	9.73,0
+none@7	<ul style='font:7px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@7	<ul style='font:7px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	7.41,0
+disclosure-closed@7	<ul style='font:7px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	7.41,0
+upper-roman@7	<ul style='font:7px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	5.84,0
+disc@10	<ul style='font:10px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	14,0
+circle@10	<ul style='font:10px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	14,0
+square@10	<ul style='font:10px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	14,0
+decimal@10	<ul style='font:10px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	11.13,0
+lower-alpha@10	<ul style='font:10px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	11.13,0
+upper-alpha@10	<ul style='font:10px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	12.23,0
+"\bb"@10	<ul style='font:10px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	5.56,0
+"ab "@10	<ul style='font:10px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	13.91,0
+none@10	<ul style='font:10px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@10	<ul style='font:10px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	10.59,0
+disclosure-closed@10	<ul style='font:10px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	10.59,0
+upper-roman@10	<ul style='font:10px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	8.34,0
+disc@13	<ul style='font:13px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	18,0
+circle@13	<ul style='font:13px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	18,0
+square@13	<ul style='font:13px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	18,0
+decimal@13	<ul style='font:13px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	14.47,0
+lower-alpha@13	<ul style='font:13px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	14.47,0
+upper-alpha@13	<ul style='font:13px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	15.91,0
+"\bb"@13	<ul style='font:13px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	7.23,0
+"ab "@13	<ul style='font:13px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	18.08,0
+none@13	<ul style='font:13px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@13	<ul style='font:13px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	13.77,0
+disclosure-closed@13	<ul style='font:13px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	13.77,0
+upper-roman@13	<ul style='font:13px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	10.84,0
+disc@13.3	<ul style='font:13.3px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	18.3,0
+circle@13.3	<ul style='font:13.3px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	18.3,0
+square@13.3	<ul style='font:13.3px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	18.3,0
+decimal@13.3	<ul style='font:13.3px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	14.8,0
+lower-alpha@13.3	<ul style='font:13.3px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	14.8,0
+upper-alpha@13.3	<ul style='font:13.3px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	16.27,0
+"\bb"@13.3	<ul style='font:13.3px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	7.41,0
+"ab "@13.3	<ul style='font:13.3px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	18.5,0
+none@13.3	<ul style='font:13.3px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@13.3	<ul style='font:13.3px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	14.08,0
+disclosure-closed@13.3	<ul style='font:13.3px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	14.08,0
+upper-roman@13.3	<ul style='font:13.3px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	11.09,0
+disc@16	<ul style='font:16px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	22,0
+circle@16	<ul style='font:16px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	22,0
+square@16	<ul style='font:16px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	22,0
+decimal@16	<ul style='font:16px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	17.8,0
+lower-alpha@16	<ul style='font:16px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	17.8,0
+upper-alpha@16	<ul style='font:16px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	19.56,0
+"\bb"@16	<ul style='font:16px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	8.91,0
+"ab "@16	<ul style='font:16px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	22.25,0
+none@16	<ul style='font:16px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@16	<ul style='font:16px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	16.94,0
+disclosure-closed@16	<ul style='font:16px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	16.94,0
+upper-roman@16	<ul style='font:16px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	13.34,0
+disc@20	<ul style='font:20px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	27,0
+circle@20	<ul style='font:20px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	27,0
+square@20	<ul style='font:20px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	27,0
+decimal@20	<ul style='font:20px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	22.25,0
+lower-alpha@20	<ul style='font:20px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	22.25,0
+upper-alpha@20	<ul style='font:20px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	24.45,0
+"\bb"@20	<ul style='font:20px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	11.13,0
+"ab "@20	<ul style='font:20px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	27.81,0
+none@20	<ul style='font:20px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@20	<ul style='font:20px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	21.19,0
+disclosure-closed@20	<ul style='font:20px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	21.19,0
+upper-roman@20	<ul style='font:20px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	16.67,0
+disc@32	<ul style='font:32px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	43,0
+circle@32	<ul style='font:32px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	43,0
+square@32	<ul style='font:32px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	43,0
+decimal@32	<ul style='font:32px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	35.58,0
+lower-alpha@32	<ul style='font:32px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	35.58,0
+upper-alpha@32	<ul style='font:32px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	39.13,0
+"\bb"@32	<ul style='font:32px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	17.8,0
+"ab "@32	<ul style='font:32px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	44.48,0
+none@32	<ul style='font:32px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,0
+disclosure-open@32	<ul style='font:32px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	33.91,0
+disclosure-closed@32	<ul style='font:32px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	33.91,0
+upper-roman@32	<ul style='font:32px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	26.67,0
+disc@50	<ul style='font:50px Arial;list-style:inside disc'><li id=t><span id=s>abc</span> def</li></ul>	66,1
+circle@50	<ul style='font:50px Arial;list-style:inside circle'><li id=t><span id=s>abc</span> def</li></ul>	66,1
+square@50	<ul style='font:50px Arial;list-style:inside square'><li id=t><span id=s>abc</span> def</li></ul>	66,1
+decimal@50	<ul style='font:50px Arial;list-style:inside decimal'><li id=t><span id=s>abc</span> def</li></ul>	55.59,1
+lower-alpha@50	<ul style='font:50px Arial;list-style:inside lower-alpha'><li id=t><span id=s>abc</span> def</li></ul>	55.59,1
+upper-alpha@50	<ul style='font:50px Arial;list-style:inside upper-alpha'><li id=t><span id=s>abc</span> def</li></ul>	61.14,1
+"\bb"@50	<ul style='font:50px Arial;list-style:inside "\bb"'><li id=t><span id=s>abc</span> def</li></ul>	27.81,1
+"ab "@50	<ul style='font:50px Arial;list-style:inside "ab "'><li id=t><span id=s>abc</span> def</li></ul>	69.52,1
+none@50	<ul style='font:50px Arial;list-style:inside none'><li id=t><span id=s>abc</span> def</li></ul>	0,1
+disclosure-open@50	<ul style='font:50px Arial;list-style:inside disclosure-open'><li id=t><span id=s>abc</span> def</li></ul>	53,1
+disclosure-closed@50	<ul style='font:50px Arial;list-style:inside disclosure-closed'><li id=t><span id=s>abc</span> def</li></ul>	53,1
+upper-roman@50	<ul style='font:50px Arial;list-style:inside upper-roman'><li id=t><span id=s>abc</span> def</li></ul>	41.69,1
+narrow	<ul style='font:16px Arial;list-style-position:inside;width:20px'><li id=t><span id=s>abcdefgh</span></li></ul>	0,18
+narrow2	<ul style='font:16px Arial;list-style-position:inside;width:30px;padding:0'><li id=t><span id=s>ab</span> cd</li></ul>	0,18
+narrowdec	<ul style='font:16px Arial;list-style-position:inside;width:20px;list-style-type:decimal'><li id=t><span id=s>abcdefgh</span></li></ul>	0,18
+rtl	<ul style='font:16px Arial;list-style-position:inside;padding:0;width:300px' dir='rtl'><li id=t><span id=s>abc</span></li></ul>	252.2,0
+rtl32	<ul style='font:16px Arial;list-style-position:inside;padding:0;width:300px;font-size:32px' dir='rtl'><li id=t><span id=s>abc</span></li></ul>	205.41,0
+center	<ul style='font:16px Arial;list-style-position:inside;text-align:center;width:200px;padding:0'><li id=t><span id=s>abc</span></li></ul>	98.09,0
+right	<ul style='font:16px Arial;list-style-position:inside;text-align:right;width:200px;padding:0'><li id=t><span id=s>abc</span></li></ul>	174.2,0
+space	<ul style='font:16px Arial;list-style-position:inside;'><li id=t> <span id=s>abc</span></li></ul>	22,0
+pre	<ul style='font:16px Arial;list-style-position:inside;white-space:pre'><li id=t> <span id=s>abc</span></li></ul>	26.45,0
+bold	<ul style='font:16px Arial;list-style-position:inside;font-weight:bold'><li id=t><span id=s>abc</span></li></ul>	22,0
+ls	<ul style='font:16px Arial;list-style-position:inside;letter-spacing:5px'><li id=t><span id=s>abc</span></li></ul>	22,0
+ws	<ul style='font:16px Arial;list-style-position:inside;word-spacing:9px'><li id=t><span id=s>abc</span></li></ul>	22,0
+lsdec	<ul style='font:16px Arial;list-style-position:inside;letter-spacing:5px;list-style-type:decimal'><li id=t><span id=s>abc</span></li></ul>	32.8,0
+wsdec	<ul style='font:16px Arial;list-style-position:inside;word-spacing:9px;list-style-type:decimal'><li id=t><span id=s>abc</span></li></ul>	26.8,0
+indent	<ul style='font:16px Arial;list-style-position:inside;text-indent:10px'><li id=t><span id=s>abc</span></li></ul>	32,0
+lh	<ul style='font:16px Arial;list-style-position:inside;line-height:40px'><li id=t><span id=s>abc</span></li></ul>	22,11
+transform	<ul style='font:16px Arial;list-style-position:inside;text-transform:uppercase'><li id=t><span id=s>abc</span></li></ul>	22,0
+block	<ul style='font:16px Arial;list-style-position:inside;'><li id=t><p style='margin:0'><span id=s>abc</span></p></li></ul>	0,18
+second	<ul style='font:16px Arial;list-style-position:inside'><li>first</li><li id=t><span id=s>second</span></li></ul>	22,0
+ol	<ol style='font:16px Arial;list-style-position:inside' start=9><li>a</li><li id=t><span id=s>b</span></li></ol>	26.69,0
