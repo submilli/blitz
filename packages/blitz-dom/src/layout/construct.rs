@@ -32,7 +32,7 @@ use crate::{
 };
 
 use super::{
-    box_depth::{clear_omitted_layout, omit_subtree_boxes, past_box_depth},
+    box_depth::{clear_omitted_layout, omit_subtree_boxes, past_box_depth, release_flattened_box},
     damage::ALL_DAMAGE,
     list::{MarkerContent, collect_list_item_children, inside_marker_content},
     replaced::is_replaced_element,
@@ -44,6 +44,7 @@ const DUMMY_NAME: QualName = qual_name!("div", html);
 #[derive(Clone)]
 pub(crate) struct ConstructionTask {
     pub(crate) node_id: NodeId,
+    pub(crate) depth: usize,
     pub(crate) data: ConstructionTaskData,
 }
 
@@ -551,13 +552,13 @@ pub(crate) fn collect_layout_children(
     doc: &mut BaseDocument,
     container_node_id: NodeId,
     out: &mut LayoutChildren,
+    depth: usize,
 ) {
-    collect_layout_children_with_wrap(doc, container_node_id, out, None, 0)
+    collect_layout_children_with_wrap(doc, container_node_id, out, None, depth)
 }
 
-/// Hoist the children of `contents_id`, a `display: contents` element
-/// `depth` levels below the box being constructed, unless that is past
-/// the box depth limit (`box_depth`).
+/// Hoist the children of `contents_id`, a `display: contents` element, at
+/// its active box depth unless that is past the box depth limit.
 fn collect_contents_children(
     doc: &mut BaseDocument,
     contents_id: NodeId,
@@ -572,8 +573,8 @@ fn collect_contents_children(
     collect_layout_children_with_wrap(doc, contents_id, out, wrap, depth);
 }
 
-/// `depth`: how many `display: contents` levels `container_node_id` sits
-/// below the box being constructed.
+/// `depth`: the box depth of `container_node_id`, including any
+/// `display: contents` levels traversed while collecting its children.
 fn collect_layout_children_with_wrap(
     doc: &mut BaseDocument,
     container_node_id: NodeId,
@@ -756,7 +757,32 @@ fn collect_layout_children_with_wrap(
         }
 
         DisplayInside::Table => {
-            let (table_context, tlayout_children) = build_table_context(doc, container_node_id);
+            // Generated content participates in the table grid. Hoist through
+            // display:contents and wrap text before collecting cells so the
+            // specialized table tree can size and paint those boxes too.
+            if let Some(before) = doc.nodes[container_node_id].before() {
+                let wrap = Some(WrapContext {
+                    container_node_id: before,
+                    needs_wrap: text_item_needs_wrap,
+                });
+                push_hoisted_child(doc, before, out, wrap, depth + 1);
+            }
+            let leading_items = out.children.clone();
+            let mut trailing = LayoutChildren::default();
+            if let Some(after) = doc.nodes[container_node_id].after() {
+                let wrap = Some(WrapContext {
+                    container_node_id: after,
+                    needs_wrap: text_item_needs_wrap,
+                });
+                push_hoisted_child(doc, after, &mut trailing, wrap, depth + 1);
+            }
+            let (table_context, tlayout_children) = build_table_context(
+                doc,
+                container_node_id,
+                &leading_items,
+                &trailing.children,
+                depth,
+            );
             #[allow(clippy::arc_with_non_send_sync)]
             let data = SpecialElementData::TableRoot(Arc::new(table_context));
             doc.nodes[container_node_id]
@@ -767,13 +793,10 @@ fn collect_layout_children_with_wrap(
                 .downcast_element_mut()
                 .unwrap()
                 .special_data = data;
-            if let Some(before) = doc.nodes[container_node_id].before() {
-                out.push(before, doc);
-            }
+            out.children.clear();
+            out.anonymous_block_id = None;
             out.extend(&tlayout_children, doc);
-            if let Some(after) = doc.nodes[container_node_id].after() {
-                out.push(after, doc);
-            }
+            out.anonymous_blocks.extend(trailing.anonymous_blocks);
         }
 
         // Flow, FlowRoot and TableCell, plus internal table displays (row,
@@ -809,13 +832,14 @@ fn collect_layout_children_with_wrap(
                 // dedicated phase allows us to multithread the expensive text shaping step.
                 doc.deferred_construction_nodes.push(ConstructionTask {
                     node_id: container_node_id,
+                    depth,
                     data: ConstructionTaskData::InlineLayout(layout),
                 });
                 doc.nodes[container_node_id]
                     .flags
                     .insert(NodeFlags::IS_INLINE_ROOT);
 
-                find_inline_layout_embedded_boxes(doc, container_node_id, &mut out.children);
+                find_inline_layout_embedded_boxes(doc, container_node_id, &mut out.children, depth);
                 return;
             }
 
@@ -1160,8 +1184,9 @@ pub(crate) fn find_inline_layout_embedded_boxes(
     doc: &mut BaseDocument,
     inline_context_root_node_id: NodeId,
     layout_children: &mut ThinVec<NodeId>,
+    depth: usize,
 ) {
-    flush_inline_pseudos_recursive(doc, inline_context_root_node_id, 0);
+    flush_inline_pseudos_recursive(doc, inline_context_root_node_id, depth);
 
     let mut stale_anonymous_blocks = Vec::new();
     iter_children_and_pseudos!(doc.nodes[inline_context_root_node_id], |child_id| {
@@ -1171,14 +1196,14 @@ pub(crate) fn find_inline_layout_embedded_boxes(
             child_id,
             layout_children,
             &mut stale_anonymous_blocks,
-            1,
+            depth + 1,
         );
     });
     for anonymous_block in stale_anonymous_blocks {
         doc.deallocate_anonymous_block(anonymous_block);
     }
 
-    /// `depth`: how many levels `node_id` sits below the inline root.
+    /// `depth`: the active box depth of `node_id`.
     fn flush_inline_pseudos_recursive(doc: &mut BaseDocument, node_id: NodeId, depth: usize) {
         if past_box_depth(depth + 1) {
             return;
@@ -1199,7 +1224,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
         });
     }
 
-    /// `depth`: how many levels `node_id` sits below the inline root.
+    /// `depth`: the active box depth of `node_id`.
     fn find_inline_layout_embedded_boxes_recursive(
         nodes: &mut crate::NodeTree,
         parent_id: NodeId,
@@ -1232,7 +1257,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                     }
                     (DisplayOutside::None, DisplayInside::Contents) => {
                         node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                        release_own_box(node, stale_anonymous_blocks);
+                        release_flattened_box(node, stale_anonymous_blocks);
                         iter_children_and_pseudos!(nodes[node_id], |child_id| {
                             find_inline_layout_embedded_boxes_recursive(
                                 nodes,
@@ -1253,7 +1278,7 @@ pub(crate) fn find_inline_layout_embedded_boxes(
                         }
                         InlineElement::Span | InlineElement::Hidden => {
                             node.remove_damage(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
-                            release_own_box(node, stale_anonymous_blocks);
+                            release_flattened_box(node, stale_anonymous_blocks);
                             iter_children_and_pseudos!(nodes[node_id], |child_id| {
                                 find_inline_layout_embedded_boxes_recursive(
                                     nodes,
@@ -1284,20 +1309,6 @@ pub(crate) fn find_inline_layout_embedded_boxes(
     }
 }
 
-/// A box flattened into its inline root's layout (a span, or a `display:
-/// contents` element) has no formatting context, layout children or
-/// anonymous blocks of its own, even if a `display` change left it some from
-/// a time it was a block, flex or grid container. Its old anonymous blocks
-/// are handed back to be freed.
-fn release_own_box(node: &mut Node, stale_anonymous_blocks: &mut Vec<NodeId>) {
-    node.flags.reset_construction_flags();
-    if let Some(element) = node.element_data_mut() {
-        element.take_inline_layout();
-    }
-    *node.layout_children.get_mut() = None;
-    stale_anonymous_blocks.extend(std::mem::take(&mut node.anonymous_blocks));
-}
-
 pub(crate) fn build_inline_layout_into(
     nodes: &crate::NodeTree,
     layout_ctx: &mut LayoutContext<TextBrush>,
@@ -1305,6 +1316,7 @@ pub(crate) fn build_inline_layout_into(
     text_layout: &mut TextLayout,
     scale: f32,
     inline_context_root_node_id: NodeId,
+    depth: usize,
 ) {
     // Get the inline context's root node's text styles
     let root_node = &nodes[inline_context_root_node_id];
@@ -1340,7 +1352,7 @@ pub(crate) fn build_inline_layout_into(
             root_line_height,
             scale,
             &mut span_line_heights,
-            1,
+            depth + 1,
         );
     }
 
@@ -1387,7 +1399,7 @@ pub(crate) fn build_inline_layout_into(
             before_id,
             text_transform,
             &span_line_heights,
-            1,
+            depth + 1,
         );
     }
     for child_id in root_node.flat_children().iter().copied() {
@@ -1398,7 +1410,7 @@ pub(crate) fn build_inline_layout_into(
             child_id,
             text_transform,
             &span_line_heights,
-            1,
+            depth + 1,
         );
     }
     if let Some(after_id) = root_node.after() {
@@ -1409,14 +1421,14 @@ pub(crate) fn build_inline_layout_into(
             after_id,
             text_transform,
             &span_line_heights,
-            1,
+            depth + 1,
         );
     }
 
     text_layout.text = builder.build_into(&mut text_layout.layout);
     return;
 
-    /// `depth`: how many levels `node_id` sits below the inline root.
+    /// `depth`: the active box depth of `node_id`.
     fn build_inline_layout_recursive(
         builder: &mut TreeBuilder<TextBrush>,
         nodes: &crate::NodeTree,

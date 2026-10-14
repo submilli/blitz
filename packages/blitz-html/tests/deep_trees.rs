@@ -187,3 +187,173 @@ fn an_inline_block_omitted_in_deep_inline_content_returns_when_moved_up() {
         assert!(has_size(&doc, inline_block));
     });
 }
+
+#[test]
+fn table_collection_stops_at_the_depth_limit_and_rebuilds_moved_cells() {
+    on_stack(GUEST_STACK, || {
+        for display in [
+            "contents",
+            "table-row-group",
+            "table-row",
+            "table-column-group",
+        ] {
+            let mut doc = page();
+            let table = doc.mutate().create_element(
+                QualName::new(None, ns!(html), local_name!("div")),
+                vec![Attribute {
+                    name: QualName::new(None, ns!(), local_name!("style")),
+                    value: "display:table".into(),
+                }],
+            );
+            let body = q(&doc, "body");
+            doc.mutate().append_children(body, &[table]);
+            let chain = nest(
+                &mut doc,
+                table,
+                "div",
+                Some(&format!("display:{display}")),
+                PAST_THE_CAP,
+            );
+            let cell = doc.mutate().create_element(
+                QualName::new(None, ns!(html), local_name!("div")),
+                vec![Attribute {
+                    name: QualName::new(None, ns!(), local_name!("style")),
+                    value: "display:table-cell;width:40px;height:20px".into(),
+                }],
+            );
+            doc.mutate()
+                .append_children(*chain.last().unwrap(), &[cell]);
+            doc.resolve(0.0);
+            assert!(!has_size(&doc, cell), "{display}");
+            assert!(
+                doc.get_node(*chain.last().unwrap())
+                    .unwrap()
+                    .flags
+                    .contains(blitz_dom::node::NodeFlags::HAS_OMITTED_BOXES),
+                "{display}"
+            );
+            doc.mutate().append_children(table, &[cell]);
+            doc.resolve(0.0);
+            let size = doc.get_node(cell).unwrap().final_layout().size;
+            assert_eq!((size.width, size.height), (40.0, 20.0), "{display}");
+        }
+
+        let mut doc = page();
+        let table = doc.mutate().create_element(
+            QualName::new(None, ns!(html), local_name!("div")),
+            vec![Attribute {
+                name: QualName::new(None, ns!(), local_name!("style")),
+                value: "display:table".into(),
+            }],
+        );
+        let row_group = doc.mutate().create_element(
+            QualName::new(None, ns!(html), local_name!("div")),
+            vec![Attribute {
+                name: QualName::new(None, ns!(), local_name!("style")),
+                value: "display:table-row-group".into(),
+            }],
+        );
+        let body = q(&doc, "body");
+        doc.mutate().append_children(body, &[table]);
+        doc.mutate().append_children(table, &[row_group]);
+        let chain = nest(
+            &mut doc,
+            row_group,
+            "div",
+            Some("display:contents"),
+            PAST_THE_CAP,
+        );
+        let cell = doc.mutate().create_element(
+            QualName::new(None, ns!(html), local_name!("div")),
+            vec![Attribute {
+                name: QualName::new(None, ns!(), local_name!("style")),
+                value: "display:table-cell;width:40px;height:20px".into(),
+            }],
+        );
+        doc.mutate()
+            .append_children(*chain.last().unwrap(), &[cell]);
+        doc.resolve(0.0);
+        assert!(!has_size(&doc, cell), "contents below a row group");
+
+        doc.mutate().append_children(table, &[cell]);
+        doc.resolve(0.0);
+        let size = doc.get_node(cell).unwrap().final_layout().size;
+        assert_eq!((size.width, size.height), (40.0, 20.0));
+    });
+}
+
+#[test]
+fn table_collection_shares_the_outer_box_depth_budget() {
+    // Debug frames are substantially larger than Wasm frames. The browser-host
+    // component regression runs this same shape on the guest's 8 MiB stack.
+    on_stack(BOX_DEPTH_STACK, || {
+        for display in [
+            "contents",
+            "table-row-group",
+            "table-row",
+            "table-column-group",
+        ] {
+            let mut doc = page();
+            let body = q(&doc, "body");
+            let outer = nest(&mut doc, body, "div", None, 900);
+            let table = doc.mutate().create_element(
+                QualName::new(None, ns!(html), local_name!("div")),
+                vec![Attribute {
+                    name: QualName::new(None, ns!(), local_name!("style")),
+                    value: "display:table".into(),
+                }],
+            );
+            doc.mutate()
+                .append_children(*outer.last().unwrap(), &[table]);
+            let inner = nest(
+                &mut doc,
+                table,
+                "div",
+                Some(&format!("display:{display}")),
+                300,
+            );
+            let cell = doc.mutate().create_element(
+                QualName::new(None, ns!(html), local_name!("div")),
+                vec![Attribute {
+                    name: QualName::new(None, ns!(), local_name!("style")),
+                    value: "display:table-cell;width:40px;height:20px".into(),
+                }],
+            );
+            doc.mutate()
+                .append_children(*inner.last().unwrap(), &[cell]);
+            doc.resolve(0.0);
+            assert!(!has_size(&doc, cell), "{display}");
+
+            doc.mutate().append_children(table, &[cell]);
+            doc.resolve(0.0);
+            let size = doc.get_node(cell).unwrap().final_layout().size;
+            assert_eq!((size.width, size.height), (40.0, 20.0), "{display}");
+        }
+    });
+}
+
+#[test]
+fn inline_collection_shares_the_outer_box_depth_budget() {
+    on_stack(BOX_DEPTH_STACK, || {
+        for style in [None, Some("display:contents")] {
+            let mut doc = page();
+            let body = q(&doc, "body");
+            let outer = nest(&mut doc, body, "div", None, 900);
+            let inner = nest(&mut doc, *outer.last().unwrap(), "span", style, 300);
+            let inline_block = nest(
+                &mut doc,
+                *inner.last().unwrap(),
+                "span",
+                Some("display:inline-block;width:40px;height:20px"),
+                1,
+            )[0];
+            doc.resolve(0.0);
+            assert!(!has_size(&doc, inline_block), "{style:?}");
+
+            doc.mutate().append_children(body, &[inner[0]]);
+            doc.resolve(0.0);
+            let size = doc.get_node(inline_block).unwrap().final_layout().size;
+            assert_eq!((size.width, size.height), (40.0, 20.0), "{style:?}");
+        }
+    });
+}

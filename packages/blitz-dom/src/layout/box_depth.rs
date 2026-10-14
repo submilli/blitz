@@ -112,6 +112,25 @@ pub(super) fn clear_omitted_layout(nodes: &mut crate::NodeTree, root: NodeId) {
     for_each_in_subtree(nodes, root, clear_layout);
 }
 
+/// Remove box state from a node flattened into another formatting context.
+pub(super) fn release_flattened_box(node: &mut Node, stale_anonymous_blocks: &mut Vec<NodeId>) {
+    node.flags.reset_construction_flags();
+    if let Some(element) = node.element_data_mut() {
+        element.take_inline_layout();
+    }
+    *node.layout_children.get_mut() = None;
+    stale_anonymous_blocks.extend(std::mem::take(&mut node.anonymous_blocks));
+}
+
+/// Remove flattened box state and reclaim its anonymous wrappers atomically.
+pub(super) fn release_flattened_box_from_document(doc: &mut BaseDocument, node_id: NodeId) {
+    let mut stale_anonymous_blocks = Vec::new();
+    release_flattened_box(&mut doc.nodes[node_id], &mut stale_anonymous_blocks);
+    for id in stale_anonymous_blocks {
+        doc.deallocate_anonymous_block(id);
+    }
+}
+
 fn clear_layout(node: &mut Node) {
     node.layout_parent.set(None);
     node.oof_containing_block.set(None);

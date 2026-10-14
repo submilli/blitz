@@ -163,6 +163,7 @@ fn deferred_inline_layout_keeps_brush_and_box_nodes_until_drained() {
     text.text = builder.build_into(&mut text.layout);
     doc.deferred_construction_nodes.push(ConstructionTask {
         node_id: root,
+        depth: 0,
         data: ConstructionTaskData::InlineLayout(Box::new(text)),
     });
     let retained = doc.node_reachability().retained_nodes(&[]);

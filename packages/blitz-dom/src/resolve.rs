@@ -301,7 +301,7 @@ impl BaseDocument {
                 }
 
                 let mut collected = LayoutChildren::default();
-                collect_layout_children(doc, node_id, &mut collected);
+                collect_layout_children(doc, node_id, &mut collected, depth);
                 let layout_children = collected.children;
                 doc.nodes[node_id].anonymous_blocks = collected.anonymous_blocks;
 
@@ -422,6 +422,7 @@ impl BaseDocument {
                         &mut layout,
                         self.viewport.scale(),
                         task.node_id,
+                        task.depth,
                     );
 
                     #[cfg(feature = "parallel-construct")]
