@@ -28,7 +28,7 @@ members = [
     "examples/wgpu_texture",
     "examples/wasm_hello",
 ]
-exclude = ["sites", "packages/stylo", "packages/xml5ever", "packages/html5ever"]
+exclude = ["packages/usvg", "sites", "packages/stylo", "packages/xml5ever", "packages/html5ever"]
 resolver = "2"
 
 [workspace.package]
@@ -131,7 +131,7 @@ linebender_resource_handle = "0.1"
 peniko = "0.6.0"
 kurbo = "0.13.1"
 wgpu = "29"
-usvg = "0.48.1"
+usvg = { version = "0.48.1", path = "packages/usvg" }
 svgtypes = "0.16.1" # Should match usvg's version
 
 # Windowing & Input
@@ -321,3 +321,10 @@ rustc-hash = { workspace = true }
 # [patch."https://github.com/submilli/parley"]
 # parley = { path = "../parley/parley" }
 # fontique = { path = "../parley/fontique" }
+
+# SVG image filters use the bounded graph executor and cumulative admission API.
+[patch.crates-io]
+vello_common = { git = "https://github.com/submilli/vello", rev = "49d3a97bf0c1d27c3105fbddf946ff2f70f75b10" }
+vello_cpu = { git = "https://github.com/submilli/vello", rev = "49d3a97bf0c1d27c3105fbddf946ff2f70f75b10" }
+glifo = { git = "https://github.com/submilli/vello", rev = "49d3a97bf0c1d27c3105fbddf946ff2f70f75b10" }
+usvg = { path = "packages/usvg" }

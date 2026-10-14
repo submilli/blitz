@@ -8,6 +8,16 @@ pub struct CanvasSvgUnits {
 }
 
 impl CanvasSvgUnits {
+    /// Primitive coordinate context retained by the SVG parser. Converted
+    /// object-specific filters keep this independently of generated IDs.
+    pub fn from_filter(filter: &usvg::filter::Filter) -> Self {
+        Self {
+            bounding_box: filter
+                .primitive_bounding_box()
+                .map(|bounds| [bounds.x(), bounds.y(), bounds.width(), bounds.height()]),
+        }
+    }
+
     /// Units for `[x, y, right, bottom]` bounds; `bounding_box` selects
     /// `primitiveUnits="objectBoundingBox"`.
     #[expect(

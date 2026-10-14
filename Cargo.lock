@@ -353,18 +353,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyrender_svg"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9a06a9cab20563ae5b392239db09d42222820fd3706fe483db7d3cb25546c24"
-dependencies = [
- "anyrender",
- "kurbo",
- "peniko",
- "usvg",
-]
-
-[[package]]
 name = "anyrender_vello"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1019,7 +1007,7 @@ name = "blitz-paint"
 version = "0.3.0-beta.2"
 dependencies = [
  "anyrender",
- "anyrender_svg",
+ "anyrender_vello_cpu",
  "blitz-dom",
  "blitz-traits",
  "bytemuck",
@@ -1034,6 +1022,8 @@ dependencies = [
  "taffy",
  "tracing",
  "usvg",
+ "vello_common",
+ "vello_cpu",
 ]
 
 [[package]]
@@ -3589,8 +3579,7 @@ dependencies = [
 [[package]]
 name = "glifo"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed4a1bb24121291d27230c1b1b44e07d6a9b28cefdb32fe1581dfb84e14f940a"
+source = "git+https://github.com/submilli/vello?rev=49d3a97bf0c1d27c3105fbddf946ff2f70f75b10#49d3a97bf0c1d27c3105fbddf946ff2f70f75b10"
 dependencies = [
  "bytemuck",
  "foldhash 0.2.0",
@@ -6774,7 +6763,7 @@ dependencies = [
 name = "regress-bounded"
 version = "0.12.0"
 dependencies = [
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "memchr",
 ]
 
@@ -8741,8 +8730,6 @@ dependencies = [
 [[package]]
 name = "usvg"
 version = "0.48.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
 dependencies = [
  "base64 0.23.1",
  "data-url",
@@ -8846,8 +8833,7 @@ dependencies = [
 [[package]]
 name = "vello_common"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2e9aed918117e8152c9eddfd8362d73c465c23f26c44786aa331707b8a64fa2"
+source = "git+https://github.com/submilli/vello?rev=49d3a97bf0c1d27c3105fbddf946ff2f70f75b10#49d3a97bf0c1d27c3105fbddf946ff2f70f75b10"
 dependencies = [
  "bytemuck",
  "fearless_simd",
@@ -8862,8 +8848,7 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac7349e1f55f6b801c7c277958df4ea53e7f20f21e8014910ad888b2ecda93ea"
+source = "git+https://github.com/submilli/vello?rev=49d3a97bf0c1d27c3105fbddf946ff2f70f75b10#49d3a97bf0c1d27c3105fbddf946ff2f70f75b10"
 dependencies = [
  "bytemuck",
  "crossbeam-channel",

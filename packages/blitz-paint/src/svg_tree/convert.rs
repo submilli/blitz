@@ -1,0 +1,196 @@
+// Copyright 2023 the Vello Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! SVG paint conversion, derived from anyrender_svg 0.14 (same license).
+
+use anyrender::Paint;
+use kurbo::{Affine, BezPath, Point, Stroke};
+use peniko::color::DynamicColor;
+use peniko::{Color, Mix};
+
+pub(crate) fn to_affine(ts: &usvg::Transform) -> Affine {
+    let usvg::Transform {
+        sx,
+        kx,
+        ky,
+        sy,
+        tx,
+        ty,
+    } = ts;
+    Affine::new([sx, ky, kx, sy, tx, ty].map(|&x| f64::from(x)))
+}
+
+pub(crate) fn to_stroke(stroke: &usvg::Stroke) -> Stroke {
+    let mut conv_stroke = Stroke::new(stroke.width().get() as f64)
+        .with_caps(match stroke.linecap() {
+            usvg::LineCap::Butt => kurbo::Cap::Butt,
+            usvg::LineCap::Round => kurbo::Cap::Round,
+            usvg::LineCap::Square => kurbo::Cap::Square,
+        })
+        .with_join(match stroke.linejoin() {
+            usvg::LineJoin::Miter | usvg::LineJoin::MiterClip => kurbo::Join::Miter,
+            usvg::LineJoin::Round => kurbo::Join::Round,
+            usvg::LineJoin::Bevel => kurbo::Join::Bevel,
+        })
+        .with_miter_limit(stroke.miterlimit().get() as f64);
+    if let Some(dash_array) = stroke.dasharray().as_ref() {
+        conv_stroke = conv_stroke.with_dashes(
+            stroke.dashoffset() as f64,
+            dash_array.iter().map(|x| *x as f64),
+        );
+    }
+    conv_stroke
+}
+
+pub(crate) fn to_mix(blend_mode: usvg::BlendMode) -> Mix {
+    match blend_mode {
+        usvg::BlendMode::Normal => Mix::Normal,
+        usvg::BlendMode::Multiply => Mix::Multiply,
+        usvg::BlendMode::Screen => Mix::Screen,
+        usvg::BlendMode::Overlay => Mix::Overlay,
+        usvg::BlendMode::Darken => Mix::Darken,
+        usvg::BlendMode::Lighten => Mix::Lighten,
+        usvg::BlendMode::ColorDodge => Mix::ColorDodge,
+        usvg::BlendMode::ColorBurn => Mix::ColorBurn,
+        usvg::BlendMode::HardLight => Mix::HardLight,
+        usvg::BlendMode::SoftLight => Mix::SoftLight,
+        usvg::BlendMode::Difference => Mix::Difference,
+        usvg::BlendMode::Exclusion => Mix::Exclusion,
+        usvg::BlendMode::Hue => Mix::Hue,
+        usvg::BlendMode::Saturation => Mix::Saturation,
+        usvg::BlendMode::Color => Mix::Color,
+        usvg::BlendMode::Luminosity => Mix::Luminosity,
+    }
+}
+
+pub(crate) fn to_bez_path(path: &usvg::Path) -> BezPath {
+    let mut local_path = BezPath::new();
+    // The semantics of SVG paths don't line up with `BezPath`; we
+    // must manually track initial points
+    let mut just_closed = false;
+    let mut most_recent_initial = (0., 0.);
+    for elt in path.data().segments() {
+        match elt {
+            usvg::tiny_skia_path::PathSegment::MoveTo(p) => {
+                if std::mem::take(&mut just_closed) {
+                    local_path.move_to(most_recent_initial);
+                }
+                most_recent_initial = (p.x.into(), p.y.into());
+                local_path.move_to(most_recent_initial);
+            }
+            usvg::tiny_skia_path::PathSegment::LineTo(p) => {
+                if std::mem::take(&mut just_closed) {
+                    local_path.move_to(most_recent_initial);
+                }
+                local_path.line_to(Point::new(p.x as f64, p.y as f64));
+            }
+            usvg::tiny_skia_path::PathSegment::QuadTo(p1, p2) => {
+                if std::mem::take(&mut just_closed) {
+                    local_path.move_to(most_recent_initial);
+                }
+                local_path.quad_to(
+                    Point::new(p1.x as f64, p1.y as f64),
+                    Point::new(p2.x as f64, p2.y as f64),
+                );
+            }
+            usvg::tiny_skia_path::PathSegment::CubicTo(p1, p2, p3) => {
+                if std::mem::take(&mut just_closed) {
+                    local_path.move_to(most_recent_initial);
+                }
+                local_path.curve_to(
+                    Point::new(p1.x as f64, p1.y as f64),
+                    Point::new(p2.x as f64, p2.y as f64),
+                    Point::new(p3.x as f64, p3.y as f64),
+                );
+            }
+            usvg::tiny_skia_path::PathSegment::Close => {
+                just_closed = true;
+                local_path.close_path();
+            }
+        }
+    }
+
+    local_path
+}
+
+pub(crate) fn to_brush(paint: &usvg::Paint, opacity: usvg::Opacity) -> Option<(Paint, Affine)> {
+    match paint {
+        usvg::Paint::Color(color) => Some((
+            Paint::Solid(Color::from_rgba8(
+                color.red,
+                color.green,
+                color.blue,
+                opacity.to_u8(),
+            )),
+            Affine::IDENTITY,
+        )),
+        usvg::Paint::LinearGradient(gr) => {
+            let stops: Vec<peniko::ColorStop> = gr
+                .stops()
+                .iter()
+                .map(|stop| peniko::ColorStop {
+                    offset: stop.offset().get(),
+                    color: DynamicColor::from_alpha_color(Color::from_rgba8(
+                        stop.color().red,
+                        stop.color().green,
+                        stop.color().blue,
+                        (stop.opacity() * opacity).to_u8(),
+                    )),
+                })
+                .collect();
+            let start = Point::new(gr.x1() as f64, gr.y1() as f64);
+            let end = Point::new(gr.x2() as f64, gr.y2() as f64);
+            let arr = [
+                gr.transform().sx,
+                gr.transform().ky,
+                gr.transform().kx,
+                gr.transform().sy,
+                gr.transform().tx,
+                gr.transform().ty,
+            ]
+            .map(f64::from);
+            let transform = Affine::new(arr);
+            let gradient = peniko::Gradient::new_linear(start, end).with_stops(stops.as_slice());
+            Some((Paint::Gradient(gradient), transform))
+        }
+        usvg::Paint::RadialGradient(gr) => {
+            let stops: Vec<peniko::ColorStop> = gr
+                .stops()
+                .iter()
+                .map(|stop| peniko::ColorStop {
+                    offset: stop.offset().get(),
+                    color: DynamicColor::from_alpha_color(Color::from_rgba8(
+                        stop.color().red,
+                        stop.color().green,
+                        stop.color().blue,
+                        (stop.opacity() * opacity).to_u8(),
+                    )),
+                })
+                .collect();
+
+            let start_center = Point::new(gr.cx() as f64, gr.cy() as f64);
+            let end_center = Point::new(gr.fx() as f64, gr.fy() as f64);
+            let start_radius = 0_f32;
+            let end_radius = gr.r().get();
+            let arr = [
+                gr.transform().sx,
+                gr.transform().ky,
+                gr.transform().kx,
+                gr.transform().sy,
+                gr.transform().tx,
+                gr.transform().ty,
+            ]
+            .map(f64::from);
+            let transform = Affine::new(arr);
+            let gradient = peniko::Gradient::new_two_point_radial(
+                start_center,
+                start_radius,
+                end_center,
+                end_radius,
+            )
+            .with_stops(stops.as_slice());
+            Some((Paint::Gradient(gradient), transform))
+        }
+        usvg::Paint::Pattern(_) => None,
+    }
+}
