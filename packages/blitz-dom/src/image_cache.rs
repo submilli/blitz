@@ -114,7 +114,7 @@ impl ImageCache {
 }
 
 /// A decoded image that does not keep its pixels or tree alive.
-enum HeldImage {
+pub(crate) enum HeldImage {
     Raster {
         origin_clean: bool,
         width: u32,
@@ -132,7 +132,7 @@ enum HeldImage {
     },
 }
 impl HeldImage {
-    fn new(image: &ImageData) -> Option<Self> {
+    pub(crate) fn new(image: &ImageData) -> Option<Self> {
         match image {
             ImageData::Raster(raster) => Some(Self::Raster {
                 origin_clean: raster.origin_clean,
@@ -153,7 +153,7 @@ impl HeldImage {
         }
     }
 
-    fn upgrade(&self) -> Option<ImageData> {
+    pub(crate) fn upgrade(&self) -> Option<ImageData> {
         match self {
             Self::Raster {
                 origin_clean,

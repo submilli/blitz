@@ -13,6 +13,7 @@
 //! Equal URLs share one decode through the document's image cache, and every
 //! decode is charged to the document's decoded image budget. A same-document
 //! fragment names an element instead and fetches nothing.
+use crate::image_cache::{HeldImage, MAX_CACHED_IMAGES};
 use crate::image_request::{ImageKey, PendingImage};
 use crate::net::ResourceHandler;
 use crate::node::ImageData;
@@ -33,9 +34,29 @@ pub(crate) struct FeImages {
     requests: HashMap<NodeId, FeImageRequest>,
     queue: Vec<NodeId>,
     queued: HashSet<NodeId>,
+    /// A bounded index of immutable data: rasters already held by requests.
+    /// It owns no pixels and adds no cache pins or decoded-byte allowance.
+    held_rasters: HashMap<String, HeldImage>,
 }
 
 impl FeImages {
+    fn held_raster(&self, url: &str) -> Option<ImageData> {
+        self.held_rasters.get(url)?.upgrade()
+    }
+
+    fn index_raster(&mut self, url: &str, image: &ImageData) {
+        if !matches!(image, ImageData::Raster(_)) {
+            return;
+        }
+        self.held_rasters
+            .retain(|_, image| image.upgrade().is_some());
+        if self.held_rasters.len() < MAX_CACHED_IMAGES
+            && let Some(image) = HeldImage::new(image)
+        {
+            self.held_rasters.insert(url.into(), image);
+        }
+    }
+
     pub(crate) fn has_updates(&self) -> bool {
         !self.queue.is_empty()
     }
@@ -94,9 +115,13 @@ impl BaseDocument {
         let key = ImageKey::no_cors(url.as_str());
         let image = match self.fe_images.requests.get(&node) {
             Some(request) if request.url == url.as_str() => request.image.clone(),
-            _ if url.scheme() == "data" => self.image_cache.get(&key).or_else(|| {
-                self.decode_data_url(url.as_str(), self.shown_nested_images(), Some(inline))
-            }),
+            _ if url.scheme() == "data" => self
+                .image_cache
+                .get(&key)
+                .or_else(|| self.fe_images.held_raster(&key.url))
+                .or_else(|| {
+                    self.decode_data_url(url.as_str(), self.shown_nested_images(), Some(inline))
+                }),
             _ => None,
         };
         FeImageTarget::Fetched(image)
@@ -151,7 +176,11 @@ impl BaseDocument {
             return;
         };
         let key = ImageKey::no_cors(url.as_str());
-        let image = self.image_cache.get(&key);
+        let image = self.image_cache.get(&key).or_else(|| {
+            (url.scheme() == "data")
+                .then(|| self.fe_images.held_raster(&key.url))
+                .flatten()
+        });
         let complete = image.is_some();
         let request = FeImageRequest {
             url: key.url.clone(),
@@ -183,6 +212,7 @@ impl BaseDocument {
         let complete =
             !matches!(&image, Some(ImageData::Svg(svg)) if svg.subresources.omits_images);
         if complete && let Some(image) = &image {
+            self.fe_images.index_raster(&key.url, image);
             self.note_image_loaded(&key.url, image, true);
             let retention = crate::ImageRetention::Store;
             self.image_cache

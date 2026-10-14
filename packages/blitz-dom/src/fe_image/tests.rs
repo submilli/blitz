@@ -412,3 +412,64 @@ fn a_no_store_image_stays_available_while_an_fe_image_holds_it() {
         "a released image is fetched again"
     );
 }
+
+/// A second full-size raster cannot occupy the byte-bounded cache, but its
+/// current feImage request keeps it alive. Reusing that URL shares the decode.
+#[test]
+fn held_data_rasters_share_when_the_image_cache_is_full() {
+    let provider = Arc::new(Deferred::default());
+    let (mut doc, parent) = document(provider);
+    let large = |color| {
+        let mut bytes = Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(4096, 4096, image::Rgba(color))
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        format!(
+            "data:image/png,{}",
+            percent_encoding::percent_encode(bytes.get_ref(), percent_encoding::NON_ALPHANUMERIC)
+        )
+    };
+    let first = large([255, 0, 0, 255]);
+    let second = large([0, 255, 0, 255]);
+    let _a = fe_image(&mut doc, parent, &first);
+    let b = fe_image(&mut doc, parent, &second);
+    assert_eq!(doc.image_cache.len(), 1);
+    let before = doc.image_budget.retained_bytes();
+    assert_eq!(before, 128 * 1024 * 1024);
+    let c = fe_image(&mut doc, parent, &second);
+    let raster = |node| match doc
+        .fe_images
+        .requests
+        .get(&node)
+        .unwrap()
+        .image
+        .as_ref()
+        .unwrap()
+    {
+        ImageData::Raster(raster) => raster.data.id(),
+        _ => panic!("the fixture is a raster"),
+    };
+    assert_eq!(raster(b), raster(c));
+    assert_eq!(doc.image_budget.retained_bytes(), before);
+    assert_eq!(doc.image_cache.len(), 1);
+}
+
+#[test]
+fn held_raster_index_is_weak_and_bounded() {
+    use crate::image_cache::MAX_CACHED_IMAGES;
+    use crate::node::RasterImageData;
+    let mut index = super::FeImages::default();
+    let image = ImageData::Raster(RasterImageData::new(1, 1, Arc::new(vec![0; 4])));
+    for i in 0..MAX_CACHED_IMAGES {
+        index.index_raster(&format!("data:,{i}"), &image);
+    }
+    index.index_raster("data:,past-limit", &image);
+    assert_eq!(index.held_rasters.len(), MAX_CACHED_IMAGES);
+    assert!(index.held_raster("data:,past-limit").is_none());
+    assert!(index.held_raster("data:,0").is_some());
+    drop(image);
+    assert!(index.held_raster("data:,0").is_none());
+    let replacement = ImageData::Raster(RasterImageData::new(1, 1, Arc::new(vec![0; 4])));
+    index.index_raster("data:,replacement", &replacement);
+    assert_eq!(index.held_rasters.len(), 1);
+}
