@@ -184,3 +184,18 @@ fn a_line_whose_preserved_spaces_overflow_beside_a_float_stays_beside_it() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0].0, 0.0, "{lines:?}");
 }
+
+#[test]
+fn a_taller_adjacent_float_keeps_all_overlapping_lines_beside_it() {
+    let doc = laid_out(
+        "<div style='width:200px;font-family:Arial'><span style='float:left;width:50px;height:20px'></span>\
+         <span style='float:left;width:50px;height:60px'></span>\
+         one two three four five six seven eight nine</div>",
+    );
+    let lines = line_boxes(&doc, "div");
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(
+        lines.iter().map(|line| line.0).collect::<Vec<_>>(),
+        vec![0.0, 18.0, 36.0, 54.0]
+    );
+}
