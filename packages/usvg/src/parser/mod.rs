@@ -9,6 +9,7 @@ mod marker;
 mod mask;
 mod options;
 mod paint_server;
+mod pattern_transform;
 mod shapes;
 mod style;
 mod svgtree;

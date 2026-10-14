@@ -65,15 +65,17 @@ pub(super) fn paint(
         * Affine::scale(resolution.0)
         * transform.inverse();
     let mut source = VelloCpuScenePainter::new(width, height);
-    children(
-        &mut source,
-        group,
-        rasters,
-        local,
-        budget,
-        &mut HashSet::new(),
-        depth,
-    )?;
+    budget.with_surface(usize::from(width) * usize::from(height), |budget| {
+        children(
+            &mut source,
+            group,
+            rasters,
+            local,
+            budget,
+            &mut HashSet::new(),
+            depth,
+        )
+    })?;
     let mut pixels = source.finish();
     for (filter, admitted) in group.filters().iter().zip(admitted_work) {
         let graph =
@@ -89,6 +91,7 @@ pub(super) fn paint(
         * transform
         * Affine::scale(1.0 / resolution.0)
         * Affine::translate(extent.origin().to_vec2());
+    budget.draw_work()?;
     scene.draw_image(brush.as_ref(), placement);
     Ok(())
 }
@@ -282,17 +285,19 @@ fn image_pixels(
     let [width, height] = dimensions(extent)?;
     budget.take(usize::from(width) * usize::from(height) * 2)?;
     let mut scene = VelloCpuScenePainter::new(width, height);
-    children(
-        &mut scene,
-        group,
-        rasters,
-        Affine::translate(-extent.origin().to_vec2())
-            * Affine::scale(resolution.0)
-            * Affine::translate(subregion.origin().to_vec2()),
-        budget,
-        &mut HashSet::new(),
-        depth,
-    )?;
+    budget.with_surface(usize::from(width) * usize::from(height), |budget| {
+        children(
+            &mut scene,
+            group,
+            rasters,
+            Affine::translate(-extent.origin().to_vec2())
+                * Affine::scale(resolution.0)
+                * Affine::translate(subregion.origin().to_vec2()),
+            budget,
+            &mut HashSet::new(),
+            depth,
+        )
+    })?;
     let pixels = scene.finish();
     let size = [u32::from(width), u32::from(height)];
     let source = Rect::from_origin_size((0.0, 0.0), extent.size());

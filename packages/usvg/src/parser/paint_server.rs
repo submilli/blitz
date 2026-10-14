@@ -1018,11 +1018,11 @@ impl Paint {
                     if patt.content_units == Units::ObjectBoundingBox && patt.view_box.is_none() {
                         // No need to shift patterns.
                         let transform = Transform::from_scale(bbox.width(), bbox.height());
-                        push_pattern_transform(&mut patt.root, transform);
+                        push_pattern_transform(&mut patt.root, transform)?;
                     }
 
                     if let Some(view_box) = patt.view_box {
-                        push_pattern_transform(&mut patt.root, view_box.to_transform(rect.size()));
+                        push_pattern_transform(&mut patt.root, view_box.to_transform(rect.size()))?;
                     }
 
                     patt.content_units = Units::UserSpaceOnUse;
@@ -1034,14 +1034,14 @@ impl Paint {
                         let transform = Transform::from_scale(bbox.width(), bbox.height());
 
                         let mut g = patt.root.clone();
-                        push_pattern_transform(&mut g, transform);
+                        push_pattern_transform(&mut g, transform)?;
                         g
                     } else {
                         patt.root.clone()
                     };
 
                     if let Some(view_box) = patt.view_box {
-                        push_pattern_transform(&mut root, view_box.to_transform(rect.size()));
+                        push_pattern_transform(&mut root, view_box.to_transform(rect.size()))?;
                     }
 
                     *patt = Arc::new(Pattern {
@@ -1061,14 +1061,17 @@ impl Paint {
     }
 }
 
-fn push_pattern_transform(root: &mut Group, transform: Transform) {
-    // TODO: we should update abs_transform in all descendants as well
+fn push_pattern_transform(root: &mut Group, transform: Transform) -> Option<()> {
+    // Delayed object-bounding-box normalization must update leaf absolute
+    // coordinates just as conversion with a known viewBox does.
+    super::pattern_transform::rebase(root, transform, 0)?;
     let mut g = std::mem::replace(root, Group::empty());
     g.transform = transform;
     g.abs_transform = transform;
 
     root.children.push(Node::Group(Box::new(g)));
     root.calculate_bounding_boxes();
+    Some(())
 }
 
 impl Paint {

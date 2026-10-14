@@ -264,3 +264,184 @@ fn source_rect_preserves_nonuniform_stroke_coverage() {
         assert!(path.data()[17].a.abs_diff(184) <= 1, "filter={filter}");
     }
 }
+
+#[test]
+fn pattern_units_viewbox_and_nested_paints_repeat_their_tiles() {
+    for (attrs, content) in [
+        (
+            "patternUnits='userSpaceOnUse' width='4' height='4'",
+            "<rect width='2' height='2' fill='lime'/>",
+        ),
+        (
+            "width='.5' height='.5' patternContentUnits='objectBoundingBox'",
+            "<rect width='.25' height='.25' fill='lime'/>",
+        ),
+        (
+            "width='.5' height='.5' viewBox='0 0 8 8'",
+            "<rect width='4' height='4' fill='lime'/>",
+        ),
+        (
+            "patternUnits='userSpaceOnUse' width='4' height='4'",
+            "<rect width='2' height='2' fill='url(#q)'/>",
+        ),
+    ] {
+        let pixels = draw(&format!(
+            "<pattern id='q' patternUnits='userSpaceOnUse' width='1' height='1'><rect width='1' height='1' fill='lime'/></pattern><pattern id='p' {attrs}>{content}</pattern><rect width='8' height='8' fill='url(#p)'/>"
+        ));
+        for y in 0..8 {
+            for x in 0..8 {
+                assert_eq!(
+                    pixels.data()[y * 8 + x].g,
+                    if x % 4 < 2 && y % 4 < 2 { 255 } else { 0 },
+                    "{attrs}: {x},{y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pattern_origin_moves_the_tile_without_moving_its_content_coordinates() {
+    let pixels = draw(
+        "<pattern id='p' patternUnits='userSpaceOnUse' x='1' y='2' width='4' height='4'><rect x='1' y='2' width='2' height='2' fill='lime'/></pattern><rect width='8' height='8' fill='url(#p)'/>",
+    );
+    for y in 0..8 {
+        for x in 0..8 {
+            assert_eq!(
+                pixels.data()[y * 8 + x].g,
+                if x % 4 >= 2 && y % 4 < 2 { 255 } else { 0 }
+            );
+        }
+    }
+}
+
+#[test]
+fn pattern_refusal_is_bounded_and_preserves_later_siblings() {
+    let pixels = draw(
+        "<pattern id='p' patternUnits='userSpaceOnUse' width='20000' height='20000'><rect width='20000' height='20000' fill='red'/></pattern><rect width='8' height='8' fill='url(#p)'/><rect x='4' width='4' height='8' fill='lime'/>",
+    );
+    assert_eq!(pixels.data()[0].a, 0);
+    assert_eq!(pixels.data()[4].g, 255);
+}
+
+#[test]
+fn pattern_tiles_share_cumulative_work_and_depth_admission() {
+    let tree = usvg::Tree::from_str("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><pattern id='p' patternUnits='userSpaceOnUse' width='4' height='4'><rect width='2' height='2' fill='lime'/></pattern><rect width='8' height='8' fill='url(#p)'/></svg>",&usvg::Options::default()).unwrap();
+    let pattern = &tree.patterns()[0];
+    let rasters = SvgNestedRasters::default();
+    let mut budget = Budget {
+        work: 512,
+        ..Default::default()
+    };
+    pattern::brush(
+        pattern,
+        usvg::Opacity::ONE,
+        Affine::IDENTITY,
+        &rasters,
+        &mut budget,
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        pattern::brush(
+            pattern,
+            usvg::Opacity::ONE,
+            Affine::IDENTITY,
+            &rasters,
+            &mut budget,
+            0
+        )
+        .unwrap_err(),
+        GraphError::Work
+    );
+    assert_eq!(
+        pattern::brush(
+            pattern,
+            usvg::Opacity::ONE,
+            Affine::IDENTITY,
+            &rasters,
+            &mut Budget::default(),
+            129
+        )
+        .unwrap_err(),
+        GraphError::Size
+    );
+}
+
+#[test]
+fn refused_pattern_paint_keeps_the_other_paint_on_the_same_path() {
+    let pattern = "<pattern id='p' patternUnits='userSpaceOnUse' width='20000' height='20000'><rect width='1' height='1'/></pattern>";
+    for order in ["fill stroke", "stroke fill"] {
+        let fill = draw(&format!(
+            "{pattern}<rect x='1' y='1' width='6' height='6' fill='lime' stroke='url(#p)' stroke-width='2' paint-order='{order}'/>"
+        ));
+        assert_eq!(fill.data()[3 * 8 + 3].g, 255);
+        let stroke = draw(&format!(
+            "{pattern}<rect x='1' y='1' width='6' height='6' fill='url(#p)' stroke='lime' stroke-width='2' paint-order='{order}'/>"
+        ));
+        assert_eq!(stroke.data()[9].g, 255);
+    }
+}
+
+#[test]
+fn pattern_layer_work_is_admitted_before_emission() {
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><pattern id='p' patternUnits='userSpaceOnUse' width='4' height='4'><g opacity='.5'><g opacity='.5'><rect width='4' height='4' fill='lime'/></g></g></pattern><rect width='8' height='8' fill='url(#p)'/></svg>";
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap();
+    let mut budget = Budget {
+        work: 512,
+        ..Default::default()
+    };
+    let result = pattern::brush(
+        &tree.patterns()[0],
+        usvg::Opacity::ONE,
+        Affine::IDENTITY,
+        &SvgNestedRasters::default(),
+        &mut budget,
+        0,
+    );
+    assert_eq!(result.unwrap_err(), GraphError::Work);
+    assert_eq!(budget.surface_area, 0, "target restored even on refusal");
+}
+
+#[test]
+fn overlapping_pattern_fills_share_the_surface_work_budget() {
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><pattern id='p' patternUnits='userSpaceOnUse' width='4' height='4'><rect width='4' height='4'/><rect width='4' height='4'/></pattern><rect width='8' height='8' fill='url(#p)'/></svg>";
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap();
+    let mut budget = Budget {
+        work: 512,
+        ..Default::default()
+    };
+    let result = pattern::brush(
+        &tree.patterns()[0],
+        usvg::Opacity::ONE,
+        Affine::IDENTITY,
+        &SvgNestedRasters::default(),
+        &mut budget,
+        0,
+    );
+    assert_eq!(result.unwrap_err(), GraphError::Work);
+    assert_eq!(budget.surface_area, 0);
+}
+
+#[test]
+fn refused_nested_pattern_does_not_commit_an_outer_tile() {
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><pattern id='q' patternUnits='userSpaceOnUse' width='20000' height='20000'><rect width='1' height='1'/></pattern><pattern id='p' patternUnits='userSpaceOnUse' width='4' height='4'><rect width='4' height='4' fill='url(#q)'/></pattern><rect width='8' height='8' fill='url(#p)'/></svg>";
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap();
+    let pattern = tree
+        .patterns()
+        .iter()
+        .find(|pattern| pattern.id() == "p")
+        .unwrap();
+    assert_eq!(
+        pattern::brush(
+            pattern,
+            usvg::Opacity::ONE,
+            Affine::IDENTITY,
+            &SvgNestedRasters::default(),
+            &mut Budget::default(),
+            0
+        )
+        .unwrap_err(),
+        GraphError::Memory
+    );
+}

@@ -433,3 +433,22 @@ fn documents_without_an_svg_root_measure_nothing() {
     let doc = roxmltree::Document::parse("<html/>").unwrap();
     assert_eq!(conversion(&doc).unwrap().bytes, 0);
 }
+
+#[test]
+fn nested_pattern_chains_are_bounded_before_conversion_and_cloning() {
+    let chain = |links: usize| {
+        let mut body = String::from(
+            "<pattern id='p0' width='1' height='1'><rect width='1' height='1'/></pattern>",
+        );
+        for link in 1..links {
+            body.push_str(&format!("<pattern id='p{link}' width='1' height='1'><rect width='1' height='1' fill='url(#p{})'/></pattern>",link-1));
+        }
+        body.push_str(&format!(
+            "<rect width='1' height='1' fill='url(#p{})'/>",
+            links - 1
+        ));
+        svg(&body)
+    };
+    assert!(parse(&chain(8)).is_ok());
+    assert!(matches!(parse(&chain(200)), Err(SvgRefusal::Expansion)));
+}

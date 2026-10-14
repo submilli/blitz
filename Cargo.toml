@@ -324,8 +324,8 @@ rustc-hash = { workspace = true }
 
 # SVG image filters use the bounded graph executor and cumulative admission API.
 [patch.crates-io]
-vello_common = { git = "https://github.com/submilli/vello", rev = "decb26f326d820a1c8328c8a8c5fe20cd361a4bf" }
-vello_cpu = { git = "https://github.com/submilli/vello", rev = "decb26f326d820a1c8328c8a8c5fe20cd361a4bf" }
-glifo = { git = "https://github.com/submilli/vello", rev = "decb26f326d820a1c8328c8a8c5fe20cd361a4bf" }
+vello_common = { git = "https://github.com/submilli/vello", rev = "ae08d01d5d53db7408aad2cd99b4fe139460ca91" }
+vello_cpu = { git = "https://github.com/submilli/vello", rev = "ae08d01d5d53db7408aad2cd99b4fe139460ca91" }
+glifo = { git = "https://github.com/submilli/vello", rev = "ae08d01d5d53db7408aad2cd99b4fe139460ca91" }
 usvg = { path = "packages/usvg" }
 anyrender_vello_cpu = { path = "packages/anyrender_vello_cpu" }

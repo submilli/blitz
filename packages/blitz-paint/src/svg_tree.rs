@@ -5,6 +5,7 @@
 
 mod convert;
 mod filters;
+mod pattern;
 pub(crate) mod primitive;
 mod raster;
 mod resolution;
@@ -18,7 +19,7 @@ use vello_common::filter::graph::{GraphError, MAX_INTERMEDIATE_PIXELS, MAX_WORK}
 
 /// Paint `tree` under `transform`, drawing raster images from the decodes held
 /// with it. Resource refusal paints no additional content from the refused group.
-/// Unsupported pattern and mask behavior retains the existing renderer contract.
+/// Unsupported mask behavior retains the existing renderer contract.
 pub fn paint_svg_tree(
     scene: &mut impl PaintScene,
     tree: &usvg::Tree,
@@ -65,6 +66,7 @@ fn paint_tree(
 struct Budget {
     fixed_image_sampling: bool,
     pixels: usize,
+    surface_area: usize,
     work: u64,
     visits: usize,
     geometry: vello_common::geometry_budget::RasterBudget,
@@ -76,6 +78,7 @@ impl Default for Budget {
         Self {
             fixed_image_sampling: true,
             pixels: MAX_INTERMEDIATE_PIXELS,
+            surface_area: 0,
             work: MAX_WORK,
             visits: 65_536,
             geometry: Default::default(),
@@ -85,6 +88,23 @@ impl Default for Budget {
 }
 
 impl Budget {
+    /// Temporary SVG painters account every draw and layer over their target.
+    /// The counter stays shared when a nested pattern or filter changes target.
+    fn with_surface<T>(
+        &mut self,
+        area: usize,
+        paint: impl FnOnce(&mut Self) -> Result<T, GraphError>,
+    ) -> Result<T, GraphError> {
+        let previous = std::mem::replace(&mut self.surface_area, area);
+        let result = paint(self);
+        self.surface_area = previous;
+        result
+    }
+
+    fn draw_work(&mut self) -> Result<(), GraphError> {
+        self.take_work((self.surface_area as u64).saturating_mul(16))
+    }
+
     fn take(&mut self, pixels: usize) -> Result<(), GraphError> {
         self.pixels = self.pixels.checked_sub(pixels).ok_or(GraphError::Memory)?;
         Ok(())
@@ -143,7 +163,11 @@ fn children(
             usvg::Node::Group(group) => {
                 // A resource-refused group is transparent; subsequent siblings
                 // still paint, and the shared budget is never replenished.
-                let _ = paint_group(scene, group, rasters, global, budget, converted, depth + 1);
+                let result =
+                    paint_group(scene, group, rasters, global, budget, converted, depth + 1);
+                if budget.surface_area != 0 {
+                    result?;
+                }
             }
             usvg::Node::Text(text) => children(
                 scene,
@@ -155,10 +179,14 @@ fn children(
                 depth + 1,
             )?,
             usvg::Node::Path(path) => {
-                let _ = shapes::path(scene, path, global, budget);
+                let result = shapes::path(scene, path, rasters, global, budget, depth + 1);
+                if budget.surface_area != 0 {
+                    result?;
+                }
             }
             usvg::Node::Image(image) if image.is_visible() => {
                 let transform = global * convert::to_affine(&image.abs_transform());
+                budget.draw_work()?;
                 if let usvg::ImageKind::SVG(tree) = image.kind() {
                     children(
                         scene,
@@ -207,6 +235,9 @@ fn paint_group(
     let clip = group
         .clip_path()
         .and_then(|clip| clip.root().children().first());
+    if clip.is_some() || mix != peniko::Mix::Normal || alpha < 1.0 {
+        budget.draw_work()?;
+    }
     let layered = if let Some(usvg::Node::Path(path)) = clip {
         let path = convert::to_bez_path(path);
         budget
