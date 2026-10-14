@@ -235,3 +235,32 @@ fn intermediate_filter_clips_are_bounded_at_their_raster_transform() {
     );
     assert!(pixels.data().iter().all(|p| p.a == 0));
 }
+
+#[test]
+fn source_rect_preserves_nonuniform_stroke_coverage() {
+    fn render(shape: &str, filter: bool) -> vello_cpu::Pixmap {
+        let group = if filter { " filter='url(#f)'" } else { "" };
+        let svg = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>\
+             <filter id='f' x='0' y='0' width='16' height='16' filterUnits='userSpaceOnUse'><feOffset/></filter>\
+             <g{group}><g transform='scale({} {})' fill='none' stroke='red' stroke-width='23.717'>{shape}</g></g></svg>",
+            8.0 / 300.0,
+            8.0 / 150.0,
+        );
+        let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).unwrap();
+        let mut scene = VelloCpuScenePainter::new(16, 16);
+        paint_svg_tree(
+            &mut scene,
+            &tree,
+            &SvgNestedRasters::default(),
+            Affine::IDENTITY,
+        );
+        scene.finish()
+    }
+    for filter in [false, true] {
+        let rect = render("<rect x='60' y='30' width='150' height='75'/>", filter);
+        let path = render("<path d='M60 30H210V105H60Z'/>", filter);
+        assert!(rect.data()[17].a.abs_diff(255) <= 1, "filter={filter}");
+        assert!(path.data()[17].a.abs_diff(184) <= 1, "filter={filter}");
+    }
+}

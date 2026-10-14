@@ -1,0 +1,24 @@
+{
+  "package": "anyrender_vello_cpu",
+  "version": "0.17.0",
+  "registry_checksum": "6fb392bf738b1e50c50fc82824ff3f875f15632717ba732fe68e2fe6e1011e6c",
+  "vcs": {
+    "git": {
+      "sha1": "c5f889688962ed619cf268b66f514bf185ed58b2"
+    },
+    "path_in_vcs": "crates/anyrender_vello_cpu"
+  },
+  "upstream_file_sha256": {
+    "CHANGELOG.md": "4fdde861b6faf6883737ef3b3bf5f63cd298f7057a0bbffe88541c2f3a6d819b",
+    "Cargo.toml": "2876f2289c8e77855919ba3c9243e842a13f27a2051f3a963ce6b0a0999d59e4",
+    "LICENSE-APACHE": "95bd3988beee069fa2848f648dab43cc6e0b2add2ad6bcb17360caf749802bcc",
+    "LICENSE-MIT": "30fefc3a7d6a0041541858293bcbea2dde4caa4c0a5802f996a7f7e8c0085652",
+    "src/filters.rs": "d874eeb205d382cf66e155b6ebf54548cf60dc77cc5a2c8bffd35f65dbde83ca",
+    "src/image_cache.rs": "c2006d54379bf96791668d669521df089495924deabba43b1958e72137fe73fe",
+    "src/image_convert.rs": "4e8494e985091f822c695a9ea50ae2bf753502a05e6c8ac55493e35451b88362",
+    "src/image_renderer.rs": "6b989df8c83648506522259ded52ff24c104be1e24b6b511786c45ce36e45419",
+    "src/lib.rs": "b245120ec412e5b4fd4591368033db521bb97c3c31d66073559556c5951c4d4b",
+    "src/scene.rs": "fcc9ee8c0510f57003a36b38b7ec2a2ec400c569c3a7681d3d295c758ac8494a",
+    "src/window_renderer.rs": "7f7a1c56e6ae569fb03053e5048734151a24a6b07615093a61e9cbed8e0b0a4a"
+  }
+}

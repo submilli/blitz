@@ -15,3 +15,9 @@ nor CSS selection, conversion order, IDs, inputs or primitive results.
 
 Local changes are in `src/tree/filter.rs` (field/getter and regressions) and
 `src/parser/filter.rs` (initialization for URL and CSS-function filters).
+
+SUB-1590 retains the local rectangle on `Path::source_rect` only for
+unrounded source `rect` elements. Rectangular `path` data remains general
+path geometry; groups and `use` retain the parsed primitive identity.
+Changes are in `src/parser/shapes.rs`, `src/parser/converter.rs` and
+`src/tree/mod.rs`; parser regressions cover source, rounded and path shapes.

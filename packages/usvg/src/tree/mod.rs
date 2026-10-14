@@ -1287,6 +1287,7 @@ pub struct Path {
     pub(crate) paint_order: PaintOrder,
     pub(crate) rendering_mode: ShapeRendering,
     pub(crate) data: Arc<tiny_skia_path::Path>,
+    pub(crate) source_rect: Option<Rect>,
     pub(crate) abs_transform: Transform,
     pub(crate) bounding_box: Rect,
     pub(crate) abs_bounding_box: Rect,
@@ -1345,6 +1346,7 @@ impl Path {
             paint_order,
             rendering_mode,
             data,
+            source_rect: None,
             abs_transform,
             bounding_box,
             abs_bounding_box,
@@ -1400,6 +1402,14 @@ impl Path {
     /// All segments are in absolute coordinates.
     pub fn data(&self) -> &tiny_skia_path::Path {
         self.data.as_ref()
+    }
+
+    /// The local rectangle for an unrounded SVG `rect` source element.
+    ///
+    /// Paths with rectangular contours retain `None`: renderers may give the
+    /// rectangle primitive different stroke coverage from general paths.
+    pub fn source_rect(&self) -> Option<Rect> {
+        self.source_rect
     }
 
     /// Element's absolute transform.

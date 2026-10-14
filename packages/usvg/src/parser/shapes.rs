@@ -66,6 +66,18 @@ pub(crate) fn convert_path(node: SvgNode) -> Option<Arc<Path>> {
     builder.finish().map(Arc::new)
 }
 
+/// Retain source identity after conversion without recognizing arbitrary paths.
+pub(crate) fn source_rect(node: SvgNode, state: &converter::State, path: &Path) -> Option<Rect> {
+    if node.tag_name() != Some(EId::Rect) {
+        return None;
+    }
+    let (rx, ry) = resolve_rx_ry(node, state);
+    if !rx.approx_eq_ulps(&0.0, 4) && !ry.approx_eq_ulps(&0.0, 4) {
+        return None;
+    }
+    Some(path.bounds())
+}
+
 fn convert_rect(node: SvgNode, state: &converter::State) -> Option<Arc<Path>> {
     // 'width' and 'height' attributes must be positive and non-zero.
     let width = node.convert_user_length(AId::Width, state, Length::zero());
@@ -101,7 +113,7 @@ fn convert_rect(node: SvgNode, state: &converter::State) -> Option<Arc<Path>> {
     }
 
     // Conversion according to https://www.w3.org/TR/SVG11/shapes.html#RectElement
-    let path = if rx.approx_eq_ulps(&0.0, 4) {
+    let path = if rx.approx_eq_ulps(&0.0, 4) || ry.approx_eq_ulps(&0.0, 4) {
         tiny_skia_path::PathBuilder::from_rect(Rect::from_xywh(x, y, width, height)?)
     } else {
         let mut builder = tiny_skia_path::PathBuilder::new();
@@ -327,6 +339,70 @@ impl PathBuilderExt for tiny_skia_path::PathBuilder {
             None => {
                 self.line_to(x, y);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Node, Options, Tree};
+
+    #[test]
+    fn either_zero_radius_preserves_an_unrounded_rectangle() {
+        for radii in ["rx='0' ry='1'", "rx='1' ry='0'"] {
+            let svg = format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect id='r' width='5' height='7' {radii}/></svg>"
+            );
+            let tree = Tree::from_str(&svg, &Options::default()).unwrap();
+            let Node::Path(path) = tree.node_by_id("r").unwrap() else {
+                panic!("expected path");
+            };
+            assert!(path.source_rect().is_some());
+            assert_eq!(path.data().segments().count(), 5);
+        }
+    }
+
+    #[test]
+    fn rectangle_identity_survives_groups_and_use_but_does_not_infer_paths() {
+        let tree = Tree::from_str(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+              <defs><rect id="source" x="2" y="3" width="5" height="7"/></defs>
+              <g transform="translate(10 4) scale(2 1)">
+                <use href="#source" id="copy"/>
+                <rect id="plain" x="2" y="3" width="5" height="7"/>
+                <rect id="round" width="5" height="7" rx="1"/>
+                <path id="path" d="M2 3H7V10H2Z"/>
+              </g>
+            </svg>"##,
+            &Options::default(),
+        )
+        .unwrap();
+        let Node::Path(path) = tree.node_by_id("plain").unwrap() else {
+            panic!("expected path");
+        };
+        let rect = path.source_rect().unwrap();
+        assert_eq!(
+            (rect.x(), rect.y(), rect.width(), rect.height()),
+            (2.0, 3.0, 5.0, 7.0)
+        );
+        assert_ne!(path.abs_transform(), crate::Transform::default());
+        fn rectangle_count(group: &crate::Group) -> usize {
+            group
+                .children()
+                .iter()
+                .map(|node| match node {
+                    Node::Path(path) => usize::from(path.source_rect().is_some()),
+                    Node::Group(group) => rectangle_count(group),
+                    _ => 0,
+                })
+                .sum()
+        }
+        assert_eq!(rectangle_count(tree.root()), 2);
+        for id in ["round", "path"] {
+            let Node::Path(path) = tree.node_by_id(id).unwrap() else {
+                panic!("expected path");
+            };
+            assert!(path.source_rect().is_none());
         }
     }
 }

@@ -1030,6 +1030,7 @@ fn convert_path(
         String::new()
     };
 
+    let source_rect = super::shapes::source_rect(node, state, &tiny_skia_path);
     let path = Path::new(
         id,
         visible,
@@ -1041,10 +1042,12 @@ fn convert_path(
         path_transform,
     );
 
-    let path = match path {
+    let mut path = match path {
         Some(v) => v,
         None => return,
     };
+
+    path.source_rect = source_rect;
 
     match (raw_paint_order.order, marker) {
         ([PaintOrderKind::Markers, _, _], Some(markers_node)) => {

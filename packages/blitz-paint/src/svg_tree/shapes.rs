@@ -65,6 +65,21 @@ fn stroke(scene: &mut impl PaintScene, path: &usvg::Path, transform: Affine, geo
     if let Some(stroke) = path.stroke()
         && let Some((paint, brush_transform)) = convert::to_brush(stroke.paint(), stroke.opacity())
     {
+        if let Some(rect) = path.source_rect() {
+            scene.stroke(
+                &convert::to_stroke(stroke),
+                transform,
+                paint.as_ref(),
+                Some(brush_transform),
+                &kurbo::Rect::new(
+                    f64::from(rect.left()),
+                    f64::from(rect.top()),
+                    f64::from(rect.right()),
+                    f64::from(rect.bottom()),
+                ),
+            );
+            return;
+        }
         scene.stroke(
             &convert::to_stroke(stroke),
             transform,
