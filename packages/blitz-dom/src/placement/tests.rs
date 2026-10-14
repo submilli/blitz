@@ -347,3 +347,212 @@ fn a_pointer_click_at_a_target_moved_away_is_not_dispatched() {
         assert_eq!(document.borrow().checkedness(target), !pointer);
     }
 }
+
+struct NativeKey {
+    source: Option<Rc<RefCell<BaseDocument>>>,
+    destination: Rc<RefCell<BaseDocument>>,
+    target: NodeId,
+    stage: &'static str,
+    moved: Rc<Cell<Option<NodeId>>>,
+    handed_off: Rc<RefCell<Option<ListenedEvent>>>,
+    seen: Rc<RefCell<Vec<String>>>,
+    cancel: bool,
+}
+impl NativeKey {
+    fn move_target(&mut self, doc: &mut BaseDocument) {
+        self.moved.set(Some(transfer(
+            doc,
+            self.target,
+            &mut self.destination.borrow_mut(),
+        )));
+    }
+}
+impl EventHandler for NativeKey {
+    fn handle_event(
+        &mut self,
+        _: &[NodeId],
+        event: &mut DomEvent,
+        doc: &mut dyn Document,
+        _: &mut EventState,
+    ) {
+        self.seen.borrow_mut().push(event.name().to_owned());
+        if event.name() == self.stage {
+            self.move_target(&mut doc.inner_mut());
+        }
+    }
+    fn before_input(&mut self, _: NodeId, _: &blitz_traits::events::BlitzKeyEvent) -> bool {
+        self.seen.borrow_mut().push("beforeinput".into());
+        if self.stage == "beforeinput" {
+            let source = self
+                .source
+                .clone()
+                .expect("the beforeinput test retains its source");
+            self.move_target(&mut source.borrow_mut());
+        }
+        !self.cancel
+    }
+    fn placement(&self, node: NodeId) -> Placement {
+        if node == self.target && self.moved.get().is_some() {
+            Placement::Elsewhere
+        } else {
+            Placement::Here(node)
+        }
+    }
+    fn complete_elsewhere(&mut self, event: ListenedEvent) {
+        *self.handed_off.borrow_mut() = Some(event);
+    }
+}
+fn key() -> blitz_traits::events::BlitzKeyEvent {
+    blitz_traits::events::BlitzKeyEvent {
+        key: keyboard_types::Key::Character("a".into()),
+        code: keyboard_types::Code::KeyA,
+        modifiers: Modifiers::empty(),
+        location: keyboard_types::Location::Standard,
+        is_auto_repeating: false,
+        is_composing: false,
+        state: blitz_traits::events::KeyState::Pressed,
+        text: Some("a".into()),
+    }
+}
+#[test]
+fn adoption_during_keydown_or_keypress_suppresses_later_editing_steps() {
+    for stage in ["keydown", "keypress"] {
+        let mut source = BaseDocument::new(DocumentConfig::default());
+        let target = input(&mut source, "text", None);
+        source.flush_style_and_layout(0.0);
+        source.set_focus_to(target);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let handed_off = Rc::new(RefCell::new(None));
+        let moved = Rc::new(Cell::new(None));
+        let handler = NativeKey {
+            source: None,
+            destination: Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default()))),
+            target,
+            stage,
+            moved: moved.clone(),
+            handed_off: handed_off.clone(),
+            seen: seen.clone(),
+            cancel: false,
+        };
+        EventDriver::new(&mut source, handler).handle_dom_event(DomEvent::new(
+            target,
+            blitz_traits::events::DomEventData::KeyDown(key()),
+        ));
+        assert!(moved.get().is_some());
+        assert!(handed_off.borrow().is_none());
+        assert_eq!(
+            *seen.borrow(),
+            if stage == "keydown" {
+                vec!["keydown"]
+            } else {
+                vec!["keydown", "keypress"]
+            }
+        );
+    }
+}
+#[test]
+fn canceled_beforeinput_leaves_the_control_value_unchanged() {
+    let mut source = BaseDocument::new(DocumentConfig::default());
+    let target = input(&mut source, "text", None);
+    source.flush_style_and_layout(0.0);
+    source.set_focus_to(target);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let handler = NativeKey {
+        source: None,
+        destination: Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default()))),
+        target,
+        stage: "never",
+        moved: Rc::new(Cell::new(None)),
+        handed_off: Rc::new(RefCell::new(None)),
+        seen: seen.clone(),
+        cancel: true,
+    };
+    EventDriver::new(&mut source, handler).handle_dom_event(DomEvent::new(
+        target,
+        blitz_traits::events::DomEventData::KeyDown(key()),
+    ));
+    assert_eq!(*seen.borrow(), ["keydown", "keypress", "beforeinput"]);
+    assert_eq!(source.form_value(target), Some(String::new()));
+}
+
+#[test]
+fn admitted_text_input_follows_a_beforeinput_adoption_without_transferring_focus() {
+    let mut document = BaseDocument::new(DocumentConfig::default());
+    let target = input(&mut document, "text", None);
+    document.flush_style_and_layout(0.0);
+    document.set_focus_to(target);
+    let mut source = Rc::new(RefCell::new(document));
+    let destination = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let moved = Rc::new(Cell::new(None));
+    let handed_off = Rc::new(RefCell::new(None));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let handler = NativeKey {
+        source: Some(source.clone()),
+        destination: destination.clone(),
+        target,
+        stage: "beforeinput",
+        moved: moved.clone(),
+        handed_off: handed_off.clone(),
+        seen: seen.clone(),
+        cancel: false,
+    };
+    EventDriver::new(&mut source, handler).handle_dom_event(DomEvent::new(
+        target,
+        blitz_traits::events::DomEventData::KeyDown(key()),
+    ));
+    let moved = moved.get().unwrap();
+    let event = handed_off
+        .borrow_mut()
+        .take()
+        .unwrap()
+        .relocate(&destination.borrow(), |id| (id == target).then_some(moved))
+        .unwrap();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut destination = destination;
+    EventDriver::new(&mut destination, Recorder(log.clone())).complete(event);
+    assert_eq!(destination.borrow().form_value(moved), Some("a".into()));
+    assert_eq!(destination.borrow().focus_node_id, None);
+    assert_eq!(*seen.borrow(), ["keydown", "keypress", "beforeinput"]);
+    assert_eq!(log.borrow()[0].0, "input");
+}
+
+#[test]
+fn moved_pointer_press_hands_off_focus_without_mouse_compatibility_or_drag_state() {
+    use blitz_traits::events::UiEvent;
+    let mut source = BaseDocument::new(DocumentConfig::default());
+    let target = input(&mut source, "text", None);
+    source.resolve(0.0);
+    let data = source.nodes[target].synthetic_click_event_data(Modifiers::empty());
+    let moved = Rc::new(Cell::new(None));
+    let handed_off = Rc::new(RefCell::new(None));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let destination = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let handler = NativeKey {
+        source: None,
+        destination: destination.clone(),
+        target,
+        stage: "pointerdown",
+        moved: moved.clone(),
+        handed_off: handed_off.clone(),
+        seen: seen.clone(),
+        cancel: false,
+    };
+    EventDriver::new(&mut source, handler).handle_ui_event(UiEvent::PointerDown(data));
+    let moved = moved.get().expect("the pointer listener moved its target");
+    let event = handed_off
+        .borrow_mut()
+        .take()
+        .expect("focus is handed off")
+        .relocate(&destination.borrow(), |id| (id == target).then_some(moved))
+        .unwrap();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut destination = destination;
+    EventDriver::new(&mut destination, Recorder(log.clone())).complete(event);
+    assert_eq!(destination.borrow().focus_node_id, Some(moved));
+    assert_eq!(source.drag_mode, crate::events::DragMode::None);
+    assert_eq!(
+        destination.borrow().drag_mode,
+        crate::events::DragMode::None
+    );
+    assert!(!seen.borrow().iter().any(|name| name == "mousedown"));
+}

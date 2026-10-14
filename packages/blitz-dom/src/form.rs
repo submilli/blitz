@@ -1,7 +1,7 @@
 use blitz_traits::node_id::NodeId;
 use markup5ever::{LocalName, local_name};
 
-use crate::{BaseDocument, ElementData};
+use crate::BaseDocument;
 use blitz_traits::{
     navigation::NavigationOptions,
     net::{Body, Entry, FormData, Method},
@@ -23,6 +23,16 @@ const DEFAULT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::CONTROL
     .add(b'{')
     .add(b'}');
 
+/// Current submit-button overrides, independent of the arena containing the
+/// submitting form. Capture after submit listeners; entry-list membership
+/// remains the form document's responsibility.
+#[derive(Default)]
+pub struct SubmitterOverrides {
+    action: Option<String>,
+    method: Option<String>,
+    enctype: Option<String>,
+}
+
 impl BaseDocument {
     /// Submits a form with the given form node ID and submitter node ID
     ///
@@ -32,12 +42,42 @@ impl BaseDocument {
     ///
     /// <https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm>
     pub fn submit_form(&self, node_id: NodeId, submitter_id: NodeId) {
+        let overrides = self.submitter_overrides(submitter_id);
+        self.submit_form_with_overrides(node_id, Some(submitter_id), &overrides);
+    }
+
+    /// Read overrides where the submitter lives now. Resolve its action URL
+    /// against its own document, as HTML's reflected formaction does.
+    pub fn submitter_overrides(&self, submitter: NodeId) -> SubmitterOverrides {
+        let get = |name| get_submitter_attr(self, submitter, name).map(str::to_owned);
+        SubmitterOverrides {
+            action: get(local_name!("formaction")).map(|action| {
+                if action.is_empty() {
+                    self.document_url(submitter).to_string()
+                } else {
+                    self.resolve_url(submitter, &action)
+                        .map_or(action, |url| url.to_string())
+                }
+            }),
+            method: get(local_name!("formmethod")),
+            enctype: get(local_name!("formenctype")),
+        }
+    }
+
+    /// Submit with independently resolved button overrides and only a local
+    /// submitter ID for the current entry list.
+    pub fn submit_form_with_overrides(
+        &self,
+        node_id: NodeId,
+        submitter: Option<NodeId>,
+        overrides: &SubmitterOverrides,
+    ) {
         let node = &self.nodes[node_id];
         let Some(element) = node.element_data() else {
             return;
         };
 
-        let entry = match self.form_entry_list(node_id, Some(submitter_id)) {
+        let entry = match self.form_entry_list(node_id, submitter) {
             Ok(entries) => entries,
             Err(error) => {
                 self.navigation_provider.submission_failed(error);
@@ -45,24 +85,18 @@ impl BaseDocument {
             }
         };
 
-        let method = get_form_attr(
-            self,
-            element,
-            local_name!("method"),
-            submitter_id,
-            local_name!("formmethod"),
-        )
-        .and_then(|method| method.parse::<FormMethod>().ok())
-        .unwrap_or(FormMethod::Get);
+        let method = overrides
+            .method
+            .as_deref()
+            .or_else(|| element.attr(local_name!("method")))
+            .and_then(|method| method.parse::<FormMethod>().ok())
+            .unwrap_or(FormMethod::Get);
 
-        let action = get_form_attr(
-            self,
-            element,
-            local_name!("action"),
-            submitter_id,
-            local_name!("formaction"),
-        )
-        .unwrap_or_default();
+        let action = overrides
+            .action
+            .as_deref()
+            .or_else(|| element.attr(local_name!("action")))
+            .unwrap_or_default();
 
         // "Parse a URL given action... If this fails, return."
         let parsed_action = if action.is_empty() {
@@ -76,15 +110,12 @@ impl BaseDocument {
 
         let scheme = parsed_action.scheme();
 
-        let enctype = get_form_attr(
-            self,
-            element,
-            local_name!("enctype"),
-            submitter_id,
-            local_name!("formenctype"),
-        )
-        .and_then(|enctype| enctype.parse::<RequestContentType>().ok())
-        .unwrap_or(RequestContentType::FormUrlEncoded);
+        let enctype = overrides
+            .enctype
+            .as_deref()
+            .or_else(|| element.attr(local_name!("enctype")))
+            .and_then(|enctype| enctype.parse::<RequestContentType>().ok())
+            .unwrap_or(RequestContentType::FormUrlEncoded);
 
         let mut post_resource = Body::Empty;
 
@@ -145,16 +176,6 @@ impl BaseDocument {
 
         self.navigation_provider.navigate_to(navigation_options)
     }
-}
-
-fn get_form_attr<'a>(
-    doc: &'a BaseDocument,
-    form: &'a ElementData,
-    form_local: impl PartialEq<LocalName>,
-    submitter_id: NodeId,
-    submitter_local: impl PartialEq<LocalName>,
-) -> Option<&'a str> {
-    get_submitter_attr(doc, submitter_id, submitter_local).or_else(|| form.attr(form_local))
 }
 
 fn get_submitter_attr(
@@ -284,3 +305,6 @@ fn encode_text_plain<T: AsRef<str>, U: AsRef<str>>(input: &[(T, U)]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests;

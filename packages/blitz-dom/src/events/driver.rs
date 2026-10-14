@@ -1,3 +1,4 @@
+use super::text_input::printable_key;
 use crate::{Document, NodeLease};
 use blitz_traits::events::{
     BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData, EventState, Point, PointerCoords,
@@ -42,6 +43,16 @@ pub trait EventHandler {
         event_state: &mut EventState,
     );
 
+    /// Fire cancellable beforeinput for a printable key after keypress. The
+    /// target is retained by the driver; embedders may move it in this hook.
+    fn before_input(
+        &mut self,
+        _target: NodeId,
+        _key: &blitz_traits::events::BlitzKeyEvent,
+    ) -> bool {
+        true
+    }
+
     /// Keep track of `node`, which a click's activation uses after the
     /// listeners although it is not on the event's chain (the radio that was
     /// checked before), so [`Self::placement`] can find it after a move.
@@ -74,7 +85,7 @@ impl EventHandler for NoopEventHandler {
 
 pub struct EventDriver<'doc, Handler: EventHandler> {
     pub(super) doc: &'doc mut dyn Document,
-    handler: Handler,
+    pub(super) handler: Handler,
     queue: VecDeque<(super::GeneratedEvent, Vec<NodeLease>)>,
 }
 
@@ -321,6 +332,13 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         }
     }
 
+    /// Run a focus transition with callback-safe owner resolution through
+    /// the handler, including events whose earlier listeners move a node.
+    pub fn focus(&mut self, target: Option<NodeId>) {
+        self.run_focus_transition(target);
+        self.process_queue();
+    }
+
     pub fn handle_dom_event(&mut self, event: DomEvent) {
         let lease = self.doc.inner().lease_node(event.target);
         self.queue.push_back((event.into(), vec![lease]));
@@ -347,7 +365,9 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         //
         // `pointercancel` has no mouse equivalent, so `make_mouse_data` is `None`
         // in that case and no mouse event is generated.
-        if !event_state.is_cancelled() {
+        if !event_state.is_cancelled()
+            && self.handler.placement(target) == crate::Placement::Here(target)
+        {
             if data.is_mouse() {
                 if let Some(make_mouse_data) = make_mouse_data {
                     let mut mouse_event = DomEvent::new(target, make_mouse_data(data));
@@ -359,11 +379,21 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             }
         }
 
-        self.finish(super::ListenedEvent {
+        let moved = self.handler.placement(target) != crate::Placement::Here(target);
+        let listened = super::ListenedEvent {
             event: ptr_event,
             activation: None,
             canceled: event_state.is_cancelled(),
-        });
+            text_input: false,
+        };
+        if moved && matches!(listened.event.data, DomEventData::PointerDown(_)) {
+            // The physical press stays in this document. Only the control's
+            // focus follows it; selection/drag state is never transferred.
+            self.doc.inner_mut().drag_mode = super::pointer::DragMode::None;
+            self.follow_target(listened);
+        } else {
+            self.finish(listened);
+        }
         self.process_queue();
     }
 
@@ -372,7 +402,18 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     /// `change`, run its default action unless a listener canceled, then
     /// process the events those generate.
     pub fn complete(&mut self, event: super::ListenedEvent) {
-        self.finish(event);
+        if !event.canceled && matches!(event.event.data, DomEventData::PointerDown(_)) {
+            let target = self.doc.inner().click_focus_target(event.target());
+            if let Some(target) = target {
+                self.doc.inner_mut().mutate().set_control_selection(
+                    target,
+                    crate::form_selection::ControlSelection::caret(0),
+                );
+            }
+            self.run_focus_transition(target);
+        } else {
+            self.finish(event);
+        }
         self.process_queue();
     }
 
@@ -398,6 +439,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             mut event,
             activation,
             canceled,
+            text_input,
         } = event;
         if let Some(activation) = activation {
             let mut doc = self.doc.inner_mut();
@@ -417,7 +459,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             }
         }
         if !canceled {
-            self.run_default_action(&mut event);
+            self.run_default_action_mode(&mut event, text_input);
         }
     }
 
@@ -458,15 +500,23 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 self.handler.follow(previous);
             }
             let event_state = self.run_handler_event(&mut event, EventState::default());
+            let text_input = if event_state.is_cancelled() {
+                false
+            } else {
+                self.prepare_text_input(&event)
+            };
+            let canceled = event_state.is_cancelled()
+                || matches!(event.data, DomEventData::KeyDown(ref key) if printable_key(key))
+                    && !text_input;
             let listened = super::ListenedEvent {
                 event,
                 activation,
-                canceled: event_state.is_cancelled(),
+                canceled,
+                text_input,
             };
-            // A click's activation behaviour belongs to its target node.
-            // Other defaults (text input, focus, selection, drags) keep to
-            // this document, whose input state they read and update.
-            if click {
+            // Click activation and already admitted text edits follow the
+            // control. Document-level focus navigation and drag state stay here.
+            if click || text_input {
                 self.follow_target(listened);
             } else {
                 self.finish(listened);
@@ -541,9 +591,28 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     }
 
     fn run_default_action(&mut self, event: &mut DomEvent) {
+        self.run_default_action_mode(event, false);
+    }
+
+    fn run_default_action_mode(&mut self, event: &mut DomEvent, text_input: bool) {
         let mut doc = self.doc.inner_mut();
         let mut generated = Vec::new();
-        let action = doc.handle_dom_event(event, |new_evt| generated.push(new_evt));
+        let action = if text_input {
+            // A transferred control builds its editor in the destination.
+            doc.flush_style_and_layout(0.0);
+            match &event.data {
+                DomEventData::KeyDown(key) => super::keyboard::handle_key_or_input_event(
+                    &mut doc,
+                    event.target,
+                    super::keyboard::KeyboardOrTextInputEvent::KeyPress(key.clone()),
+                    true,
+                    |new_evt| generated.push(new_evt),
+                ),
+                _ => None,
+            }
+        } else {
+            doc.handle_dom_event(event, |new_evt| generated.push(new_evt))
+        };
         let _retained: Vec<_> = action
             .into_iter()
             .flat_map(|a| a.nodes())

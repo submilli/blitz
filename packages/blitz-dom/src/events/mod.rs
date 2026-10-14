@@ -6,6 +6,7 @@ pub use form::{FormAction, ImplicitSubmission};
 mod ime;
 mod keyboard;
 mod listened;
+mod text_input;
 pub use listened::ListenedEvent;
 mod pointer;
 
@@ -235,6 +236,7 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
                 doc,
                 target_node_id,
                 KeyboardOrTextInputEvent::KeyPress(event.clone()),
+                false,
                 dispatch_event,
             );
         }
@@ -249,6 +251,7 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
                 doc,
                 target_node_id,
                 KeyboardOrTextInputEvent::AppleStandardKeyBinding(event.clone()),
+                false,
                 dispatch_event,
             );
         }

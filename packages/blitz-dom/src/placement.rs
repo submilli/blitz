@@ -10,8 +10,9 @@
 //! the activation target is a node. The embedder says where that is
 //! ([`Placement`]); Blitz relocates the pending steps
 //! ([`crate::ClickActivation`], [`crate::ListenedEvent`]) into this document,
-//! or hands them to the embedder to relocate into another one. Other native
-//! defaults keep to the dispatching document, whose input state they use.
+//! or hands them to the embedder to relocate into another one. Admitted text
+//! edits also follow their control. A moved pointer press transfers control
+//! focus only; drag, hover and document selection remain in the source.
 
 use crate::NodeId;
 

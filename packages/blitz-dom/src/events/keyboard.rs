@@ -16,6 +16,7 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(super::GeneratedEvent)>(
     doc: &mut BaseDocument,
     target: NodeId,
     event: KeyboardOrTextInputEvent,
+    permit_unfocused: bool,
     mut dispatch_event: F,
 ) -> Option<super::FormAction> {
     if let KeyboardOrTextInputEvent::AppleStandardKeyBinding(command) = &event {
@@ -51,6 +52,7 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(super::GeneratedEvent)>(
                 doc,
                 target,
                 KeyboardOrTextInputEvent::KeyPress(event),
+                false,
                 dispatch_event,
             );
         }
@@ -96,7 +98,11 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(super::GeneratedEvent)>(
         }
     }
 
-    if let Some(node_id) = doc.focus_node_id {
+    if let Some(node_id) = if permit_unfocused {
+        Some(target)
+    } else {
+        doc.focus_node_id
+    } {
         if target != node_id {
             return None;
         }
@@ -104,6 +110,9 @@ pub(crate) fn handle_key_or_input_event<F: FnMut(super::GeneratedEvent)>(
         let node = &mut doc.nodes[node_id];
         let element_data = node.element_data_mut()?;
 
+        if element_data.has_attr(markup5ever::local_name!("readonly")) {
+            return None;
+        }
         if let Some(input_data) = element_data.text_input_data_mut() {
             let generated_event = match event {
                 KeyboardOrTextInputEvent::KeyPress(blitz_key_event) => input_data

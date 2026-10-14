@@ -1,7 +1,6 @@
 //! A native event whose listeners have run, with the steps that follow them.
-//! A click's steps act on its target where it lives when the listeners
-//! return (see [`crate::Placement`]); other events' stay in the dispatching
-//! document.
+//! Click activation and admitted text edits follow the current target (see
+//! [`crate::Placement`]); moved pointer presses transfer only control focus.
 
 use crate::{BaseDocument, CheckableActivation, NodeId};
 use blitz_traits::events::{DomEvent, DomEventData};
@@ -12,6 +11,7 @@ pub struct ListenedEvent {
     pub(super) event: DomEvent,
     pub(super) activation: Option<CheckableActivation>,
     pub(super) canceled: bool,
+    pub(super) text_input: bool,
 }
 
 impl ListenedEvent {
@@ -46,6 +46,7 @@ impl ListenedEvent {
             event,
             activation,
             canceled: self.canceled,
+            text_input: self.text_input,
         })
     }
 }
