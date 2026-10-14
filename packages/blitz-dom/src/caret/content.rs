@@ -81,31 +81,31 @@ pub(super) fn children_for_stack(
 }
 
 /// An inside list marker, which precedes the root's content in its layout.
-pub(super) struct InsideMarker {
+pub(super) struct CaretMarker {
     /// The marker's laid-out text.
     pub(super) text: String,
-    /// The text is a symbol and a space standing for the end margin of
-    /// Chrome's symbol marker (see `layout::list::inside_char_marker_style`),
-    /// which is not marker content.
-    pub(super) margin: bool,
+    /// The trailing space stands for a symbol marker's end margin (see
+    /// `layout::list::inside_marker_content`), so it is not marker content.
+    pub(super) trailing_margin: bool,
 }
 
-pub(super) fn inside_marker(doc: &BaseDocument, root: NodeId) -> Option<InsideMarker> {
+/// The inside marker of the inline root `root`, if any.
+pub(super) fn inside_marker(doc: &BaseDocument, root: NodeId) -> Option<CaretMarker> {
     let node = &doc.nodes[root];
     let item = node.element_data()?.list_item_data.as_deref()?;
     if !matches!(item.position, ListItemLayoutPosition::Inside) {
         return None;
     }
     Some(match &item.marker {
-        Marker::Char(ch) => InsideMarker {
+        Marker::Char(ch) => CaretMarker {
             text: format!("{ch} "),
-            margin: node
+            trailing_margin: node
                 .primary_styles()
                 .is_some_and(|style| is_symbol_marker(&style)),
         },
-        Marker::String(text) => InsideMarker {
+        Marker::String(text) => CaretMarker {
             text: text.clone(),
-            margin: false,
+            trailing_margin: false,
         },
     })
 }

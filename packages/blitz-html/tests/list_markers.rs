@@ -5,39 +5,39 @@
 
 mod common;
 
-use blitz_dom::BaseDocument;
-use common::{laid_out, q};
+use blitz_dom::{BaseDocument, FontRole, build_font_ctx};
+use common::{parse, q};
 
 /// Cases that still differ from Chrome, with our positions.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     // Chrome lays out a disclosure marker as text in a fallback font of the
     // system, as Arial has no triangles; Blitz uses its bundled bullet font.
-    ("disclosure-open@7", "7.19,0"),
-    ("disclosure-closed@7", "7.19,0"),
-    ("disclosure-open@10", "10.28,0"),
-    ("disclosure-closed@10", "10.28,0"),
-    ("disclosure-open@13", "13.36,0"),
-    ("disclosure-closed@13", "13.36,0"),
-    ("disclosure-open@13.3", "13.67,0"),
-    ("disclosure-closed@13.3", "13.67,0"),
-    ("disclosure-open@16", "16.45,0"),
-    ("disclosure-closed@16", "16.45,0"),
-    ("disclosure-open@20", "20.56,0"),
-    ("disclosure-closed@20", "20.56,0"),
-    ("disclosure-open@32", "32.89,0"),
-    ("disclosure-closed@32", "32.89,0"),
-    ("disclosure-open@50", "51.39,1"),
-    ("disclosure-closed@50", "51.39,1"),
+    ("disclosure-open@7", "6.17,0"),
+    ("disclosure-closed@7", "6.17,0"),
+    ("disclosure-open@10", "8.81,0"),
+    ("disclosure-closed@10", "8.81,0"),
+    ("disclosure-open@13", "11.45,0"),
+    ("disclosure-closed@13", "11.45,0"),
+    ("disclosure-open@13.3", "11.72,0"),
+    ("disclosure-closed@13.3", "11.72,0"),
+    ("disclosure-open@16", "14.09,1"),
+    ("disclosure-closed@16", "14.09,1"),
+    ("disclosure-open@20", "17.63,1"),
+    ("disclosure-closed@20", "17.63,1"),
+    ("disclosure-open@32", "28.19,2"),
+    ("disclosure-closed@32", "28.19,2"),
+    ("disclosure-open@50", "44.05,3"),
+    ("disclosure-closed@50", "44.05,3"),
     // Blitz has no upper-roman counter style and lays out a square
     // (submilli SUB-1706).
-    ("upper-roman@7", "6.17,0"),
-    ("upper-roman@10", "8.81,0"),
-    ("upper-roman@13", "11.47,0"),
-    ("upper-roman@13.3", "11.73,0"),
-    ("upper-roman@16", "14.11,0"),
-    ("upper-roman@20", "17.64,0"),
-    ("upper-roman@32", "28.22,0"),
-    ("upper-roman@50", "44.09,1"),
+    ("upper-roman@7", "7.03,0"),
+    ("upper-roman@10", "10.05,0"),
+    ("upper-roman@13", "13.06,0"),
+    ("upper-roman@13.3", "13.36,0"),
+    ("upper-roman@16", "16.08,1"),
+    ("upper-roman@20", "20.09,1"),
+    ("upper-roman@32", "32.14,2"),
+    ("upper-roman@50", "50.22,3"),
     // Blitz lays out no inside marker before a block child (submilli
     // SUB-1707).
     ("block", "0,0"),
@@ -70,6 +70,27 @@ fn content_after_inside_markers_starts_where_chrome_puts_it() {
 }
 
 #[test]
+fn symbol_markers_keep_their_width_at_any_device_scale() {
+    // Chrome 155 (macOS) starts the text 18, 22 and 43px in at 13, 16 and
+    // 32px, at device scale factors 1.5, 2 and 3 as at 1.
+    for scale in [1.5, 2.0, 3.0] {
+        for (size, x) in [(13, 18.0), (16, 22.0), (32, 43.0)] {
+            let html = format!(
+                "<ul style='font:{size}px Arial;list-style-position:inside'><li id=t><span id=s>abc</span></li></ul>"
+            );
+            let doc = scaled_page(&html, scale);
+            let item = doc.get_client_bounding_rect(q(&doc, "#t")).unwrap();
+            let span = doc.node_client_rects(q(&doc, "#s"))[0];
+            let start = span.x - item.x;
+            assert!(
+                (start - x).abs() <= 1.0 / 32.0,
+                "{size}px at {scale}: {start}"
+            );
+        }
+    }
+}
+
+#[test]
 fn symbol_markers_of_huge_fonts_lay_out() {
     for size in ["1e9px", "3e38px", "calc(infinity * 1px)"] {
         let html = format!(
@@ -81,10 +102,26 @@ fn symbol_markers_of_huge_fonts_lay_out() {
     }
 }
 
+/// `html` laid out with the bundled Liberation Sans for every family and
+/// the bullet font, as the browser lays pages out.
 fn page(html: &str) -> BaseDocument {
-    laid_out(&format!(
+    scaled_page(html, 1.0)
+}
+
+/// `html` laid out like `page`, at `scale` device pixels per CSS pixel.
+fn scaled_page(html: &str, scale: f32) -> BaseDocument {
+    let mut doc = parse(&format!(
         "<!doctype html><html><head></head><body>{html}</body></html>"
-    ))
+    ));
+    let mut viewport = doc.viewport().clone();
+    viewport.set_hidpi_scale(scale);
+    doc.set_viewport(viewport);
+    *doc.font_ctx().lock().unwrap() = build_font_ctx(&[(
+        FontRole::SansSerif,
+        include_bytes!("../../blitz-dom/assets/test-fonts/LiberationSans-Regular.ttf"),
+    )]);
+    doc.resolve(0.0);
+    doc
 }
 
 /// The first client rect of `#s` relative to the border box of `#t`.

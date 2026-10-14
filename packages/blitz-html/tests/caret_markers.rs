@@ -25,5 +25,6 @@ fn steps_at_inside_markers_match_chrome() {
         count += 1;
     }
     assert!(differing.is_empty(), "{}", differing.join("\n"));
+    // Every recorded case ran: the fixture was not cut short.
     assert_eq!(count, 218);
 }

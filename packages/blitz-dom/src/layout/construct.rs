@@ -26,10 +26,7 @@ use crate::{
     layout::damage::{
         CONSTRUCT_BOX, CONSTRUCT_DESCENDENT, CONSTRUCT_FC, sort_layout_children_by_order,
     },
-    node::{
-        ListItemLayout, ListItemLayoutPosition, Marker, NodeFlags, NodeKind, SpecialElementData,
-        TextBrush, TextInputData, TextLayout,
-    },
+    node::{NodeFlags, NodeKind, SpecialElementData, TextBrush, TextInputData, TextLayout},
     qual_name, stylo_to_parley,
     traversal::iter_children_and_pseudos,
 };
@@ -37,7 +34,7 @@ use crate::{
 use super::{
     box_depth::{clear_omitted_layout, omit_subtree_boxes, past_box_depth},
     damage::ALL_DAMAGE,
-    list::{collect_list_item_children, inside_char_marker_style},
+    list::{MarkerContent, collect_list_item_children, inside_marker_content},
     replaced::is_replaced_element,
     table::build_table_context,
 };
@@ -1301,14 +1298,6 @@ fn release_own_box(node: &mut Node, stale_anonymous_blocks: &mut Vec<NodeId>) {
     stale_anonymous_blocks.extend(std::mem::take(&mut node.anonymous_blocks));
 }
 
-/// An inside list marker, laid out before the item's content.
-enum InsideMarker<'a> {
-    /// A character and a space, in their own style.
-    Char(char, Box<parley::TextStyle<'static, 'static, TextBrush>>),
-    /// Text in the item's style.
-    Text(&'a str),
-}
-
 pub(crate) fn build_inline_layout_into(
     nodes: &crate::NodeTree,
     layout_ctx: &mut LayoutContext<TextBrush>,
@@ -1355,31 +1344,16 @@ pub(crate) fn build_inline_layout_into(
         );
     }
 
-    // An inside list marker is the first content of the item's layout.
-    let inside_marker = match root_node
-        .element_data()
-        .and_then(|el| el.list_item_data.as_deref())
-    {
-        Some(ListItemLayout {
-            marker: Marker::Char(symbol),
-            position: ListItemLayoutPosition::Inside,
-        }) => Some(InsideMarker::Char(
-            *symbol,
-            Box::new(inside_char_marker_style(
-                layout_ctx,
-                font_ctx,
-                root_node_style.as_deref().map(|style| &**style),
-                &parley_style,
-                *symbol,
-                scale,
-            )),
-        )),
-        Some(ListItemLayout {
-            marker: Marker::String(text),
-            position: ListItemLayoutPosition::Inside,
-        }) => Some(InsideMarker::Text(text)),
-        _ => None,
-    };
+    // An inside list marker is the first content of the item's layout. It
+    // is measured here, before the tree builder holds the contexts.
+    let inside_marker = inside_marker_content(
+        layout_ctx,
+        font_ctx,
+        root_node,
+        root_node_style.as_deref().map(|style| &**style),
+        &parley_style,
+        scale,
+    );
 
     // Create a parley tree builder
     let mut builder = layout_ctx.tree_builder(font_ctx, scale, true, &parley_style);
@@ -1396,12 +1370,12 @@ pub(crate) fn build_inline_layout_into(
         .unwrap_or(TextTransform::NONE);
 
     match inside_marker {
-        Some(InsideMarker::Char(symbol, style)) => {
+        Some(MarkerContent::Char(symbol, style)) => {
             builder.push_style_span(*style);
             builder.push_text(&format!("{symbol} "));
             builder.pop_style_span();
         }
-        Some(InsideMarker::Text(text)) => builder.push_text(text),
+        Some(MarkerContent::Text(text)) => builder.push_text(text),
         None => {}
     }
 

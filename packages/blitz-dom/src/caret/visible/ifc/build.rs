@@ -116,7 +116,8 @@ impl<'a> Builder<'a> {
         };
         let style = TextStyle::of(None);
         let start = self.mapping.text.len();
-        let content = marker.text.chars().count() - usize::from(marker.margin);
+        // Every character aligns with the layout; the margin maps no content.
+        let content = marker.text.chars().count() - usize::from(marker.trailing_margin);
         for (index, ch) in marker.text.chars().enumerate() {
             let range = self.aligner.char(ch, style);
             if let Some(range) = range.filter(|_| index < content) {

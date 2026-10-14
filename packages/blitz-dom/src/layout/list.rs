@@ -1,6 +1,9 @@
 use blitz_traits::node_id::NodeId;
 use markup5ever::local_name;
-use parley::{FontContext, FontFamily, LayoutContext, TextStyle, WhiteSpaceCollapse};
+use parley::{
+    FontContext, FontFamily, FontFamilyName, GenericFamily, LayoutContext, TextStyle,
+    WhiteSpaceCollapse,
+};
 use style::computed_values::list_style_type::T as ListStyleType;
 use style::properties::ComputedValues;
 use style::{
@@ -9,13 +12,15 @@ use style::{
 use stylo_taffy::convert::layout_length;
 
 use crate::{
-    BaseDocument,
+    BaseDocument, Node,
     font_metrics::first_available_or_fallback_font_metrics,
     node::{ListItemLayout, ListItemLayoutPosition, Marker, TextBrush},
     stylo_to_parley,
 };
 
 pub(super) const BULLET_FONT_FAMILY: &str = "Bullet, monospace, sans-serif";
+/// The family name of the bundled bullet font.
+const BULLET_FAMILY_NAME: &str = "Bullet";
 
 pub(super) fn collect_list_item_children(
     doc: &mut BaseDocument,
@@ -115,8 +120,41 @@ fn node_list_item_child(
     Some(ListItemLayout { marker, position })
 }
 
+/// An inside list marker's content, laid out before the item's own.
+pub(super) enum MarkerContent<'a> {
+    /// A character and a space, in their own style.
+    Char(char, Box<TextStyle<'static, 'static, TextBrush>>),
+    /// Text in the item's style.
+    Text(&'a str),
+}
+
+/// The inside marker of the inline root `root`, if it is a list item with
+/// one. `text_style` is the root's text style (in CSS px).
+pub(super) fn inside_marker_content<'a>(
+    layout_ctx: &mut LayoutContext<TextBrush>,
+    font_ctx: &mut FontContext,
+    root: &'a Node,
+    root_style: Option<&ComputedValues>,
+    text_style: &TextStyle<'static, 'static, TextBrush>,
+    scale: f32,
+) -> Option<MarkerContent<'a>> {
+    let item = root.element_data()?.list_item_data.as_deref()?;
+    if !matches!(item.position, ListItemLayoutPosition::Inside) {
+        return None;
+    }
+    Some(match &item.marker {
+        Marker::Char(symbol) => MarkerContent::Char(
+            *symbol,
+            Box::new(inside_char_marker_style(
+                layout_ctx, font_ctx, root_style, text_style, *symbol, scale,
+            )),
+        ),
+        Marker::String(text) => MarkerContent::Text(text),
+    })
+}
+
 /// The text style of an inside marker that is a single character followed
-/// by a space, given the item's style and its text style (in CSS px).
+/// by a space.
 ///
 /// Bullet glyphs live in the bundled bullet font. Without it a marker like
 /// disclosure-closed (U+25B8) falls back to the item's own font and renders
@@ -125,12 +163,15 @@ fn node_list_item_child(
 /// A symbol marker (`disc`, `circle` or `square`) also takes Chrome's width.
 /// Chrome sizes it from the item's first available font rather than from a
 /// glyph (Blink's `ListMarker::WidthOfSymbol` and `InlineMarginsForInside`):
-/// the symbol box is `(ascent * 2 / 3 + 1) / 2 + 2` whole device pixels, with
+/// the symbol box is `(ascent * 2 / 3 + 1) / 2 + 2` whole pixels, with
 /// `ascent` rounded, or none at font size 0, with a -1px start margin and a
 /// 1em end margin. Letter and word spacing do not change it, so the marker
 /// takes none, except for the word spacing that widens its space to that
-/// width.
-pub(super) fn inside_char_marker_style(
+/// width. Its glyph comes from the item's fonts, so that the line keeps
+/// their metrics, as Chrome's does. The space keeps the item's white space handling, so a space
+/// starting the item's content collapses into it, as Chrome collapses that
+/// space after a marker.
+fn inside_char_marker_style(
     layout_ctx: &mut LayoutContext<TextBrush>,
     font_ctx: &mut FontContext,
     item_style: Option<&ComputedValues>,
@@ -145,12 +186,21 @@ pub(super) fn inside_char_marker_style(
     };
     marker_style.letter_spacing = 0.0;
     marker_style.word_spacing = 0.0;
-
     let font = item_style.get_font();
+    // Chrome paints the symbol as a shape: the line takes the item's font
+    // metrics, not a bullet font's. So the glyph comes from the item's
+    // fonts, or the sans-serif font their text falls back to, when they
+    // have it.
+    let mut families = stylo_to_parley::font_families(font);
+    families.push(FontFamilyName::Generic(GenericFamily::SansSerif));
+    families.push(FontFamilyName::Named(BULLET_FAMILY_NAME.into()));
+    marker_style.font_family = FontFamily::List(families.into());
+
     let font_size = font.font_size.used_size.0.px();
-    let ascent = first_available_or_fallback_font_metrics(font_ctx, font, font_size, scale)
-        .map_or(0.0, |metrics| metrics.ascent * scale);
-    let width = symbol_marker_width(f64::from(ascent), f64::from(font_size * scale)) / scale;
+    // In CSS pixels: Chrome's marker is as wide at any device scale factor.
+    let ascent = first_available_or_fallback_font_metrics(font_ctx, font, font_size, 1.0)
+        .map_or(0.0, |metrics| metrics.ascent);
+    let width = symbol_marker_width(f64::from(ascent), f64::from(font_size));
 
     // Collapsible white space ending a paragraph is removed: preserve it.
     let mut measured_style = marker_style.clone();
@@ -167,7 +217,8 @@ pub(super) fn inside_char_marker_style(
     marker_style
 }
 
-/// Whether an item's marker is one of Chrome's symbol markers.
+/// Whether an item's marker is one of Chrome's symbol markers, the styles
+/// `marker_for_style` gives a bullet glyph and Chrome draws as a shape.
 pub(crate) fn is_symbol_marker(style: &ComputedValues) -> bool {
     match &style.clone_list_style_type().0 {
         CounterStyle::Name(name) => matches!(&*name.0, "disc" | "circle" | "square"),
@@ -175,7 +226,7 @@ pub(crate) fn is_symbol_marker(style: &ComputedValues) -> bool {
     }
 }
 
-/// Chrome's inside symbol marker width, margins included, in device pixels.
+/// Chrome's inside symbol marker width, margins included, in CSS pixels.
 /// Blink's integer arithmetic, in floats so that no font size overflows it.
 fn symbol_marker_width(ascent: f64, font_size: f64) -> f32 {
     let symbol = if font_size == 0.0 {
