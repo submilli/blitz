@@ -94,16 +94,18 @@ fn rasters_of_nested_documents_decode_with_the_document() {
     assert_eq!(decodes(&svg).len(), 1);
 }
 
-/// A raster whose header is readable but whose pixels are not keeps its place
-/// and draws nothing.
+/// A raster whose header is readable but whose pixels are corrupt uses the
+/// same charged icon as a completely unreadable image.
 #[test]
-fn rasters_that_do_not_decode_have_no_decode() {
+fn corrupt_rasters_draw_a_charged_broken_image() {
     let budget = DecodedImageBudget::default();
     let svg = parse(&image("image/png", &declared_png(16)), &budget);
     let kinds = kinds(&svg.tree);
     assert_eq!(kinds.len(), 1, "a header without pixels");
-    assert!(svg.nested_rasters().decoded(&kinds[0]).is_none());
-    assert_eq!(budget.retained_bytes(), svg.retained_bytes);
+    assert!(matches!(kinds[0], usvg::ImageKind::Broken(_)));
+    let raster = svg.nested_rasters().decoded(&kinds[0]).unwrap();
+    assert_eq!((raster.width, raster.height), (14, 16));
+    assert_eq!(budget.retained_bytes(), svg.retained_bytes + 14 * 16 * 4);
 }
 
 #[test]
@@ -214,4 +216,102 @@ fn rasters_decode_in_document_order() {
     };
     assert!(decoded(&first), "the first image decodes");
     assert!(!decoded(&second), "the second passes the bound");
+}
+
+#[test]
+fn unresolved_images_share_the_byte_ceiling_with_cached_decodes() {
+    let large = |grey: u8| solid_png(4096, 2048, [grey, grey, grey, 255]);
+    let hidden = image("image/png", &large(1)).replace("<image ", "<image visibility='hidden' ");
+    let body = format!(
+        "{hidden}{}{}",
+        image("image/png", &large(2)),
+        image("image/png", &[0, 0, 0])
+    );
+    let budget = DecodedImageBudget::default();
+    let svg = parse(&body, &budget);
+    assert!(svg.nested_rasters().decoded_bytes() <= 32 * 1024 * 1024);
+    assert_eq!(
+        budget.retained_bytes(),
+        svg.retained_bytes + svg.nested_rasters().decoded_bytes()
+    );
+}
+
+#[test]
+fn broken_images_require_explicit_viewports_and_preserve_alignment() {
+    for attrs in [
+        "",
+        "width='8'",
+        "height='8'",
+        "width='8' height='8' preserveAspectRatio='none'",
+        "width='0' height='8'",
+    ] {
+        let source = format!("<image href='data:image/png;base64,AAAA' {attrs}/>");
+        assert!(
+            kinds(&parse(&source, &Default::default()).tree).is_empty(),
+            "{attrs}"
+        );
+    }
+    let svg = parse(
+        "<image href='data:image/png;base64,AAAA' width='8' height='16'/>",
+        &Default::default(),
+    );
+    assert!(matches!(kinds(&svg.tree)[0], usvg::ImageKind::Broken(_)));
+}
+
+#[test]
+fn failed_data_types_keep_one_shared_charged_icon() {
+    let body = ["image/png", "image/svg+xml", "text/plain", "image/bmp"]
+        .map(|mime| image(mime, b"invalid image"))
+        .join("");
+    let budget = DecodedImageBudget::default();
+    let svg = parse(&body, &budget);
+    let images = kinds(&svg.tree);
+    assert_eq!(images.len(), 4);
+    assert!(
+        images
+            .iter()
+            .all(|kind| matches!(kind, usvg::ImageKind::Broken(_)))
+    );
+    let ids = decodes(&svg);
+    assert!(ids.iter().all(|id| *id == ids[0]));
+    assert_eq!(svg.nested_rasters().decoded_bytes(), 14 * 16 * 4);
+}
+
+#[test]
+fn failed_filter_sources_stay_transparent() {
+    let body = "<filter id='f'><feImage href='data:image/png;base64,AAAA'/></filter><rect width='8' height='8' filter='url(#f)'/>";
+    let svg = parse(body, &Default::default());
+    assert_eq!(svg.nested_rasters().decoded_bytes(), 0);
+    assert!(!svg.tree.filters().is_empty());
+    assert!(
+        svg.tree.filters()[0]
+            .primitives()
+            .iter()
+            .all(|p| !matches!(p.kind(), usvg::filter::Kind::Image(_)))
+    );
+}
+
+#[test]
+fn plain_mime_rasters_keep_their_pixels() {
+    let svg = parse(
+        &image("text/plain", &solid_png(8, 8, [255, 0, 0, 255])),
+        &Default::default(),
+    );
+    let images = kinds(&svg.tree);
+    assert!(matches!(images[0], usvg::ImageKind::PNG(_)));
+    assert_eq!(
+        &svg.nested_rasters()
+            .decoded(&images[0])
+            .unwrap()
+            .data
+            .data()[..4],
+        &[255, 0, 0, 255]
+    );
+}
+
+#[test]
+fn corrupt_headers_without_explicit_sizes_draw_nothing() {
+    let png = declared_png(16);
+    let source = image("image/png", &png).replace("width='8' height='8'", "");
+    assert!(kinds(&parse(&source, &Default::default()).tree).is_empty());
 }

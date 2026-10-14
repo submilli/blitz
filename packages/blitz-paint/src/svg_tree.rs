@@ -6,6 +6,7 @@
 mod convert;
 mod filters;
 pub(crate) mod primitive;
+mod raster;
 mod resolution;
 mod shapes;
 
@@ -24,7 +25,31 @@ pub fn paint_svg_tree(
     rasters: &SvgNestedRasters,
     transform: Affine,
 ) {
-    let mut budget = Budget::default();
+    paint_tree(scene, tree, rasters, transform, true);
+}
+
+/// Filter-image sources use exact raster sampling rather than
+/// the software bitmap shader used by SVG image painting.
+pub fn paint_svg_tree_exact(
+    scene: &mut impl PaintScene,
+    tree: &usvg::Tree,
+    rasters: &SvgNestedRasters,
+    transform: Affine,
+) {
+    paint_tree(scene, tree, rasters, transform, false);
+}
+
+fn paint_tree(
+    scene: &mut impl PaintScene,
+    tree: &usvg::Tree,
+    rasters: &SvgNestedRasters,
+    transform: Affine,
+    fixed: bool,
+) {
+    let mut budget = Budget {
+        fixed_image_sampling: fixed,
+        ..Default::default()
+    };
     let _ = children(
         scene,
         tree.root(),
@@ -38,6 +63,7 @@ pub fn paint_svg_tree(
 
 /// Work is cumulative, including temporary images released before later groups.
 struct Budget {
+    fixed_image_sampling: bool,
     pixels: usize,
     work: u64,
     visits: usize,
@@ -48,6 +74,7 @@ struct Budget {
 impl Default for Budget {
     fn default() -> Self {
         Self {
+            fixed_image_sampling: true,
             pixels: MAX_INTERMEDIATE_PIXELS,
             work: MAX_WORK,
             visits: 65_536,
@@ -149,14 +176,14 @@ fn children(
                     if budget.raster(raster, converted).is_err() {
                         continue;
                     }
-                    let brush = peniko::ImageBrush::new(peniko::ImageData {
-                        data: raster.data.clone(),
-                        format: peniko::ImageFormat::Rgba8,
-                        alpha_type: peniko::ImageAlphaType::Alpha,
-                        width: raster.width,
-                        height: raster.height,
-                    });
-                    scene.draw_image(brush.as_ref(), transform);
+                    let bounds = image.abs_bounding_box();
+                    let destination = global.transform_rect_bbox(Rect::new(
+                        f64::from(bounds.left()),
+                        f64::from(bounds.top()),
+                        f64::from(bounds.right()),
+                        f64::from(bounds.bottom()),
+                    ));
+                    let _ = raster::paint(scene, raster, transform, destination, budget);
                 }
             }
             usvg::Node::Image(_) => {}
@@ -201,11 +228,16 @@ fn paint_group(
     } else {
         false
     };
+    let saved_sampling = budget.fixed_image_sampling;
+    if clip.is_some() {
+        budget.fixed_image_sampling = true;
+    }
     let result = if group.filters().is_empty() {
         children(scene, group, rasters, global, budget, converted, depth)
     } else {
         filters::paint(scene, group, rasters, global, budget, depth)
     };
+    budget.fixed_image_sampling = saved_sampling;
     if layered {
         scene.pop_layer();
     }

@@ -115,6 +115,7 @@ impl CanvasSvgFilter {
         svg.push_str(")\"/></svg>");
         let options = usvg::Options {
             image_href_resolver: usvg::ImageHrefResolver {
+                resolve_image: None,
                 resolve_data: Box::new(|_, _, _| None),
                 resolve_string: Box::new(|_, _| None),
             },

@@ -43,8 +43,17 @@ impl BodyDigest {
 
     /// The digest of a `data:` URL's body; `None` for other URLs.
     pub(crate) fn of_data_url(url: &str) -> Option<Self> {
-        let data = data_url::DataUrl::process(url).ok()?;
-        let (body, _) = data.decode_to_vec().ok()?;
+        if !url
+            .get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+        {
+            return None;
+        }
+        let body = data_url::DataUrl::process(url)
+            .ok()
+            .and_then(|data| data.decode_to_vec().ok())
+            .map(|(body, _)| body)
+            .unwrap_or_default();
         Some(Self::of(&body))
     }
 }

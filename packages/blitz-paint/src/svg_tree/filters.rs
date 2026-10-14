@@ -94,7 +94,7 @@ pub(super) fn paint(
 }
 
 /// A bounded whole-pixel surface, admitted before conversion to renderer sides.
-fn dimensions(extent: Rect) -> Result<[u16; 2], GraphError> {
+pub(super) fn dimensions(extent: Rect) -> Result<[u16; 2], GraphError> {
     let sides = [extent.width(), extent.height()];
     if ![extent.x0, extent.y0, extent.x1, extent.y1]
         .iter()
@@ -301,7 +301,7 @@ fn image_pixels(
     Ok(image)
 }
 
-fn brush(pixels: Pixmap) -> peniko::ImageBrush {
+pub(super) fn brush(pixels: Pixmap) -> peniko::ImageBrush {
     let width = u32::from(pixels.width());
     let height = u32::from(pixels.height());
     peniko::ImageBrush::new(peniko::ImageData {

@@ -862,6 +862,11 @@ fn convert_image_inner(
         log::warn!("The 'feImage' element lacks the 'xlink:href' attribute. Skipped.");
     })?;
     let img_data = super::image::get_href_data(href, state)?;
+    // Failed filter sources remain transparent; only <image> elements draw
+    // an embedder-provided broken-image placeholder.
+    if matches!(img_data, crate::ImageKind::Broken(_)) {
+        return None;
+    }
     let actual_size = img_data.actual_size()?;
 
     let aspect: AspectRatio = fe.attribute(AId::PreserveAspectRatio).unwrap_or_default();

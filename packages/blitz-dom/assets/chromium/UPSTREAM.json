@@ -1,0 +1,6 @@
+{
+  "source": "https://chromium.googlesource.com/chromium/src/+/cfaadc5a132d78e1828635aa8405a499f3e14864/third_party/blink/public/default_100_percent/blink/broken_image.png",
+  "revision": "cfaadc5a132d78e1828635aa8405a499f3e14864",
+  "sha256": "efcb5c77b9b97421b60982637d0a3d1e352b0275f294be3c62173743b3f0d8ee",
+  "license": "LICENSE"
+}

@@ -137,3 +137,27 @@ fn images(group: &usvg::Group) -> usize {
         })
         .sum()
 }
+
+#[test]
+fn uppercase_and_malformed_data_images_wait_until_loaded() {
+    let png = data_url("image/png", &png_body(37)).replacen("data:", "DATA:", 1);
+    for href in [png.as_str(), "DATA:image/png;base64,!!!", "DATA:malformed"] {
+        let source = svg(&format!("<image href='{href}' width='4' height='4'/>"));
+        let parse = |loaded| {
+            parse_svg_image_showing(
+                source.as_bytes(),
+                &default_svg_fonts(),
+                &Default::default(),
+                NestedImages::Loaded(Arc::new(loaded)),
+            )
+            .unwrap()
+        };
+        let unloaded = parse(HashSet::new());
+        assert!(unloaded.subresources.omits_images, "{href}");
+        assert_eq!(images(unloaded.tree.root()), 0);
+        let digest = BodyDigest::of_data_url(href).unwrap();
+        let loaded = parse(HashSet::from([digest]));
+        assert!(!loaded.subresources.omits_images);
+        assert_eq!(images(loaded.tree.root()), 1);
+    }
+}

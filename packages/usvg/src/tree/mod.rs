@@ -1468,6 +1468,9 @@ impl Path {
 /// An embedded image kind.
 #[derive(Clone)]
 pub enum ImageKind {
+    /// A failed image represented by the embedder's PNG placeholder.
+    /// The image viewport requires explicit dimensions; `none` alignment hides it.
+    Broken(Arc<Vec<u8>>),
     /// A reference to raw JPEG data. Should be decoded by the caller.
     JPEG(Arc<Vec<u8>>),
     /// A reference to raw PNG data. Should be decoded by the caller.
@@ -1481,12 +1484,23 @@ pub enum ImageKind {
 }
 
 impl ImageKind {
+    /// A raster's dimensions from its encoded header, without decoding pixels.
+    /// Nested SVG documents and unreadable headers have no raster size.
+    pub fn raster_size(&self) -> Option<Size> {
+        if matches!(self, Self::SVG(_)) {
+            None
+        } else {
+            self.actual_size()
+        }
+    }
+
     pub(crate) fn actual_size(&self) -> Option<Size> {
         match self {
             ImageKind::JPEG(data)
             | ImageKind::PNG(data)
             | ImageKind::GIF(data)
-            | ImageKind::WEBP(data) => imagesize::blob_size(data)
+            | ImageKind::WEBP(data)
+            | ImageKind::Broken(data) => imagesize::blob_size(data)
                 .ok()
                 .and_then(|size| Size::from_wh(size.width as f32, size.height as f32))
                 .log_none(|| log::warn!("Image has an invalid size. Skipped.")),
@@ -1498,6 +1512,7 @@ impl ImageKind {
 impl std::fmt::Debug for ImageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
+            ImageKind::Broken(_) => f.write_str("ImageKind::Broken(..)"),
             ImageKind::JPEG(_) => f.write_str("ImageKind::JPEG(..)"),
             ImageKind::PNG(_) => f.write_str("ImageKind::PNG(..)"),
             ImageKind::GIF(_) => f.write_str("ImageKind::GIF(..)"),

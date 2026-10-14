@@ -1084,7 +1084,7 @@ impl XmlWriterExt for XmlWriter {
         let svg_string;
         let (mime, data) = match kind {
             ImageKind::JPEG(data) => ("jpeg", data.as_slice()),
-            ImageKind::PNG(data) => ("png", data.as_slice()),
+            ImageKind::PNG(data) | ImageKind::Broken(data) => ("png", data.as_slice()),
             ImageKind::GIF(data) => ("gif", data.as_slice()),
             ImageKind::WEBP(data) => ("webp", data.as_slice()),
             ImageKind::SVG(tree) => {

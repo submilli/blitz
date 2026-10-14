@@ -26,6 +26,11 @@ pub type ImageHrefStringResolverFn<'a> =
 /// to the default one. For example, you can forbid access to local files (which is allowed by default)
 /// or add support for resolving actual URLs (usvg doesn't do any network requests).
 pub struct ImageHrefResolver<'a> {
+    /// Validate an image only after its visible, nonempty viewport is known.
+    /// An embedder may retain a failed raster as `ImageKind::Broken` without
+    /// decoding images that the parser discards for empty geometry.
+    pub resolve_image: Option<Box<dyn Fn(ImageKind) -> Option<ImageKind> + Send + Sync + 'a>>,
+
     /// Resolver function that will be used when `xlink:href` contains a
     /// [Data URL](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URIs).
     ///
@@ -39,6 +44,7 @@ pub struct ImageHrefResolver<'a> {
 impl Default for ImageHrefResolver<'_> {
     fn default() -> Self {
         ImageHrefResolver {
+            resolve_image: None,
             resolve_data: ImageHrefResolver::default_data_resolver(),
             resolve_string: ImageHrefResolver::default_string_resolver(),
         }
@@ -156,29 +162,38 @@ pub(crate) fn convert(
     };
 
     let actual_size = kind.actual_size()?;
+    let broken = matches!(kind, ImageKind::Broken(_));
 
     let x = node.convert_user_length(AId::X, state, Length::zero());
     let y = node.convert_user_length(AId::Y, state, Length::zero());
     let mut width = node.convert_user_length(
         AId::Width,
         state,
-        Length::new_number(actual_size.width() as f64),
+        if broken {
+            Length::zero()
+        } else {
+            Length::new_number(actual_size.width() as f64)
+        },
     );
     let mut height = node.convert_user_length(
         AId::Height,
         state,
-        Length::new_number(actual_size.height() as f64),
+        if broken {
+            Length::zero()
+        } else {
+            Length::new_number(actual_size.height() as f64)
+        },
     );
 
     match (
         node.attribute::<Length>(AId::Width),
         node.attribute::<Length>(AId::Height),
     ) {
-        (Some(_), None) => {
+        (Some(_), None) if !broken => {
             // Only width was defined, so we need to scale height accordingly.
             height = actual_size.height() * (width / actual_size.width());
         }
-        (None, Some(_)) => {
+        (None, Some(_)) if !broken => {
             // Only height was defined, so we need to scale width accordingly.
             width = actual_size.width() * (height / actual_size.height());
         }
@@ -186,10 +201,29 @@ pub(crate) fn convert(
     };
 
     let aspect: AspectRatio = node.attribute(AId::PreserveAspectRatio).unwrap_or_default();
+    if broken && aspect.align == svgtypes::Align::None {
+        return None;
+    }
 
     let rect = NonZeroRect::from_xywh(x, y, width, height);
     let rect = rect.log_none(|| log::warn!("Image has an invalid size. Skipped."))?;
 
+    let kind = if visible {
+        match &state.opt.image_href_resolver.resolve_image {
+            Some(resolve) => resolve(kind)?,
+            None => kind,
+        }
+    } else {
+        kind
+    };
+    if matches!(kind, ImageKind::Broken(_))
+        && (aspect.align == svgtypes::Align::None
+            || node.attribute::<Length>(AId::Width).is_none()
+            || node.attribute::<Length>(AId::Height).is_none())
+    {
+        return None;
+    }
+    let actual_size = kind.actual_size()?;
     convert_inner(
         kind,
         id,
@@ -214,21 +248,41 @@ pub(crate) fn convert_inner(
     cache: &mut converter::Cache,
     parent: &mut Group,
 ) -> Option<()> {
-    let aligned_size = fit_view_box(actual_size, rect, aspect);
-    let (aligned_x, aligned_y) = crate::aligned_pos(
-        aspect.align,
-        rect.x(),
-        rect.y(),
-        rect.width() - aligned_size.width(),
-        rect.height() - aligned_size.height(),
-    );
+    let raster = !matches!(kind, ImageKind::SVG(_));
+    let aligned_size = if raster {
+        fit_raster(actual_size, rect, aspect)
+    } else {
+        fit_view_box(actual_size, rect, aspect)
+    };
+    let (aligned_x, aligned_y) = if raster && !aspect.slice {
+        align_raster(rect, aligned_size, actual_size, aspect)
+    } else {
+        crate::aligned_pos(
+            aspect.align,
+            rect.x(),
+            rect.y(),
+            rect.width() - aligned_size.width(),
+            rect.height() - aligned_size.height(),
+        )
+    };
     let view_box = aligned_size.to_non_zero_rect(aligned_x, aligned_y);
-
+    // gfx::RectFToSkRect stores edges in single precision; Skia then
+    // subtracts those edges when constructing the raster paint matrix.
+    let width = if raster {
+        view_box.right() - view_box.left()
+    } else {
+        view_box.width()
+    };
+    let height = if raster {
+        view_box.bottom() - view_box.top()
+    } else {
+        view_box.height()
+    };
     let image_ts = Transform::from_row(
-        view_box.width() / actual_size.width(),
+        width / actual_size.width(),
         0.0,
         0.0,
-        view_box.height() / actual_size.height(),
+        height / actual_size.height(),
         view_box.x(),
         view_box.y(),
     );
@@ -287,7 +341,12 @@ pub(crate) fn convert_inner(
 
 pub(crate) fn get_href_data(href: &str, state: &converter::State) -> Option<ImageKind> {
     if let Ok(url) = data_url::DataUrl::process(href) {
-        let (data, _) = url.decode_to_vec().ok()?;
+        // Forward malformed data as an empty failed body. The default resolver
+        // still drops it; embedders may retain the failure for an <image>.
+        let data = url
+            .decode_to_vec()
+            .map(|(data, _)| data)
+            .unwrap_or_default();
 
         let mime = format!(
             "{}/{}",
@@ -296,6 +355,11 @@ pub(crate) fn get_href_data(href: &str, state: &converter::State) -> Option<Imag
         );
 
         (state.opt.image_href_resolver.resolve_data)(&mime, Arc::new(data), state.opt)
+    } else if href
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+    {
+        (state.opt.image_href_resolver.resolve_data)("", Arc::new(Vec::new()), state.opt)
     } else {
         (state.opt.image_href_resolver.resolve_string)(href, state.opt)
     }
@@ -345,4 +409,50 @@ fn fit_view_box(size: Size, rect: NonZeroRect, aspect: AspectRatio) -> Size {
     } else {
         size.scale_to(s)
     }
+}
+
+/// Blink's SVGPreserveAspectRatio::TransformRect fits raster rectangles in
+/// single precision. Dividing by h/w, rather than multiplying by w/h, retains
+/// its edge rounding; Skia's quantized bitmap shader observes that rounding.
+fn fit_raster(size: Size, rect: NonZeroRect, aspect: AspectRatio) -> Size {
+    if aspect.align == svgtypes::Align::None || aspect.slice {
+        return fit_view_box(size, rect, aspect);
+    }
+    let ratio = size.height() / size.width();
+    let (mut width, mut height) = (rect.width(), rect.height());
+    if rect.height() > rect.width() * ratio {
+        height = rect.width() * ratio;
+    }
+    if rect.width() > rect.height() / ratio {
+        width = rect.height() / ratio;
+    }
+    Size::from_wh(width, height).unwrap_or_else(|| fit_view_box(size, rect, aspect))
+}
+
+fn align_raster(rect: NonZeroRect, fitted: Size, natural: Size, aspect: AspectRatio) -> (f32, f32) {
+    use svgtypes::Align::*;
+    let ratio = natural.height() / natural.width();
+    let width_fitted = rect.width() > rect.height() / ratio;
+    let height_fitted = rect.height() > rect.width() * ratio;
+    let x = if width_fitted {
+        match aspect.align {
+            XMidYMin | XMidYMid | XMidYMax => rect.x() + rect.width() / 2.0 - fitted.width() / 2.0,
+            XMaxYMin | XMaxYMid | XMaxYMax => rect.x() + rect.width() - fitted.width(),
+            _ => rect.x(),
+        }
+    } else {
+        rect.x()
+    };
+    let y = if height_fitted {
+        match aspect.align {
+            XMinYMid | XMidYMid | XMaxYMid => {
+                rect.y() + rect.height() / 2.0 - fitted.height() / 2.0
+            }
+            XMinYMax | XMidYMax | XMaxYMax => rect.y() + rect.height() - fitted.height(),
+            _ => rect.y(),
+        }
+    } else {
+        rect.y()
+    };
+    (x, y)
 }

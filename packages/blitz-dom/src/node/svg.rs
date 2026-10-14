@@ -77,7 +77,7 @@ impl SvgIntrinsicDimensions {
 /// tree keeps (see [`crate::svg_nested_rasters`]).
 pub(crate) struct SvgParseCollectors {
     pub(crate) recorder: SubresourceRecorder,
-    rasters: NestedRasterDecoder,
+    pub(crate) rasters: NestedRasterDecoder,
     /// What converting the document and those it nests holds from the budget
     /// until it is parsed (see [`crate::svg_bounds`]).
     pub(crate) conversions: crate::svg_bounds::ConversionReservations,

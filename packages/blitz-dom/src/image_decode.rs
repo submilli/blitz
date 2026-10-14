@@ -91,7 +91,7 @@ fn undecodable(bytes: &Bytes, image_err: &str, svg_err: &str) -> String {
 /// bounded separately, before either is allocated: a grayscale image's
 /// decoded buffer is a quarter of its RGBA one. Together they peak at
 /// 192 MiB, well inside a 512 MiB guest.
-const MAX_DECODED_SIDE: u32 = 16_384;
+pub(crate) const MAX_DECODED_SIDE: u32 = 16_384;
 const MAX_DECODE_ALLOCATION: u64 = 128 * 1024 * 1024;
 const MAX_RGBA_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -133,7 +133,7 @@ fn decode_bounded(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
 }
 
 /// Why [`decode_charged`] produced no image.
-enum DecodeRefusal {
+pub(crate) enum DecodeRefusal {
     /// The image is readable but its pixels would pass the decoded image budget.
     Budget,
     /// The bytes are not a raster image within the decode bounds.
@@ -142,7 +142,7 @@ enum DecodeRefusal {
 
 /// [`decode_bounded`] within `budget`: the RGBA bytes are reserved from the
 /// header before any pixel buffer is allocated, and charged to the image.
-fn decode_charged(
+pub(crate) fn decode_charged(
     bytes: &[u8],
     budget: &DecodedImageBudget,
 ) -> Result<RasterImageData, DecodeRefusal> {

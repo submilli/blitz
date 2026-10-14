@@ -12,7 +12,7 @@ use crate::DecodedImageBudget;
 use crate::node::RasterImageData;
 use crate::svg_walk::{Visit, walk};
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 /// Decoded bytes of the raster images one SVG document may nest, a quarter of
 /// the decoded image budget.
@@ -81,14 +81,28 @@ impl WeakSvgNestedRasters {
     }
 }
 
-/// Decodes the nested rasters of one SVG document once it is parsed. usvg
-/// resolves an image before deciding to keep it (an `<image>` without area is
-/// skipped), and makes some rasters without its resolver (the colour bitmap
-/// glyphs of flattened text), so only the finished tree says what to decode.
+/// Validates retained image pixels during parsing, then collects those decodes
+/// with the finished tree. Empty viewports are skipped before validation. The
+/// final pass also decodes images usvg makes without its resolver (bitmap glyphs)
+/// while sharing the same document byte ceiling.
 #[derive(Clone)]
 pub(crate) struct NestedRasterDecoder {
     budget: DecodedImageBudget,
     purpose: RasterPurpose,
+    resolved: Arc<Mutex<Resolved>>,
+}
+
+#[derive(Default)]
+struct Resolved {
+    rasters: HashMap<Arc<Vec<u8>>, ResolvedRaster>,
+    bytes: u64,
+}
+
+#[derive(Clone)]
+enum ResolvedRaster {
+    Decoded(RasterImageData),
+    Broken,
+    Refused,
 }
 
 /// What a parsed document is for, which decides whether its rasters decode.
@@ -105,17 +119,82 @@ impl NestedRasterDecoder {
         Self {
             budget: budget.clone(),
             purpose,
+            resolved: Default::default(),
         }
     }
 
-    /// Whether the resolver may give usvg `image`: a raster whose header is
-    /// readable and within the decode bounds and the document's bound. Nested
-    /// SVG documents are always kept.
+    /// Header admission before usvg fixes geometry; malformed images are
+    /// handled separately, but readable images beyond the limits are omitted.
     pub(crate) fn admits(image: &usvg::ImageKind) -> bool {
-        raster_body(image).is_none_or(|encoded| {
-            crate::image_decode::bounded_rgba_bytes(encoded)
-                .is_some_and(|rgba| rgba <= MAX_NESTED_SVG_IMAGE_BYTES)
+        image.raster_size().is_none_or(|size| {
+            let (width, height) = (f64::from(size.width()), f64::from(size.height()));
+            width <= f64::from(crate::image_decode::MAX_DECODED_SIDE)
+                && height <= f64::from(crate::image_decode::MAX_DECODED_SIDE)
+                && width * height * 4.0 <= MAX_NESTED_SVG_IMAGE_BYTES as f64
         })
+    }
+
+    /// Validate and decode a resolved raster before usvg fixes its intrinsic
+    /// dimensions. Corrupt pixels use the fixed broken-image placeholder;
+    /// resource refusals retain geometry without decoded pixels. Successful decodes are held once and
+    /// transferred to the finished tree, including shared equal bodies.
+    pub(crate) fn resolve(&self, image: usvg::ImageKind) -> Option<usvg::ImageKind> {
+        use crate::image_decode::{DecodeRefusal, decode_charged};
+        let Some(encoded) = raster_body(&image) else {
+            return Some(image);
+        };
+        if self.purpose == RasterPurpose::Measure {
+            return Some(image);
+        }
+        let mut resolved = self.resolved.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(decoded) = resolved.rasters.get(encoded) {
+            return match decoded {
+                ResolvedRaster::Decoded(_) | ResolvedRaster::Refused => Some(image),
+                ResolvedRaster::Broken => Some(Self::broken()),
+            };
+        }
+        if resolved.rasters.len() >= 1024 {
+            return Some(image);
+        }
+        let rgba = crate::image_decode::bounded_rgba_bytes(encoded);
+        if rgba.is_some_and(|rgba| resolved.bytes.saturating_add(rgba) > MAX_NESTED_SVG_IMAGE_BYTES)
+        {
+            resolved
+                .rasters
+                .insert(Arc::clone(encoded), ResolvedRaster::Refused);
+            return Some(image);
+        }
+        match decode_charged(encoded, &self.budget) {
+            Ok(decoded) => {
+                resolved.bytes = resolved.bytes.saturating_add(decoded.data.len() as u64);
+                resolved
+                    .rasters
+                    .insert(Arc::clone(encoded), ResolvedRaster::Decoded(decoded));
+                Some(image)
+            }
+            Err(DecodeRefusal::Budget | DecodeRefusal::Image(image::ImageError::Limits(_))) => {
+                resolved
+                    .rasters
+                    .insert(Arc::clone(encoded), ResolvedRaster::Refused);
+                Some(image)
+            }
+            Err(DecodeRefusal::Image(_)) => {
+                resolved
+                    .rasters
+                    .insert(Arc::clone(encoded), ResolvedRaster::Broken);
+                Some(Self::broken())
+            }
+        }
+    }
+
+    /// A malformed data image has no natural dimensions. Its fixed PNG is
+    /// embedded from Chromium with its license/provenance under assets/chromium.
+    pub(crate) fn broken() -> usvg::ImageKind {
+        // One encoded asset per process, with ordinary per-document decode charges.
+        static PNG: std::sync::OnceLock<Arc<Vec<u8>>> = std::sync::OnceLock::new();
+        usvg::ImageKind::Broken(Arc::clone(PNG.get_or_init(|| {
+            Arc::new(include_bytes!("../assets/chromium/broken_image.png").to_vec())
+        })))
     }
 
     /// Decode the rasters the finished `tree` keeps, in document order:
@@ -129,11 +208,19 @@ impl NestedRasterDecoder {
         let mut rasters = Rasters::new();
         // `Arc<Vec<u8>>` hashes its content, so equal bodies share one decode.
         let mut by_content: HashMap<&Arc<Vec<u8>>, Option<RasterImageData>> = HashMap::new();
-        let mut bytes = 0u64;
+        let resolved = self.resolved.lock().unwrap_or_else(PoisonError::into_inner);
+        // Cached pixels remain held during this pass; reserve their entire
+        // cost before admitting uncached glyphs or placeholders.
+        let mut bytes = resolved.bytes;
         for encoded in kept_bodies(tree) {
-            let decoded = by_content
-                .entry(encoded)
-                .or_insert_with(|| self.decode_within(encoded, &mut bytes));
+            let decoded =
+                by_content
+                    .entry(encoded)
+                    .or_insert_with(|| match resolved.rasters.get(encoded) {
+                        Some(ResolvedRaster::Decoded(decoded)) => Some(decoded.clone()),
+                        Some(ResolvedRaster::Refused | ResolvedRaster::Broken) => None,
+                        None => self.decode_within(encoded, &mut bytes),
+                    });
             if let Some(decoded) = decoded {
                 let encoded = Arc::clone(encoded);
                 let decoded = decoded.clone();
@@ -191,7 +278,8 @@ fn raster_body(image: &usvg::ImageKind) -> Option<&Arc<Vec<u8>>> {
         usvg::ImageKind::JPEG(data)
         | usvg::ImageKind::PNG(data)
         | usvg::ImageKind::GIF(data)
-        | usvg::ImageKind::WEBP(data) => Some(data),
+        | usvg::ImageKind::WEBP(data)
+        | usvg::ImageKind::Broken(data) => Some(data),
         usvg::ImageKind::SVG(_) => None,
     }
 }

@@ -21,11 +21,11 @@ use anyrender::{PaintScene, Scene};
 use blitz_dom::{BaseDocument, NodeId, util::Color};
 use render::BlitzDomPainter;
 #[cfg(feature = "svg")]
-pub use svg_tree::paint_svg_tree;
-#[cfg(feature = "svg")]
 pub use svg_tree::primitive::{
     Operation as SvgFilterOperation, inputs as svg_filter_inputs, operation as svg_filter_operation,
 };
+#[cfg(feature = "svg")]
+pub use svg_tree::{paint_svg_tree, paint_svg_tree_exact};
 
 const FONT_EMBOLDEN_ENABLED: bool = cfg!(any(
     feature = "font-embolden",

@@ -126,10 +126,12 @@ fn svg_options(
     let budget = budget.clone();
     let recorder = collectors.recorder.clone();
     let conversions = collectors.conversions.clone();
+    let rasters = collectors.rasters.clone();
     let decode = usvg::ImageHrefResolver::default_data_resolver();
     usvg::Options {
         fontdb: Arc::clone(fonts),
         image_href_resolver: usvg::ImageHrefResolver {
+            resolve_image: Some(Box::new(move |image| rasters.resolve(image))),
             resolve_data: Box::new(move |mime, data, options| {
                 let body = BodyDigest::of(&data);
                 if !recorder.admits(body)
@@ -147,26 +149,51 @@ fn svg_options(
                 if sources.fetch_add(size, Ordering::Relaxed) + size > MAX_SVG_SOURCE_BYTES {
                     return None;
                 }
-                let kind = {
-                    // usvg parses text as a document; a raster is not text.
-                    let _held = match std::str::from_utf8(&data) {
-                        Ok(text) => Some(prepare_nested(text, &budget, &recorder, &conversions)?),
-                        Err(_) => None,
+                if matches!(
+                    mime,
+                    "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp"
+                ) {
+                    let kind =
+                        decode(mime, data, options).unwrap_or_else(NestedRasterDecoder::broken);
+                    return if kind.raster_size().is_none() {
+                        Some(NestedRasterDecoder::broken())
+                    } else {
+                        NestedRasterDecoder::admits(&kind).then_some(kind)
                     };
-                    match decode(mime, Arc::clone(&data), options) {
-                        Some(kind) => kind,
-                        // usvg refuses a root size that is empty before it
-                        // resolves anything nested, so a retry counts nothing
-                        // twice. A prefixed root size usvg accepted stays
-                        // (SUB-1606).
-                        None => {
-                            let resized =
-                                crate::svg_root_size::nested_chrome_root_size(mime, &data)?;
-                            decode(mime, resized, options)?
-                        }
+                }
+                if mime == "text/plain" && image::guess_format(&data).is_ok() {
+                    let kind =
+                        decode(mime, data, options).unwrap_or_else(NestedRasterDecoder::broken);
+                    return if kind.raster_size().is_none() {
+                        Some(NestedRasterDecoder::broken())
+                    } else {
+                        NestedRasterDecoder::admits(&kind).then_some(kind)
+                    };
+                }
+                if !matches!(mime, "image/svg+xml" | "text/plain") {
+                    return Some(NestedRasterDecoder::broken());
+                }
+                let text = match std::str::from_utf8(&data) {
+                    Ok(text) => text,
+                    Err(_) => return Some(NestedRasterDecoder::broken()),
+                };
+                let _held = match prepare_nested(text, &budget, &recorder, &conversions) {
+                    Ok(held) => held,
+                    Err(NestedFailure::Invalid) => return Some(NestedRasterDecoder::broken()),
+                    Err(NestedFailure::Refused) => return None,
+                };
+                let kind = match decode(mime, Arc::clone(&data), options) {
+                    Some(kind) => kind,
+                    None => {
+                        let Some(resized) =
+                            crate::svg_root_size::nested_chrome_root_size(mime, &data)
+                        else {
+                            return Some(NestedRasterDecoder::broken());
+                        };
+                        decode(mime, resized, options).unwrap_or_else(NestedRasterDecoder::broken)
                     }
                 };
-                NestedRasterDecoder::admits(&kind).then_some(kind)
+                Some(kind)
             }),
             resolve_string: Box::new(|_, _| None),
         },
@@ -178,21 +205,28 @@ fn svg_options(
 /// entities, reserve what parsing holds (returned, to hold while usvg parses
 /// and converts it), scan its images with `recorder`, and reserve what converting it
 /// allocates until the image is parsed. The levels it nests count while
-/// the returned guard lives. `None` refuses it.
+/// the returned guard lives. A resource refusal never becomes a broken icon.
 fn prepare_nested(
     text: &str,
     budget: &DecodedImageBudget,
     recorder: &SubresourceRecorder,
     conversions: &ConversionReservations,
-) -> Option<(Reservation, Levels)> {
-    let expanded = expand_entities(text)?;
-    let parsing = reserve_parse(budget, text, expanded)?;
-    let doc = crate::svg_root_size::parse_xml(text).ok()?;
+) -> Result<(Reservation, Levels), NestedFailure> {
+    let expanded = expand_entities(text).ok_or(NestedFailure::Refused)?;
+    let parsing = reserve_parse(budget, text, expanded).ok_or(NestedFailure::Refused)?;
+    let doc = crate::svg_root_size::parse_xml(text).map_err(|_| NestedFailure::Invalid)?;
     // Before usvg parses the document and resolves its images, so they are
     // known to be `<image>` elements.
     recorder.scan_nested(&doc);
-    let levels = conversions.reserve(&doc).ok()?;
-    Some((parsing, levels))
+    let levels = conversions
+        .reserve(&doc)
+        .map_err(|_| NestedFailure::Refused)?;
+    Ok((parsing, levels))
+}
+
+enum NestedFailure {
+    Invalid,
+    Refused,
 }
 
 /// Whether `data` starts with the gzip magic bytes, as usvg detects SVGZ.
@@ -344,7 +378,8 @@ pub(crate) fn retained_bytes(tree: &usvg::Tree) -> usize {
                     usvg::ImageKind::JPEG(data)
                     | usvg::ImageKind::PNG(data)
                     | usvg::ImageKind::GIF(data)
-                    | usvg::ImageKind::WEBP(data) => add(data.len()),
+                    | usvg::ImageKind::WEBP(data)
+                    | usvg::ImageKind::Broken(data) => add(data.len()),
                     usvg::ImageKind::SVG(_) => {}
                 },
                 // A text path keeps the shape it follows; its flattened

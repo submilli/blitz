@@ -133,6 +133,16 @@ impl crate::Tree {
             image_rendering: opt.image_rendering,
             default_size: opt.default_size,
             image_href_resolver: ImageHrefResolver {
+                resolve_image: opt
+                    .image_href_resolver
+                    .resolve_image
+                    .as_ref()
+                    .map(|resolve| {
+                        Box::new(move |image| resolve(image))
+                            as Box<
+                                dyn Fn(crate::ImageKind) -> Option<crate::ImageKind> + Send + Sync,
+                            >
+                    }),
                 resolve_data: Box::new(|a, b, c| (opt.image_href_resolver.resolve_data)(a, b, c)),
                 // External images should be ignored.
                 resolve_string: Box::new(|_, _| None),
