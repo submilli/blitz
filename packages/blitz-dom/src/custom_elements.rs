@@ -190,6 +190,7 @@ impl BaseDocument {
     /// pending ones.
     pub fn set_custom_element_reactions(&mut self, on: bool) {
         if !on {
+            self.custom_element_enqueued = None;
             self.custom_element_reaction_bytes = 0;
             self.custom_element_reaction_overflow = false;
         }
@@ -334,6 +335,68 @@ impl BaseDocument {
         Some(reaction)
     }
 
+    /// Enable bounded enqueue observations for an embedder's element queues.
+    /// Consume observations between operations; a full observation buffer
+    /// refuses additional reactions and reports the ordinary queue overflow.
+    pub fn observe_custom_element_enqueues(&mut self) {
+        self.custom_element_enqueued.get_or_insert_with(Vec::new);
+    }
+
+    /// Elements enqueued since the last observation, in enqueue order. An
+    /// embedder uses these to build its [CEReactions] element queues without
+    /// consuming each element's pending reactions. Observe before transfers.
+    pub fn take_enqueued_custom_element_targets(&mut self) -> Vec<NodeId> {
+        self.custom_element_enqueued
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Whether the element has pending reactions, without consuming one.
+    pub fn has_custom_element_reactions_for(&self, element: NodeId) -> bool {
+        self.custom_element_reactions
+            .as_ref()
+            .is_some_and(|reactions| reactions.iter().any(|r| r.target() == element))
+    }
+
+    /// Consume only this element's oldest reaction; another element's queue
+    /// is never a fallback when the requested queue is empty.
+    pub fn take_custom_element_reaction_for(
+        &mut self,
+        element: NodeId,
+    ) -> Option<CustomElementReaction> {
+        let reactions = self.custom_element_reactions.as_mut()?;
+        let index = reactions.iter().position(|r| r.target() == element)?;
+        let reaction = reactions.remove(index)?;
+        self.custom_element_reaction_bytes = self
+            .custom_element_reaction_bytes
+            .saturating_sub(reaction_bytes(&reaction));
+        Some(reaction)
+    }
+
+    /// Remove reactions whose elements move, retaining all others in place.
+    /// Retained elements are not enqueued again into the embedder's current
+    /// reaction scope.
+    pub fn extract_custom_element_reactions(
+        &mut self,
+        moving: impl Fn(NodeId) -> bool,
+    ) -> Vec<CustomElementReaction> {
+        let Some(reactions) = &mut self.custom_element_reactions else {
+            return Vec::new();
+        };
+        let (moved, kept): (std::collections::VecDeque<_>, std::collections::VecDeque<_>) =
+            std::mem::take(reactions)
+                .into_iter()
+                .partition(|r| moving(r.target()));
+        *reactions = kept;
+        for reaction in &moved {
+            self.custom_element_reaction_bytes = self
+                .custom_element_reaction_bytes
+                .saturating_sub(reaction_bytes(reaction));
+        }
+        Vec::from(moved)
+    }
+
     pub(crate) fn record_custom_element_reaction(&mut self, reaction: CustomElementReaction) {
         if !self.admits_reaction(&reaction) {
             self.custom_element_reaction_overflow |= self.custom_element_reactions.is_some();
@@ -341,6 +404,9 @@ impl BaseDocument {
         }
         if let Some(reactions) = &mut self.custom_element_reactions {
             self.custom_element_reaction_bytes += reaction_bytes(&reaction);
+            if let Some(enqueued) = &mut self.custom_element_enqueued {
+                enqueued.push(reaction.target());
+            }
             reactions.push_back(reaction);
         }
     }
@@ -349,7 +415,10 @@ impl BaseDocument {
         self.custom_element_reactions
             .as_ref()
             .is_some_and(|reactions| {
-                reactions.len() < MAX_QUEUED_REACTIONS
+                self.custom_element_enqueued
+                    .as_ref()
+                    .is_none_or(|targets| targets.len() < MAX_QUEUED_REACTIONS)
+                    && reactions.len() < MAX_QUEUED_REACTIONS
                     && reaction_bytes(reaction)
                         <= MAX_REACTION_BYTES.saturating_sub(self.custom_element_reaction_bytes)
             })
@@ -428,6 +497,61 @@ mod bounds_tests {
         assert!(doc.take_custom_element_reaction_overflow());
         assert_eq!(doc.take_custom_element_reactions().len(), 2);
         assert!(doc.take_next_custom_element_reaction(None).is_none());
+    }
+
+    #[test]
+    fn observed_element_queues_preserve_unrelated_pending_reactions() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        doc.set_custom_element_reactions(true);
+        doc.observe_custom_element_enqueues();
+        let name = || markup5ever::QualName::new(None, markup5ever::ns!(html), "x-a".into());
+        let a = doc.mutate().create_element(name(), vec![]);
+        let b = doc.mutate().create_element(name(), vec![]);
+        doc.enqueue_custom_element_reactions(vec![CustomElementReaction::Connected(a)]);
+        assert_eq!(doc.take_enqueued_custom_element_targets(), vec![a]);
+        doc.enqueue_custom_element_reactions(vec![CustomElementReaction::Connected(b)]);
+        assert_eq!(doc.take_enqueued_custom_element_targets(), vec![b]);
+        assert!(doc.take_custom_element_reaction_for(b).is_some());
+        assert!(doc.take_custom_element_reaction_for(b).is_none());
+        assert_eq!(doc.extract_custom_element_reactions(|id| id == b).len(), 0);
+        assert!(doc.take_enqueued_custom_element_targets().is_empty());
+        assert!(
+            matches!(doc.take_custom_element_reaction_for(a), Some(CustomElementReaction::Connected(id)) if id == a)
+        );
+    }
+
+    #[test]
+    fn enqueue_observations_are_bounded_even_when_reactions_are_consumed() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        doc.set_custom_element_reactions(true);
+        doc.observe_custom_element_enqueues();
+        let element = doc.mutate().create_element(
+            markup5ever::QualName::new(None, markup5ever::ns!(html), "x-a".into()),
+            vec![],
+        );
+        for _ in 0..MAX_QUEUED_REACTIONS {
+            assert!(
+                doc.enqueue_custom_element_reactions(vec![CustomElementReaction::Connected(
+                    element
+                )])
+                .is_empty()
+            );
+            assert!(doc.take_custom_element_reaction_for(element).is_some());
+        }
+        assert_eq!(
+            doc.enqueue_custom_element_reactions(vec![CustomElementReaction::Connected(element)])
+                .len(),
+            1
+        );
+        assert!(doc.take_custom_element_reaction_overflow());
+        assert_eq!(
+            doc.take_enqueued_custom_element_targets().len(),
+            MAX_QUEUED_REACTIONS
+        );
+        assert!(
+            doc.enqueue_custom_element_reactions(vec![CustomElementReaction::Connected(element)])
+                .is_empty()
+        );
     }
 
     #[test]

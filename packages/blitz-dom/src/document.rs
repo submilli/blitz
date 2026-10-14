@@ -362,6 +362,7 @@ pub struct BaseDocument {
     pub(crate) form_associated_custom: std::collections::HashSet<NodeId>,
     pub(crate) custom_element_reactions:
         Option<std::collections::VecDeque<crate::custom_elements::CustomElementReaction>>,
+    pub(crate) custom_element_enqueued: Option<Vec<NodeId>>,
     pub(crate) custom_element_reaction_bytes: usize,
     pub(crate) custom_element_reaction_overflow: bool,
     /// DOM event listeners, per target.
@@ -585,6 +586,7 @@ impl BaseDocument {
             mutation_log_overflowed: false,
             validation_error: std::cell::Cell::new(None),
             custom_element_reactions: None,
+            custom_element_enqueued: None,
             form_associated_custom: Default::default(),
             custom_element_reaction_bytes: 0,
             custom_element_reaction_overflow: false,

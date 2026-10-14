@@ -30,6 +30,9 @@ pub(super) fn native_work(doc: &BaseDocument) -> Vec<NodeId> {
             mutation_roots(&entry.record, &mut roots);
         }
     }
+    if let Some(enqueued) = &doc.custom_element_enqueued {
+        roots.extend(enqueued);
+    }
     if let Some(reactions) = &doc.custom_element_reactions {
         roots.extend(
             reactions
