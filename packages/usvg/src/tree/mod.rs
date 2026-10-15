@@ -1277,6 +1277,18 @@ impl Default for PaintOrder {
     }
 }
 
+/// Source geometry retained after SVG shapes become paths.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShapeKind {
+    /// General paths, polygons and polylines.
+    #[default]
+    Path,
+    /// A line has caps but no joins.
+    Line,
+    /// Rectangles (rounded or plain), circles and ellipses.
+    Simple,
+}
+
 /// A path element.
 #[derive(Clone, Debug)]
 pub struct Path {
@@ -1288,6 +1300,7 @@ pub struct Path {
     pub(crate) rendering_mode: ShapeRendering,
     pub(crate) data: Arc<tiny_skia_path::Path>,
     pub(crate) source_rect: Option<Rect>,
+    pub(crate) shape_kind: ShapeKind,
     pub(crate) abs_transform: Transform,
     pub(crate) bounding_box: Rect,
     pub(crate) abs_bounding_box: Rect,
@@ -1347,6 +1360,7 @@ impl Path {
             rendering_mode,
             data,
             source_rect: None,
+            shape_kind: ShapeKind::default(),
             abs_transform,
             bounding_box,
             abs_bounding_box,
@@ -1402,6 +1416,11 @@ impl Path {
     /// All segments are in absolute coordinates.
     pub fn data(&self) -> &tiny_skia_path::Path {
         self.data.as_ref()
+    }
+
+    /// Original shape category, independent of path normalization.
+    pub fn shape_kind(&self) -> ShapeKind {
+        self.shape_kind
     }
 
     /// The local rectangle for an unrounded SVG `rect` source element.

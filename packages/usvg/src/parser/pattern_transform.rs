@@ -27,6 +27,7 @@ pub(super) fn rebase(group: &mut Group, transform: Transform, depth: usize) -> O
                     transform.pre_concat(path.abs_transform),
                 )?;
                 moved.source_rect = path.source_rect;
+                moved.shape_kind = path.shape_kind;
                 **path = moved;
             }
             Node::Image(image) => {

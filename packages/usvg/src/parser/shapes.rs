@@ -23,6 +23,29 @@ pub(crate) fn convert(node: SvgNode, state: &converter::State) -> Option<Arc<Pat
     }
 }
 
+/// Blink recognizes a single line segment independently of its SVG tag.
+pub(crate) fn shape_kind(node: SvgNode, path: &Path) -> crate::ShapeKind {
+    match node.tag_name() {
+        Some(EId::Rect | EId::Circle | EId::Ellipse) => crate::ShapeKind::Simple,
+        Some(EId::Line) => crate::ShapeKind::Line,
+        _ => {
+            let mut segments = path.segments();
+            if matches!(
+                segments.next(),
+                Some(tiny_skia_path::PathSegment::MoveTo(_))
+            ) && matches!(
+                segments.next(),
+                Some(tiny_skia_path::PathSegment::LineTo(_))
+            ) && segments.next().is_none()
+            {
+                crate::ShapeKind::Line
+            } else {
+                crate::ShapeKind::Path
+            }
+        }
+    }
+}
+
 pub(crate) fn convert_path(node: SvgNode) -> Option<Arc<Path>> {
     let value: &str = node.attribute(AId::D)?;
     let mut builder = tiny_skia_path::PathBuilder::new();
@@ -346,6 +369,52 @@ impl PathBuilderExt for tiny_skia_path::PathBuilder {
 #[cfg(test)]
 mod tests {
     use crate::{Node, Options, Tree};
+
+    #[test]
+    fn source_shape_kinds_survive_use() {
+        let tree = Tree::from_str(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+            <defs><line id="source" x2="10" stroke="red"/></defs>
+            <use href="#source"/>
+            <line id="line" x2="10" stroke="red"/>
+            <rect id="rect" width="5" height="5" rx="1"/>
+            <circle id="circle" r="2"/>
+            <ellipse id="ellipse" rx="2" ry="1"/>
+            <polygon id="polygon" points="0,0 2,2 0,2"/>
+            <polyline id="polyline" points="0,0 2,2 0,2"/>
+            <path id="path" d="M0 0H5V5Z"/><path id="linepath" d="M0 0L5 5"/>
+            </svg>"##,
+            &Options::default(),
+        )
+        .unwrap();
+        for (id, kind) in [
+            ("line", crate::ShapeKind::Line),
+            ("linepath", crate::ShapeKind::Line),
+            ("rect", crate::ShapeKind::Simple),
+            ("circle", crate::ShapeKind::Simple),
+            ("ellipse", crate::ShapeKind::Simple),
+            ("polygon", crate::ShapeKind::Path),
+            ("polyline", crate::ShapeKind::Path),
+            ("path", crate::ShapeKind::Path),
+        ] {
+            let Node::Path(path) = tree.node_by_id(id).unwrap() else {
+                panic!("expected path");
+            };
+            assert_eq!(path.shape_kind(), kind);
+        }
+        fn count_lines(group: &crate::Group) -> usize {
+            group
+                .children()
+                .iter()
+                .map(|node| match node {
+                    Node::Path(path) => usize::from(path.shape_kind() == crate::ShapeKind::Line),
+                    Node::Group(group) => count_lines(group),
+                    _ => 0,
+                })
+                .sum()
+        }
+        assert_eq!(count_lines(tree.root()), 3);
+    }
 
     #[test]
     fn either_zero_radius_preserves_an_unrounded_rectangle() {

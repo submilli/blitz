@@ -5,6 +5,7 @@ mod paints;
 mod references;
 mod styles;
 mod viewport;
+mod visual_bounds;
 
 use crate::canvas_svg_image::CanvasSvgElement;
 use crate::{BaseDocument, DocumentConfig, DocumentMutator, NodeId, QualName, qual_name};

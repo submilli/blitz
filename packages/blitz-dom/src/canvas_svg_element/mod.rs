@@ -17,6 +17,7 @@
 //! Patterns paint their content through `PaintResourceSubtree` too, so every
 //! copy leaves transforms and effects out alike.
 
+mod bounds;
 mod elements;
 mod lookup;
 mod markup;
@@ -89,7 +90,7 @@ impl BaseDocument {
             None => Some(painted.tree.clone()),
         };
         let bounds =
-            placed.and_then(|placed| placed.root().abs_stroke_bounding_box().to_non_zero_rect());
+            placed.and_then(|placed| bounds::measure(&placed).and_then(|rect| rect.to_non_zero_rect()));
         Ok(bounds.map(|bounds| CanvasSvgElement {
             tree: painted.tree,
             nested_rasters: painted.nested_rasters,

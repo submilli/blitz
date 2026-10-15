@@ -1048,6 +1048,7 @@ fn convert_path(
     };
 
     path.source_rect = source_rect;
+    path.shape_kind = super::shapes::shape_kind(node, path.data());
 
     match (raw_paint_order.order, marker) {
         ([PaintOrderKind::Markers, _, _], Some(markers_node)) => {
