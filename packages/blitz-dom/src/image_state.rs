@@ -87,6 +87,8 @@ enum ImageUpdate {
     Html(NodeLease),
     #[cfg(feature = "svg")]
     Filter(NodeLease),
+    #[cfg(feature = "svg")]
+    FilterData(crate::fe_image::DataImageUpdate),
 }
 
 /// What script can observe of an `<img>`, except its URL
@@ -244,7 +246,14 @@ impl BaseDocument {
         let mut pending = VecDeque::new();
         #[cfg(feature = "svg")]
         {
-            for node in self.take_fe_image_updates(stage) {
+            if stage == ImageUpdateStage::StableState {
+                pending.extend(
+                    self.take_fe_image_data_updates()
+                        .into_iter()
+                        .map(ImageUpdate::FilterData),
+                );
+            }
+            for node in self.take_fe_image_updates() {
                 pending.push_back(ImageUpdate::Filter(self.lease_node(node)));
             }
         }
@@ -277,6 +286,8 @@ impl BaseDocument {
             ImageUpdate::Filter(lease) => {
                 self.run_fe_image_update(lease.id(), updates.stage, &is_active)
             }
+            #[cfg(feature = "svg")]
+            ImageUpdate::FilterData(update) => self.run_fe_image_data_update(update),
         }
         true
     }

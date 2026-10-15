@@ -482,12 +482,17 @@ fn embedded_mutations_defer_data_decode_to_stable_steps() {
     let first = fe_image(&mut doc, html, &data_png());
     let second = fe_image(&mut doc, html, &data_png());
     doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
-    assert!(doc.fe_images.requests.is_empty());
+    assert!(
+        doc.fe_images
+            .requests
+            .values()
+            .all(|request| request.image.is_none())
+    );
     assert!(doc.has_image_updates(ImageUpdateStage::StableState));
     let mut updates = doc.take_image_updates(ImageUpdateStage::StableState);
     assert!(doc.step_image_updates(&mut updates, |_| true));
-    assert!(doc.fe_images.requests.contains_key(&first));
-    assert!(!doc.fe_images.requests.contains_key(&second));
+    assert!(doc.fe_images.requests[&first].image.is_some());
+    assert!(doc.fe_images.requests[&second].image.is_none());
     assert!(doc.step_image_updates(&mut updates, |_| true));
     assert!(!doc.step_image_updates(&mut updates, |_| true));
     assert_eq!(loaded(&doc, second), Some(true));
@@ -501,13 +506,13 @@ fn embedded_external_requests_start_immediately_without_revisiting_deferred_data
     doc.embedder_updates_images = true;
     let data = fe_image(&mut doc, html, &data_png());
     doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
-    assert_eq!(doc.fe_images.deferred, [Some(data)]);
+    assert!(!doc.fe_images.data_updates.is_empty());
     assert!(!doc.has_image_updates(ImageUpdateStage::Immediate));
     let external = fe_image(&mut doc, html, "/missing.png");
     doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
     assert_eq!(provider.urls().len(), 1);
-    assert_eq!(doc.fe_images.deferred, [Some(data)]);
-    assert!(!doc.fe_images.requests.contains_key(&data));
+    assert!(!doc.fe_images.data_updates.is_empty());
+    assert!(doc.fe_images.requests[&data].image.is_none());
     assert!(doc.fe_images.requests.contains_key(&external));
     // Changing a deferred data source to an external URL starts it now too.
     doc.mutate()
@@ -519,7 +524,7 @@ fn embedded_external_requests_start_immediately_without_revisiting_deferred_data
 }
 
 #[test]
-fn deleting_deferred_images_bounds_bookkeeping_before_stable_state() {
+fn deleted_elements_do_not_unbound_initiated_data_jobs() {
     use crate::image_state::ImageUpdateStage;
     let (mut doc, html) = document(Arc::new(Deferred::default()));
     doc.embedder_updates_images = true;
@@ -529,9 +534,60 @@ fn deleting_deferred_images_bounds_bookkeeping_before_stable_state() {
         let node = fe_image(&mut doc, html, &data);
         doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
         doc.mutate().remove_and_drop_node(node);
-        assert!(doc.fe_images.deferred_indices.is_empty());
-        assert!(doc.fe_images.deferred.len() <= 1024);
     }
+    assert_eq!(doc.take_fe_image_data_updates().len(), 1024);
+}
+
+#[test]
+fn replaced_data_jobs_preserve_cache_work_without_overwriting_current_request() {
+    use crate::image_state::ImageUpdateStage;
+    let (mut doc, html) = document(Arc::new(Deferred::default()));
+    doc.embedder_updates_images = true;
+    let original = data_png();
+    let node = fe_image(&mut doc, html, &original);
+    doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
+    doc.mutate()
+        .set_attribute(node, qual_name!("href"), "/later.png");
+    doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
     doc.run_image_updates(ImageUpdateStage::StableState, |_| true);
-    assert!(doc.fe_images.deferred.is_empty());
+    assert_eq!(
+        doc.fe_images.requests[&node].url,
+        "https://page.test/later.png"
+    );
+    assert!(doc.fe_images.requests[&node].image.is_none());
+    assert!(
+        doc.image_cache
+            .get(&crate::image_request::ImageKey::no_cors(&original))
+            .is_some()
+    );
+}
+
+#[test]
+fn removed_initiated_data_sources_still_load_their_nested_bodies() {
+    use crate::image_state::ImageUpdateStage;
+    use crate::svg_subresources::{BodyDigest, NestedImages};
+    let (mut doc, html) = document(Arc::new(Deferred::default()));
+    doc.embedder_updates_images = true;
+    let png = data_png();
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><image style='display:none' href='{png}' width='4' height='4'/></svg>"
+    );
+    let source = format!(
+        "data:image/svg+xml,{}",
+        percent_encoding::percent_encode(svg.as_bytes(), percent_encoding::NON_ALPHANUMERIC)
+    );
+    let node = fe_image(&mut doc, html, &source);
+    doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
+    doc.mutate().remove_and_drop_node(node);
+    doc.run_image_updates(ImageUpdateStage::StableState, |_| true);
+    let digest = BodyDigest::of_data_url(&png).unwrap();
+    assert!(
+        matches!(doc.shown_nested_images(), NestedImages::Loaded(bodies) if !bodies.contains(&digest))
+    );
+    for load in doc.take_svg_image_loads() {
+        doc.complete_svg_image_load(load);
+    }
+    assert!(
+        matches!(doc.shown_nested_images(), NestedImages::Loaded(bodies) if bodies.contains(&digest))
+    );
 }

@@ -16,6 +16,8 @@
 use crate::image_cache::{HeldImage, MAX_CACHED_IMAGES};
 use crate::image_request::{ImageKey, PendingImage};
 use crate::image_state::ImageUpdateStage;
+
+mod updates;
 use crate::net::ResourceHandler;
 use crate::node::ImageData;
 use crate::svg_subresources::NestedImages;
@@ -24,6 +26,8 @@ use crate::{BaseDocument, DocumentMutator, NodeId};
 use blitz_traits::net::{CorsSettings, ResourceInitiator};
 use markup5ever::{QualName, local_name, ns};
 use std::collections::{HashMap, HashSet};
+pub(crate) use updates::DataImageUpdate;
+use updates::DataImageUpdates;
 
 /// Decoded bytes a draw may decode itself, for `data:` images whose queued
 /// update has not run yet.
@@ -35,39 +39,13 @@ pub(crate) struct FeImages {
     requests: HashMap<NodeId, FeImageRequest>,
     queue: Vec<NodeId>,
     queued: HashSet<NodeId>,
-    deferred: Vec<Option<NodeId>>,
-    deferred_indices: HashMap<NodeId, usize>,
+    data_updates: DataImageUpdates,
     /// A bounded index of immutable data: rasters already held by requests.
     /// It owns no pixels and adds no cache pins or decoded-byte allowance.
     held_rasters: HashMap<String, HeldImage>,
 }
 
 impl FeImages {
-    fn defer(&mut self, node: NodeId) {
-        if self.deferred_indices.contains_key(&node) {
-            return;
-        }
-        // Deletion leaves holes, so keep bookkeeping proportional to live
-        // work without scanning the whole queue on every removed node.
-        if self.deferred.len() >= self.deferred_indices.len().saturating_mul(2).max(1024) {
-            self.deferred.retain(Option::is_some);
-            self.deferred_indices.clear();
-            for (index, node) in self.deferred.iter().enumerate() {
-                if let Some(node) = node {
-                    self.deferred_indices.insert(*node, index);
-                }
-            }
-        }
-        self.deferred_indices.insert(node, self.deferred.len());
-        self.deferred.push(Some(node));
-    }
-
-    fn cancel_deferred(&mut self, node: NodeId) {
-        if let Some(index) = self.deferred_indices.remove(&node) {
-            self.deferred[index] = None;
-        }
-    }
-
     fn held_raster(&self, url: &str) -> Option<ImageData> {
         self.held_rasters.get(url)?.upgrade()
     }
@@ -87,7 +65,7 @@ impl FeImages {
 
     pub(crate) fn has_updates(&self, stage: ImageUpdateStage) -> bool {
         !self.queue.is_empty()
-            || (stage == ImageUpdateStage::StableState && !self.deferred_indices.is_empty())
+            || (stage == ImageUpdateStage::StableState && !self.data_updates.is_empty())
     }
 }
 
@@ -99,6 +77,7 @@ struct FeImageRequest {
     url: String,
     image: Option<ImageData>,
     complete: bool,
+    data_pending: bool,
 }
 
 /// What an `href` names.
@@ -143,7 +122,11 @@ impl BaseDocument {
         };
         let key = ImageKey::no_cors(url.as_str());
         let image = match self.fe_images.requests.get(&node) {
-            Some(request) if request.url == url.as_str() => request.image.clone(),
+            Some(request)
+                if request.url == url.as_str() && (request.complete || request.image.is_some()) =>
+            {
+                request.image.clone()
+            }
             _ if url.scheme() == "data" => self
                 .image_cache
                 .get(&key)
@@ -163,21 +146,18 @@ impl BaseDocument {
         }
     }
 
-    /// Take only this stage's work. Deferred data sources do not get revisited
-    /// at every mutation; a fresh mutation may still start an external fetch.
-    pub(crate) fn take_fe_image_updates(&mut self, stage: ImageUpdateStage) -> Vec<NodeId> {
+    /// Take newly mutated elements; initiated data-source jobs are separate.
+    pub(crate) fn take_fe_image_updates(&mut self) -> Vec<NodeId> {
         self.fe_images.queued.clear();
-        let mut queued = std::mem::take(&mut self.fe_images.queue);
-        if stage == ImageUpdateStage::StableState {
-            self.fe_images.deferred_indices.clear();
-            queued.splice(
-                0..0,
-                std::mem::take(&mut self.fe_images.deferred)
-                    .into_iter()
-                    .flatten(),
-            );
-        }
-        queued
+        std::mem::take(&mut self.fe_images.queue)
+    }
+
+    pub(crate) fn take_fe_image_data_updates(&mut self) -> Vec<DataImageUpdate> {
+        self.fe_images.data_updates.take()
+    }
+
+    pub(crate) fn run_fe_image_data_update(&mut self, update: DataImageUpdate) {
+        self.load_data_fe_image(update.node, update.key);
     }
 
     pub(crate) fn run_fe_image_update(
@@ -193,18 +173,11 @@ impl BaseDocument {
             return;
         }
         let active = element.flags.is_in_document() && is_active(element.owner_document);
-        if active
-            && stage == ImageUpdateStage::Immediate
-            && matches!(self.fe_image_href(node), Some(Href::Url(url)) if url.scheme() == "data")
-        {
-            self.fe_images.defer(node);
-            return;
-        }
-        self.update_fe_image(node, active);
+        self.update_fe_image(node, active, stage == ImageUpdateStage::Immediate);
     }
 
     /// Start `node`'s request for its current `href`, replacing any earlier one.
-    fn update_fe_image(&mut self, node: NodeId, active: bool) {
+    fn update_fe_image(&mut self, node: NodeId, active: bool, defer_data: bool) {
         let url = match active.then(|| self.fe_image_href(node)).flatten() {
             Some(Href::Url(url)) => Some(url),
             _ => None,
@@ -214,7 +187,8 @@ impl BaseDocument {
         // one is fetched again.
         let standing = self.fe_images.requests.get(&node).is_some_and(|request| {
             url.as_ref().is_some_and(|url| request.url == url.as_str())
-                && (request.complete && request.image.is_some()
+                && (request.data_pending
+                    || request.complete && request.image.is_some()
                     || self
                         .pending_images
                         .get(&ImageKey::no_cors(&request.url))
@@ -240,13 +214,22 @@ impl BaseDocument {
             url: key.url.clone(),
             image,
             complete,
+            data_pending: false,
         };
         self.fe_images.requests.insert(node, request);
         if complete {
             return;
         }
         if url.scheme() == "data" {
-            self.load_data_fe_image(node, key);
+            if defer_data {
+                let admitted = self.fe_images.data_updates.push(node, key);
+                if let Some(request) = self.fe_images.requests.get_mut(&node) {
+                    request.data_pending = admitted;
+                    request.complete = !admitted;
+                }
+            } else {
+                self.load_data_fe_image(node, key);
+            }
         } else {
             self.start_fe_image_fetch(node, key, url);
         }
@@ -260,6 +243,23 @@ impl BaseDocument {
     /// pending. A failed decode leaves the request without an image, which a
     /// later update decodes again (a request stands only with an image).
     fn load_data_fe_image(&mut self, node: NodeId, key: ImageKey) {
+        if let Some(image) = self
+            .image_cache
+            .get(&key)
+            .or_else(|| self.fe_images.held_raster(&key.url))
+        {
+            if let Some(request) = self
+                .fe_images
+                .requests
+                .get_mut(&node)
+                .filter(|request| request.url == key.url)
+            {
+                request.image = Some(image);
+                request.complete = true;
+                request.data_pending = false;
+            }
+            return;
+        }
         let image = self.decode_data_url(&key.url, self.shown_nested_images(), None);
         // Unless it left images out, it is complete whatever else is fetching
         // the URL: a `data:` URL is its own body.
@@ -272,10 +272,15 @@ impl BaseDocument {
             self.image_cache
                 .insert(key.clone(), image, retention, &self.image_budget);
         }
-        if let Some(request) = self.fe_images.requests.get_mut(&node) {
-            request.image = image;
-            request.complete = complete;
-        }
+        let current = self
+            .fe_images
+            .requests
+            .get_mut(&node)
+            .filter(|request| request.url == key.url);
+        let Some(request) = current else { return };
+        request.image = image;
+        request.complete = complete;
+        request.data_pending = false;
         if complete {
             return;
         }
@@ -288,7 +293,6 @@ impl BaseDocument {
 
     /// Drop `node`'s request and stop waiting for its fetch.
     pub(crate) fn forget_fe_image(&mut self, node: NodeId) {
-        self.fe_images.cancel_deferred(node);
         let Some(request) = self.fe_images.requests.remove(&node) else {
             return;
         };
