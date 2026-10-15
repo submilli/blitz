@@ -186,22 +186,31 @@ fn svg_options(
                     Err(NestedFailure::Invalid) => return Some(NestedRasterDecoder::broken()),
                     Err(NestedFailure::Refused) => return None,
                 };
-                let kind = match decode(mime, Arc::clone(&data), options) {
-                    Some(kind) => kind,
-                    None => {
-                        let Some(resized) =
-                            crate::svg_root_size::nested_chrome_root_size(mime, &data)
-                        else {
-                            return Some(NestedRasterDecoder::broken());
-                        };
-                        decode(mime, resized, options).unwrap_or_else(NestedRasterDecoder::broken)
-                    }
-                };
-                Some(kind)
+                decode_nested_svg(mime, &data, options)
             }),
             resolve_string: Box::new(|_, _| None),
         },
         ..Default::default()
+    }
+}
+
+/// Preserve resource refusals across the nested-image resolver. A malformed
+/// image may retry Chrome's root-size fallback or show a broken icon; a work
+/// limit must neither retry conversion nor become that placeholder.
+fn decode_nested_svg(mime: &str, data: &[u8], options: &usvg::Options) -> Option<usvg::ImageKind> {
+    match usvg::Tree::from_data_nested(data, options) {
+        Ok(tree) => Some(usvg::ImageKind::SVG(tree)),
+        Err(usvg::Error::TextPathWorkLimitReached) => None,
+        Err(_) => {
+            let Some(resized) = crate::svg_root_size::nested_chrome_root_size(mime, data) else {
+                return Some(NestedRasterDecoder::broken());
+            };
+            match usvg::Tree::from_data_nested(&resized, options) {
+                Ok(tree) => Some(usvg::ImageKind::SVG(tree)),
+                Err(usvg::Error::TextPathWorkLimitReached) => None,
+                Err(_) => Some(NestedRasterDecoder::broken()),
+            }
+        }
     }
 }
 

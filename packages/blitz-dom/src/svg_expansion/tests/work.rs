@@ -304,3 +304,19 @@ fn text_path_work_allowance_is_shared_across_use_copies() {
         assert!(started.elapsed().as_secs() < 2);
     });
 }
+
+#[test]
+fn nested_text_path_resource_refusals_are_not_broken_image_placeholders() {
+    on_guest_stack(|| {
+        let hostile = super::svg(
+            "<defs><path id='p' d='M0 0L1e30 0'/></defs><text><textPath href='#p'>Bounded</textPath></text>",
+        );
+        for source in [hostile.clone(), hostile.replace("width='100'", "width='0'")] {
+            let nested = super::svg(&super::nesting(&source));
+            assert_eq!(super::images(&parse_text_path(&nested).unwrap()), 0);
+        }
+        let ordinary = super::svg("<rect width='4' height='4' fill='blue'/>");
+        let nested = super::svg(&super::nesting(&ordinary));
+        assert_eq!(super::images(&parse_text_path(&nested).unwrap()), 1);
+    });
+}
