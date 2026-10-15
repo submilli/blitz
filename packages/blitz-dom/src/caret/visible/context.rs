@@ -92,9 +92,15 @@ impl Object {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CachedObject {
+    object: Option<Object>,
+    renders_children: bool,
+}
+
 pub(super) struct Context<'a> {
     pub(super) tree: Tree<'a>,
-    objects: RefCell<HashMap<NodeId, Option<Object>>>,
+    objects: RefCell<HashMap<NodeId, CachedObject>>,
     /// Formatting contexts by inline root.
     ifcs: RefCell<HashMap<NodeId, Option<Rc<Ifc>>>>,
     graphemes: RefCell<HashMap<NodeId, Rc<Vec<usize>>>>,
@@ -229,24 +235,59 @@ impl<'a> Context<'a> {
 
     /// A node's layout object, `None` when it is not rendered.
     pub(super) fn object(&self, node: NodeId) -> Option<Object> {
-        if let Some(&found) = self.objects.borrow().get(&node) {
-            return found;
+        if let Some(found) = self.objects.borrow().get(&node) {
+            return found.object;
         }
-        let found = self.compute_object(node);
-        self.objects.borrow_mut().insert(node, found);
-        found
+        // Rendering depends on every flat ancestor. Fill the memo from the
+        // root down without putting page-controlled depth on the call stack.
+        let mut path = Vec::new();
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if self.objects.borrow().contains_key(&id) {
+                break;
+            }
+            if !self.spend() {
+                return None;
+            }
+            path.push(id);
+            current = self.tree.node(id).flat_parent_id();
+        }
+        for id in path.into_iter().rev() {
+            let data = self.tree.node(id);
+            let parent_renders = data.flat_parent_id().is_some_and(|parent| {
+                self.tree.is_document(parent)
+                    || self
+                        .objects
+                        .borrow()
+                        .get(&parent)
+                        .is_some_and(|found| found.renders_children)
+            });
+            let object = self.compute_object(id, parent_renders);
+            let contents = data
+                .display_style()
+                .is_some_and(|d| d.inside() == DisplayInside::Contents);
+            self.objects.borrow_mut().insert(
+                id,
+                CachedObject {
+                    object,
+                    renders_children: object.is_some() || (contents && parent_renders),
+                },
+            );
+        }
+        self.objects
+            .borrow()
+            .get(&node)
+            .and_then(|found| found.object)
     }
 
     pub(super) fn has_layout(&self, node: NodeId) -> bool {
         self.object(node).is_some()
     }
 
-    fn compute_object(&self, node: NodeId) -> Option<Object> {
+    fn compute_object(&self, node: NodeId, parent_renders: bool) -> Option<Object> {
         let data = self.tree.node(node);
         match &data.data {
             NodeData::Text(_) => {
-                // A Text node renders where an inline formatting context
-                // laid it out.
                 self.ifc_of(node)?;
                 let parent = data.flat_parent_id()?;
                 let style = self.style_object(parent)?;
@@ -256,8 +297,7 @@ impl<'a> Context<'a> {
                 })
             }
             NodeData::Element(_) | NodeData::AnonymousBlock(_) => {
-                let parent = data.flat_parent_id()?;
-                if !self.tree.is_document(parent) && !self.renders_children(parent) {
+                if !parent_renders {
                     return None;
                 }
                 let style = self.style_object(node)?;
@@ -270,22 +310,6 @@ impl<'a> Context<'a> {
             }
             _ => None,
         }
-    }
-
-    /// Whether an element's children can render: it renders, or it is a
-    /// `display: contents` element whose parent's children render.
-    fn renders_children(&self, node: NodeId) -> bool {
-        if self.has_layout(node) {
-            return true;
-        }
-        let data = self.tree.node(node);
-        let contents = data
-            .display_style()
-            .is_some_and(|d| d.inside() == DisplayInside::Contents);
-        contents
-            && data.flat_parent_id().is_some_and(|parent| {
-                self.tree.is_document(parent) || self.renders_children(parent)
-            })
     }
 
     /// Visibility and selectability from an element's style; the kind is
@@ -503,3 +527,7 @@ fn is_laid_out_inline_root(doc: &BaseDocument, node: NodeId) -> bool {
                 .is_some_and(|e| e.inline_layout_data.is_some())
     })
 }
+
+#[cfg(test)]
+#[path = "context_tests.rs"]
+mod tests;
