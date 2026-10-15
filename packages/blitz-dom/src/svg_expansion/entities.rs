@@ -24,6 +24,9 @@ const ALLOWED_EXPANSION: usize = 1_000_000;
 const MAX_AMPLIFICATION: usize = 5;
 /// roxmltree refuses references nested deeper.
 const MAX_ENTITY_DEPTH: usize = 10;
+/// Character comparisons spent scanning declarations and resolving references.
+/// roxmltree linearly searches declarations, including duplicate names.
+const MAX_ENTITY_WORK: usize = 2_000_000;
 /// Entities XML defines without a declaration.
 const PREDEFINED: [&str; 5] = ["lt", "gt", "amp", "apos", "quot"];
 
@@ -35,6 +38,8 @@ pub(crate) struct ExpandedSource {
     pub tags: usize,
     pub attributes: usize,
     pub depth: usize,
+    /// References encountered, including references expanding to empty strings.
+    references: usize,
 }
 
 impl ExpandedSource {
@@ -45,6 +50,7 @@ impl ExpandedSource {
             tags: count(b'<'),
             attributes: count(b'='),
             depth: 0,
+            references: count(b'&'),
         }
     }
 
@@ -56,6 +62,7 @@ impl ExpandedSource {
             tags: self.tags.saturating_add(other.tags),
             attributes: self.attributes.saturating_add(other.attributes),
             depth: self.depth.max(other.depth),
+            references: self.references.saturating_add(other.references),
         }
     }
 
@@ -65,6 +72,7 @@ impl ExpandedSource {
             tags: self.tags.max(other.tags),
             attributes: self.attributes.max(other.attributes),
             depth: self.depth.max(other.depth),
+            references: self.references.max(other.references),
         }
     }
 
@@ -95,7 +103,20 @@ pub(crate) fn expand_entities(text: &str) -> Option<ExpandedSource> {
         // Without declarations a reference is predefined or refused.
         return within_depth(literal);
     }
+    // Scan this before parsing declarations: even looking for their closing
+    // quotes must not repeatedly search an arbitrarily long suffix.
+    let count = text.matches("<!ENTITY").count();
+    if count.saturating_mul(text.len()) > MAX_ENTITY_WORK {
+        return None;
+    }
     let declarations = Declarations::scan(text);
+    let longest_name = declarations
+        .by_name
+        .keys()
+        .map(|name| name.len())
+        .max()
+        .unwrap_or(0);
+    let lookup = count.saturating_mul(longest_name.saturating_add(1));
     let limit = ALLOWED_EXPANSION.max(text.len().saturating_mul(MAX_AMPLIFICATION));
     let mut expansions = Expansions {
         declarations: &declarations,
@@ -104,7 +125,8 @@ pub(crate) fn expand_entities(text: &str) -> Option<ExpandedSource> {
     let mut added = ExpandedSource::default();
     for (name, depth) in markup.references {
         added = added.add(expansions.of(name, 0)?.at_depth(depth));
-        if added.bytes > limit {
+        let references = literal.references.saturating_add(added.references);
+        if added.bytes > limit || references.saturating_mul(lookup) > MAX_ENTITY_WORK {
             return None;
         }
     }

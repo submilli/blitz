@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use fontdb::{Database, ID};
 use harfrust::ShapeOptions;
-use kurbo::{ParamCurve, ParamCurveArclen, ParamCurveDeriv};
+use kurbo::{ParamCurve, ParamCurveDeriv};
 use skrifa::MetadataProvider;
 use skrifa::Tag;
 use skrifa::prelude::Size;
@@ -203,6 +203,7 @@ pub(crate) fn layout_text(
     text_node: &Text,
     resolver: &FontResolver,
     fontdb: &mut Arc<fontdb::Database>,
+    work: &mut crate::text_path::Work,
 ) -> Option<(Vec<Span>, NonZeroRect)> {
     let mut fonts_cache: FontsCache = HashMap::new();
 
@@ -247,7 +248,8 @@ pub(crate) fn layout_text(
             text_node.writing_mode,
             &fonts_cache,
             &mut clusters,
-        );
+            work,
+        )?;
 
         let mut text_ts = Transform::default();
         if text_node.writing_mode == WritingMode::TopToBottom {
@@ -524,19 +526,24 @@ fn resolve_clusters_positions(
     writing_mode: WritingMode,
     fonts_cache: &FontsCache,
     clusters: &mut [GlyphCluster],
-) -> (f32, f32) {
+    work: &mut crate::text_path::Work,
+) -> Option<(f32, f32)> {
     match chunk.text_flow {
-        TextFlow::Linear => {
-            resolve_clusters_positions_horizontal(text, chunk, char_offset, writing_mode, clusters)
-        }
+        TextFlow::Linear => Some(resolve_clusters_positions_horizontal(
+            text,
+            chunk,
+            char_offset,
+            writing_mode,
+            clusters,
+        )),
         TextFlow::Path(ref path) => resolve_clusters_positions_path(
             text,
             chunk,
             char_offset,
             path,
-            writing_mode,
             fonts_cache,
             clusters,
+            work,
         ),
     }
 }
@@ -631,10 +638,11 @@ fn resolve_clusters_positions_path(
     chunk: &TextChunk,
     char_offset: usize,
     path: &TextPath,
-    writing_mode: WritingMode,
     fonts_cache: &FontsCache,
     clusters: &mut [GlyphCluster],
-) -> (f32, f32) {
+    work: &mut crate::text_path::Work,
+) -> Option<(f32, f32)> {
+    let writing_mode = text.writing_mode;
     let mut last_x = 0.0;
     let mut last_y = 0.0;
 
@@ -650,7 +658,15 @@ fn resolve_clusters_positions_path(
     let start_offset =
         chunk_offset + path.start_offset + process_anchor(chunk.anchor, clusters_length(clusters));
 
-    let normals = collect_normals(text, chunk, clusters, &path.path, char_offset, start_offset);
+    let normals = collect_normals(
+        text,
+        chunk,
+        clusters,
+        &path.path,
+        char_offset,
+        start_offset,
+        work,
+    )?;
     for (cluster, normal) in clusters.iter_mut().zip(normals) {
         let (x, y, angle) = match normal {
             Some(normal) => (normal.x, normal.y, normal.angle),
@@ -707,7 +723,7 @@ fn resolve_clusters_positions_path(
         last_y = y;
     }
 
-    (last_x, last_y)
+    Some((last_x, last_y))
 }
 
 pub(crate) fn process_anchor(a: TextAnchor, text_width: f32) -> f32 {
@@ -731,7 +747,8 @@ fn collect_normals(
     path: &tiny_skia_path::Path,
     char_offset: usize,
     offset: f32,
-) -> Vec<Option<PathNormal>> {
+    work: &mut crate::text_path::Work,
+) -> Option<Vec<Option<PathNormal>>> {
     let mut offsets = Vec::with_capacity(clusters.len());
     let mut normals = Vec::with_capacity(clusters.len());
     {
@@ -816,11 +833,17 @@ fn collect_normals(
             base_arclen_accuracy / (sx * sy).sqrt().max(1.0)
         };
 
-        let curve_len = curve.arclen(arclen_accuracy as f64);
+        let curve_len = work.arclen(&curve, arclen_accuracy as f64)?;
 
         for offset in &offsets[normals.len()..] {
+            work.step()?;
             if *offset >= length && *offset <= length + curve_len {
-                let mut offset = curve.inv_arclen(offset - length, arclen_accuracy as f64);
+                let mut offset = work.parameter_at_length(
+                    &curve,
+                    offset - length,
+                    curve_len,
+                    arclen_accuracy as f64,
+                )?;
                 // some rounding error may occur, so we give offset a little tolerance
                 debug_assert!((-1.0e-3..=1.0 + 1.0e-3).contains(&offset));
                 offset = offset.clamp(0.0, 1.0);
@@ -852,7 +875,7 @@ fn collect_normals(
         normals.push(None);
     }
 
-    normals
+    Some(normals)
 }
 
 /// Converts a text chunk into a list of outlined clusters.

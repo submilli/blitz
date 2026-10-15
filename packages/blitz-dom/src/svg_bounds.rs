@@ -24,6 +24,10 @@ pub(crate) const MAX_SVG_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
 /// Images an SVG document may nest (including within nested SVG images).
 const MAX_NESTED_SVG_IMAGES: usize = 16;
 
+/// Matching repeated across converted copies, independently of the preflight's
+/// own allowance. A small XML tree may instantiate a large styled subtree.
+const MAX_SVG_CONVERSION_WORK: usize = 2_000_000;
+
 /// Why [`parse_svg_image`] produced no SVG document.
 #[derive(Debug)]
 pub(crate) enum SvgRefusal {
@@ -331,6 +335,9 @@ impl ConversionReservations {
             .budget
             .reserve(conversion.bytes)
             .ok_or(SvgRefusal::Budget)?;
+        if conversion.work > MAX_SVG_CONVERSION_WORK {
+            return Err(SvgRefusal::Expansion);
+        }
         held.levels = levels;
         held.reservations.push(reservation);
         Ok(Levels {

@@ -54,6 +54,8 @@ and can focus just on the rendering part.
 mod parser;
 #[cfg(feature = "text")]
 mod text;
+#[cfg(feature = "text")]
+mod text_path;
 mod tree;
 #[cfg(feature = "writer")]
 mod writer;

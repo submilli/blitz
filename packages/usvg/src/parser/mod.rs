@@ -41,6 +41,9 @@ pub enum Error {
     /// We do not allow SVG with more than 1_000_000 elements for security reasons.
     ElementsLimitReached,
 
+    /// Text-path measurement exceeded the document work allowance.
+    TextPathWorkLimitReached,
+
     /// SVG doesn't have a valid size.
     ///
     /// Occurs when width and/or height are <= 0.
@@ -72,6 +75,9 @@ impl std::fmt::Display for Error {
             }
             Error::ElementsLimitReached => {
                 write!(f, "the maximum number of SVG elements has been reached")
+            }
+            Error::TextPathWorkLimitReached => {
+                write!(f, "SVG text-path work limit reached")
             }
             Error::InvalidSize => {
                 write!(f, "SVG has an invalid size")

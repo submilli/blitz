@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use kurbo::{ParamCurve, ParamCurveArclen};
+use kurbo::ParamCurve;
 use svgtypes::{FontFamily, Length, LengthUnit, parse_font_families};
 
 use super::svgtree::{AId, EId, FromValue, SvgNode};
@@ -190,7 +190,7 @@ fn collect_text_chunks_impl(
                     continue;
                 }
 
-                match resolve_text_flow(child, state) {
+                match resolve_text_flow(child, state, &mut cache.text_path_work) {
                     Some(v) => {
                         iter_state.text_flow = v;
                     }
@@ -362,7 +362,11 @@ fn collect_text_chunks_impl(
     }
 }
 
-fn resolve_text_flow(node: SvgNode, state: &converter::State) -> Option<TextFlow> {
+fn resolve_text_flow(
+    node: SvgNode,
+    state: &converter::State,
+    work: &mut crate::text_path::Work,
+) -> Option<TextFlow> {
     let linked_node = node.attribute::<SvgNode>(AId::Href)?;
     let path = super::shapes::convert(linked_node, state)?;
 
@@ -380,7 +384,7 @@ fn resolve_text_flow(node: SvgNode, state: &converter::State) -> Option<TextFlow
     let start_offset = if start_offset.unit == LengthUnit::Percent {
         // 'If a percentage is given, then the `startOffset` represents
         // a percentage distance along the entire path.'
-        let path_len = path_length(&path);
+        let path_len = path_length(&path, work)?;
         (path_len * (start_offset.number / 100.0)) as f32
     } else {
         node.resolve_length(AId::StartOffset, state, 0.0)
@@ -909,7 +913,7 @@ fn convert_writing_mode(text_node: SvgNode) -> WritingMode {
     }
 }
 
-fn path_length(path: &tiny_skia_path::Path) -> f64 {
+fn path_length(path: &tiny_skia_path::Path, work: &mut crate::text_path::Work) -> Option<f64> {
     let mut prev_mx = path.points()[0].x;
     let mut prev_my = path.points()[0].y;
     let mut prev_x = prev_mx;
@@ -955,10 +959,10 @@ fn path_length(path: &tiny_skia_path::Path) -> f64 {
             }
         };
 
-        length += curve.arclen(0.5);
+        length += work.arclen(&curve, 0.5)?;
         prev_x = curve.p3.x as f32;
         prev_y = curve.p3.y as f32;
     }
 
-    length
+    Some(length)
 }

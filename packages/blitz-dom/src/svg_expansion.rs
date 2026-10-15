@@ -35,7 +35,8 @@ const MAX_DECLARATIONS_PER_NODE: usize = 16;
 
 /// What measuring a parsed document holds per node of it: its element and
 /// costs, and its share of kept declarations (32 bytes each).
-const MEASURE_BYTES_PER_NODE: usize = 1024 + 32 * MAX_DECLARATIONS_PER_NODE;
+// Include resolved filter-list costs and their memoized function counts.
+const MEASURE_BYTES_PER_NODE: usize = 1280 + 32 * MAX_DECLARATIONS_PER_NODE;
 
 /// What [`conversion`] holds while it measures `doc`: its nodes, and its
 /// parsed stylesheets. Finding the latter, as the measure does too, holds

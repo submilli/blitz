@@ -42,7 +42,7 @@ const HREFS: [(&str, Option<&[&str]>); 6] = [
 /// Where an element names another one, by how usvg builds the target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Slot {
-    /// Built once where it is named (clip paths, masks, filters and `href`s).
+    /// Built once where it is named (clip paths, masks and `href`s).
     Once,
     /// Built for each element it paints, which inherit it.
     Fill,
@@ -51,19 +51,22 @@ pub(super) enum Slot {
     MarkerStart,
     MarkerMid,
     MarkerEnd,
+    /// Filter lists inherit only when explicitly requested.
+    Filter,
 }
 
 impl Slot {
-    /// The slots whose references descendants inherit.
-    pub(super) const INHERITED: [Slot; 5] = [
+    /// The slots that support inheritance, including explicitly inherited filters.
+    pub(super) const INHERITED: [Slot; 6] = [
         Slot::Fill,
         Slot::Stroke,
         Slot::MarkerStart,
         Slot::MarkerMid,
         Slot::MarkerEnd,
+        Slot::Filter,
     ];
 
-    /// The slot's place in [`Slot::INHERITED`], if descendants inherit it.
+    /// The slot's place in [`Slot::INHERITED`], if it supports inheritance.
     pub(super) fn inherited_index(self) -> Option<usize> {
         Self::INHERITED.iter().position(|slot| *slot == self)
     }
@@ -78,7 +81,7 @@ impl Slot {
             "marker-mid" => (Slot::MarkerMid, Value::Reference),
             "marker-end" => (Slot::MarkerEnd, Value::Reference),
             "clip-path" | "mask" => (Slot::Once, Value::Reference),
-            "filter" => (Slot::Once, Value::Filters),
+            "filter" => (Slot::Filter, Value::Filters),
             _ => return None,
         })
     }
@@ -96,8 +99,9 @@ enum Value {
 pub(super) struct Declared {
     /// The elements it may name.
     pub targets: Vec<usize>,
-    /// Whether it may take the inherited value: undeclared, `inherit`, or a
-    /// context paint (which a `<use>` passes on).
+    /// Whether it may take the inherited value: explicit `inherit`, a
+    /// context paint (which a `<use>` passes on), or an undeclared property
+    /// that inherits by default (all slots here except filters).
     pub inherits: bool,
     /// Whether it may be a context paint, which a marked shape passes on.
     pub context: bool,
@@ -229,8 +233,8 @@ impl<'a, 'input> Graph<'a, 'input> {
     ) -> (Vec<usize>, [Declared; Slot::INHERITED.len()]) {
         let mut once = Vec::new();
         let mut inherited: [Declared; Slot::INHERITED.len()] = Default::default();
-        for declared in &mut inherited {
-            declared.inherits = true;
+        for (slot, declared) in Slot::INHERITED.iter().zip(&mut inherited) {
+            declared.inherits = *slot != Slot::Filter;
         }
         let mut declared_slots = [false; Slot::INHERITED.len()];
         for (name, value) in self.elements[at].declarations.iter() {

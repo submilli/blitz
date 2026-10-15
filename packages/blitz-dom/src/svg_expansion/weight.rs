@@ -44,6 +44,8 @@ const BYTES_PER_LIST_BYTE: usize = 16;
 /// Recursive calls of the measure itself. Each nesting level of the document
 /// may also walk up through as many levels to find inherited references.
 const MAX_FRAMES: usize = 4 * MAX_NESTING;
+/// Preflight target walks have their own allowance, before expansion costs.
+const MAX_REFERENCE_SCAN_WORK: usize = 2_000_000;
 
 /// What usvg builds and converts a document to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,22 +54,39 @@ pub(crate) struct Conversion {
     pub bytes: usize,
     /// How many levels of elements and references it recurses through.
     pub levels: usize,
+    /// CPU work repeated while converting expanded instances.
+    pub work: usize,
 }
 
 /// What usvg allocates to convert `doc`, or `None` when its elements and
-/// references nest deeper than usvg can recurse, or form a cycle.
+/// references nest deeper than usvg can recurse, form a cycle, or stylesheet
+/// parsing/matching exceeds the preflight's work allowance. Expanded matching
+/// work is returned for the caller to admit independently of memory.
 pub(crate) fn conversion(doc: &roxmltree::Document) -> Option<Conversion> {
-    let styles = Styles::of(doc);
+    let reference_scan_work = reference_scan_work(doc);
+    // Graph construction also visits tref target subtrees. Admit those scans
+    // before linking, including targets hidden below unknown XML elements.
+    let references = doc
+        .descendants()
+        .filter(|node| node.has_tag_name("tref"))
+        .count();
+    if reference_scan_work.saturating_mul(references) > MAX_REFERENCE_SCAN_WORK {
+        return None;
+    }
+    let styles = Styles::of(doc)?;
     let graph = Graph::of(doc, &styles, MAX_NESTING).ok()?;
     if graph.elements.is_empty() {
         return Some(Conversion {
             bytes: 0,
             levels: 0,
+            work: 0,
         });
     }
     let mut measure = Measure {
         graph: &graph,
+        reference_scan_work,
         built: HashMap::new(),
+        filters: HashMap::new(),
         inherited: HashMap::new(),
         lists: HashMap::new(),
         fonts: HashMap::new(),
@@ -84,6 +103,10 @@ pub(crate) fn conversion(doc: &roxmltree::Document) -> Option<Conversion> {
             .bytes
             .saturating_add(super::styles::stylesheet_bytes(doc)),
         levels: cost.levels,
+        // usvg collects unique filters with a linear scan of prior filters.
+        work: cost
+            .work
+            .saturating_add(cost.filters.saturating_mul(cost.filters)),
     })
 }
 
@@ -92,23 +115,33 @@ pub(crate) fn conversion(doc: &roxmltree::Document) -> Option<Conversion> {
 struct Cost {
     bytes: usize,
     levels: usize,
+    work: usize,
+    filters: usize,
 }
 
 impl Cost {
     fn add(&mut self, other: Cost) {
         self.bytes = self.bytes.saturating_add(other.bytes);
         self.levels = self.levels.max(other.levels);
+        self.work = self.work.saturating_add(other.work);
+        self.filters = self.filters.saturating_add(other.filters);
     }
 
     fn add_times(&mut self, other: Cost, times: usize) {
         self.bytes = self.bytes.saturating_add(other.bytes.saturating_mul(times));
         self.levels = self.levels.max(other.levels);
+        self.work = self.work.saturating_add(other.work.saturating_mul(times));
+        self.filters = self
+            .filters
+            .saturating_add(other.filters.saturating_mul(times));
     }
 
     fn max(self, other: Cost) -> Cost {
         Cost {
             bytes: self.bytes.max(other.bytes),
             levels: self.levels.max(other.levels),
+            work: self.work.max(other.work),
+            filters: self.filters.max(other.filters),
         }
     }
 }
@@ -120,13 +153,16 @@ enum Step {
     Inherited(usize, Slot),
     List(usize, &'static str),
     ContextPaint,
+    Filters(usize),
     Font(usize),
     Viewport(usize),
 }
 
 struct Measure<'g, 'a, 'input> {
     graph: &'g Graph<'a, 'input>,
+    reference_scan_work: usize,
     built: HashMap<usize, Cost>,
+    filters: HashMap<usize, usize>,
     inherited: HashMap<(usize, Slot), Cost>,
     lists: HashMap<(usize, &'static str), usize>,
     fonts: HashMap<usize, f64>,
@@ -151,6 +187,17 @@ impl Measure<'_, '_, '_> {
         let mut cost = Cost {
             bytes: self.own_bytes(element)?,
             levels: 0,
+            work: node
+                .declarations
+                .match_work
+                .saturating_add(if node.tag == "tref" {
+                    self.reference_scan_work
+                } else {
+                    0
+                }),
+            filters: self
+                .filter_functions(element)?
+                .saturating_add(usize::from(node.tag == "filter")),
         };
         for &child in &node.children {
             cost.add(self.subtree(child)?);
@@ -158,6 +205,7 @@ impl Measure<'_, '_, '_> {
         for &target in node.instance.iter().chain(&node.once) {
             cost.add(self.subtree(target)?);
         }
+        cost.add(self.inherited(element, Slot::Filter)?);
         if painted(node.tag) {
             cost.add(self.inherited(element, Slot::Fill)?);
             cost.add(self.inherited(element, Slot::Stroke)?);
@@ -172,6 +220,8 @@ impl Measure<'_, '_, '_> {
                 cost.add(Cost {
                     bytes: bytes.saturating_mul(BYTES_PER_LIST_BYTE),
                     levels: 0,
+                    work: 0,
+                    filters: 0,
                 });
             }
         }
@@ -204,7 +254,12 @@ impl Measure<'_, '_, '_> {
         let graph = self.graph;
         let declared = &graph.elements[element].inherited[position];
         for &target in &declared.targets {
-            cost = cost.max(self.subtree(target)?);
+            let target_cost = self.subtree(target)?;
+            if slot == Slot::Filter {
+                cost.add(target_cost);
+            } else {
+                cost = cost.max(target_cost);
+            }
         }
         if declared.context {
             cost = cost.max(self.context_paint()?);
@@ -317,12 +372,7 @@ impl Measure<'_, '_, '_> {
             _ => 0,
         };
         // Each filter function becomes a filter of its own.
-        let functions = node
-            .declarations
-            .values("filter")
-            .flat_map(svgtypes::FilterValueListParser::from)
-            .filter(|function| !matches!(function, Ok(svgtypes::FilterValue::Url(_))))
-            .count();
+        let functions = self.filter_functions(element)?;
         let curves = self.curves(element)?;
         Ok([
             BYTES_PER_BUILT_ELEMENT,
@@ -335,6 +385,31 @@ impl Measure<'_, '_, '_> {
         ]
         .into_iter()
         .fold(0, usize::saturating_add))
+    }
+
+    /// Filter functions are not inherited by default. Explicit `inherit`
+    /// copies the immediate built parent's list, including a use instance.
+    fn filter_functions(&mut self, element: usize) -> Result<usize, Refused> {
+        if let Some(count) = self.filters.get(&element) {
+            return Ok(*count);
+        }
+        self.enter(Step::Filters(element))?;
+        let graph = self.graph;
+        let declarations = &graph.elements[element].declarations;
+        let mut count = filter_functions(declarations);
+        if declarations
+            .values("filter")
+            .any(|value| value.trim() == "inherit")
+        {
+            let mut inherited = 0;
+            for source in sources(graph, element) {
+                inherited = inherited.max(self.filter_functions(source)?);
+            }
+            count = count.saturating_add(inherited);
+        }
+        self.leave(Step::Filters(element));
+        self.filters.insert(element, count);
+        Ok(count)
     }
 
     /// The curves usvg makes of `element`'s shape.
@@ -494,4 +569,28 @@ fn is_text(tag: &str) -> bool {
 /// Elements usvg draws markers on.
 fn markable(tag: &str) -> bool {
     matches!(tag, "path" | "line" | "polyline" | "polygon")
+}
+
+/// Every tref searches the original XML (including unknown elements), then
+/// walks its target subtree. Charge ID comparisons by bytes, not just nodes.
+fn reference_scan_work(doc: &roxmltree::Document) -> usize {
+    doc.descendants().fold(0usize, |work, node| {
+        let attributes = node.attributes().fold(0usize, |cost, attr| {
+            cost.saturating_add(attr.name().len())
+                .saturating_add(if attr.name() == "id" {
+                    attr.value().len()
+                } else {
+                    0
+                })
+        });
+        work.saturating_add(2).saturating_add(attributes)
+    })
+}
+
+fn filter_functions(declarations: &super::styles::Declarations<'_>) -> usize {
+    declarations
+        .values("filter")
+        .flat_map(svgtypes::FilterValueListParser::from)
+        .filter(|function| !matches!(function, Ok(svgtypes::FilterValue::Url(_))))
+        .count()
 }

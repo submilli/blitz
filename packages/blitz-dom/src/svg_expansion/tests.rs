@@ -9,6 +9,7 @@ use crate::util::default_svg_fonts;
 use usvg::roxmltree;
 
 mod allocations;
+mod work;
 
 const OPEN: &str = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'>";
 

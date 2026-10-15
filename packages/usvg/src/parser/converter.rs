@@ -44,6 +44,8 @@ pub struct State<'a> {
 
 #[derive(Clone)]
 pub struct Cache {
+    #[cfg(feature = "text")]
+    pub(crate) text_path_work: crate::text_path::Work,
     /// This fontdb is initialized from [`Options::fontdb`] and then populated
     /// over the course of conversion.
     #[cfg(feature = "text")]
@@ -96,6 +98,8 @@ macro_rules! font_lookup {
 impl Cache {
     pub(crate) fn new(#[cfg(feature = "text")] fontdb: Arc<Database>) -> Self {
         Self {
+            #[cfg(feature = "text")]
+            text_path_work: crate::text_path::Work::default(),
             #[cfg(feature = "text")]
             fontdb,
 
@@ -498,6 +502,10 @@ pub(crate) fn convert_doc(svg_doc: &svgtree::Document, opt: &Options) -> Result<
         calculate_svg_bbox(&mut tree);
     }
 
+    #[cfg(feature = "text")]
+    if cache.text_path_work.refused() {
+        return Err(Error::TextPathWorkLimitReached);
+    }
     Ok(tree)
 }
 

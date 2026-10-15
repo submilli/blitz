@@ -8,6 +8,7 @@
 //! length for each of them. Stylesheets are read and matched as usvg reads
 //! them (`resolve_css` and `parse_svg_element` in its `svgtree`).
 
+use std::cell::Cell;
 use usvg::roxmltree::{self, Node};
 
 use super::SVG_NS;
@@ -34,9 +35,12 @@ const READ: [&str; 11] = [
 /// then sets up to six.
 const FONT_LONGHANDS: usize = 18;
 
+pub(super) const MAX_MATCH_WORK: usize = 2_000_000;
+
 /// The stylesheets of one document.
 pub(super) struct Styles<'a> {
     sheet: simplecss::StyleSheet<'a>,
+    remaining: Cell<usize>,
 }
 
 /// The declarations of the properties the measure reads that one element is
@@ -47,28 +51,57 @@ pub(super) struct Declarations<'a> {
     list: Vec<(&'a str, &'a str)>,
     /// What usvg allocates to copy the stylesheet and `style` declarations.
     pub copied_bytes: usize,
+    /// Matching work repeated when usvg builds a copy of this XML element.
+    pub match_work: usize,
 }
 
 impl<'a> Styles<'a> {
     /// The rules of `doc`'s `<style>` elements of type `text/css` (or none).
-    pub(super) fn of(doc: &'a roxmltree::Document) -> Self {
-        let mut sheet = simplecss::StyleSheet::new();
-        for node in doc.descendants().filter(|n| n.has_tag_name("style")) {
-            if node
-                .attribute("type")
-                .is_some_and(|kind| kind != "text/css")
-            {
-                continue;
-            }
-            if let Some(text) = node.text() {
-                sheet.parse_more(text);
+    /// Refuses excessive parsing, sorting or selector recursion before matching.
+    pub(super) fn of(doc: &'a roxmltree::Document) -> Option<Self> {
+        let mut bytes = 0usize;
+        let mut sheets = 0usize;
+        for css in stylesheets(doc) {
+            bytes = bytes.saturating_add(css.len());
+            sheets = sheets.saturating_add(1);
+            // simplecss recursively skips comments in its selector tokenizer.
+            // Count even comments inside strings: this is an admission bound,
+            // not a second CSS parser.
+            if css.matches("/*").count() > super::MAX_NESTING {
+                return None;
             }
         }
-        Self { sheet }
+        // parse_more recomputes specificity and sorts all accumulated rules,
+        // even for an empty later sheet. Bound those repeated source visits.
+        if bytes.saturating_mul(sheets) > MAX_MATCH_WORK {
+            return None;
+        }
+        let mut sheet = simplecss::StyleSheet::new();
+        for text in stylesheets(doc) {
+            sheet.parse_more(text);
+        }
+        // simplecss recurses once per combinator. Its public serialization
+        // exposes every combinator; counting whitespace inside attributes too
+        // is deliberately conservative. Bound subselector scans as well.
+        for rule in &sheet.rules {
+            let selector = rule.selector.to_string();
+            let levels = selector
+                .bytes()
+                .filter(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'+'))
+                .count();
+            if selector.len() > 4096 || levels > super::MAX_NESTING {
+                return None;
+            }
+        }
+        Some(Self {
+            sheet,
+            remaining: Cell::new(MAX_MATCH_WORK),
+        })
     }
 
-    /// The declarations `node` is given, or `None` once more than `allowance`
-    /// would be kept.
+    /// The declarations `node` is given. Consumes the document's shared
+    /// matching allowance through the matcher's immutable callbacks; refuses
+    /// once it is exhausted or more than `allowance` declarations would be kept.
     pub(super) fn declarations(
         &self,
         node: Node<'a, '_>,
@@ -81,9 +114,18 @@ impl<'a> Styles<'a> {
             }
         }
         declarations.within(allowance)?;
-        let element = XmlNode(node);
+        let before = self.remaining.get();
+        let element = XmlNode {
+            node,
+            remaining: &self.remaining,
+        };
         for rule in &self.sheet.rules {
-            if !rule.selector.matches(&element) {
+            element.charge(1);
+            let matched = rule.selector.matches(&element);
+            if self.remaining.get() == 0 {
+                return None;
+            }
+            if !matched {
                 continue;
             }
             for declaration in &rule.declarations {
@@ -97,6 +139,7 @@ impl<'a> Styles<'a> {
                 declarations.within(allowance)?;
             }
         }
+        declarations.match_work = before - self.remaining.get();
         Some(declarations)
     }
 }
@@ -189,28 +232,76 @@ fn stylesheets<'a>(doc: &'a roxmltree::Document) -> impl Iterator<Item = &'a str
 }
 
 /// An element as usvg matches selectors against it.
-struct XmlNode<'a, 'input>(Node<'a, 'input>);
+struct XmlNode<'b, 'a, 'input> {
+    node: Node<'a, 'input>,
+    remaining: &'b Cell<usize>,
+}
 
-impl simplecss::Element for XmlNode<'_, '_> {
+impl XmlNode<'_, '_, '_> {
+    fn charge(&self, work: usize) -> bool {
+        self.remaining
+            .set(self.remaining.get().saturating_sub(work));
+        self.remaining.get() != 0
+    }
+}
+
+impl simplecss::Element for XmlNode<'_, '_, '_> {
     fn parent_element(&self) -> Option<Self> {
-        self.0.parent_element().map(XmlNode)
+        if !self.charge(1) {
+            return None;
+        }
+        self.node.parent_element().map(|node| Self {
+            node,
+            remaining: self.remaining,
+        })
     }
 
     fn prev_sibling_element(&self) -> Option<Self> {
-        self.0.prev_sibling_element().map(XmlNode)
+        if !self.charge(1) {
+            return None;
+        }
+        let mut previous = self.node.prev_sibling();
+        while let Some(node) = previous {
+            if !self.charge(1) {
+                return None;
+            }
+            if node.is_element() {
+                return Some(Self {
+                    node,
+                    remaining: self.remaining,
+                });
+            }
+            previous = node.prev_sibling();
+        }
+        None
     }
 
     fn has_local_name(&self, local_name: &str) -> bool {
-        self.0.tag_name().name() == local_name
+        self.charge(local_name.len().saturating_add(1)) && self.node.tag_name().name() == local_name
     }
 
     fn attribute_matches(&self, local_name: &str, operator: simplecss::AttributeOperator) -> bool {
-        self.0
-            .attribute(local_name)
-            .is_some_and(|value| operator.matches(value))
+        for attribute in self.node.attributes() {
+            if !self.charge(
+                attribute
+                    .name()
+                    .len()
+                    .saturating_add(attribute.value().len())
+                    .saturating_add(1),
+            ) {
+                return false;
+            }
+            if attribute.name() == local_name && attribute.namespace().is_none() {
+                return operator.matches(attribute.value());
+            }
+        }
+        false
     }
 
     fn pseudo_class_matches(&self, class: simplecss::PseudoClass) -> bool {
+        if !self.charge(1) {
+            return false;
+        }
         match class {
             simplecss::PseudoClass::FirstChild => self.prev_sibling_element().is_none(),
             _ => false,
