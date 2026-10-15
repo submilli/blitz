@@ -492,3 +492,46 @@ fn embedded_mutations_defer_data_decode_to_stable_steps() {
     assert!(!doc.step_image_updates(&mut updates, |_| true));
     assert_eq!(loaded(&doc, second), Some(true));
 }
+
+#[test]
+fn embedded_external_requests_start_immediately_without_revisiting_deferred_data() {
+    use crate::image_state::ImageUpdateStage;
+    let provider = Arc::new(Deferred::default());
+    let (mut doc, html) = document(provider.clone());
+    doc.embedder_updates_images = true;
+    let data = fe_image(&mut doc, html, &data_png());
+    doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
+    assert_eq!(doc.fe_images.deferred, [Some(data)]);
+    assert!(!doc.has_image_updates(ImageUpdateStage::Immediate));
+    let external = fe_image(&mut doc, html, "/missing.png");
+    doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
+    assert_eq!(provider.urls().len(), 1);
+    assert_eq!(doc.fe_images.deferred, [Some(data)]);
+    assert!(!doc.fe_images.requests.contains_key(&data));
+    assert!(doc.fe_images.requests.contains_key(&external));
+    // Changing a deferred data source to an external URL starts it now too.
+    doc.mutate()
+        .set_attribute(data, qual_name!("href"), "/changed.png");
+    doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
+    assert_eq!(provider.urls().len(), 2);
+    doc.run_image_updates(ImageUpdateStage::StableState, |_| true);
+    assert_eq!(provider.urls().len(), 2);
+}
+
+#[test]
+fn deleting_deferred_images_bounds_bookkeeping_before_stable_state() {
+    use crate::image_state::ImageUpdateStage;
+    let (mut doc, html) = document(Arc::new(Deferred::default()));
+    doc.embedder_updates_images = true;
+    doc.node_limit = 128;
+    let data = data_png();
+    for _ in 0..5_000 {
+        let node = fe_image(&mut doc, html, &data);
+        doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
+        doc.mutate().remove_and_drop_node(node);
+        assert!(doc.fe_images.deferred_indices.is_empty());
+        assert!(doc.fe_images.deferred.len() <= 1024);
+    }
+    doc.run_image_updates(ImageUpdateStage::StableState, |_| true);
+    assert!(doc.fe_images.deferred.is_empty());
+}

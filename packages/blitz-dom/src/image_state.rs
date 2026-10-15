@@ -205,7 +205,7 @@ impl BaseDocument {
     /// Whether [`Self::run_image_updates`] has work at `stage`.
     pub fn has_image_updates(&self, stage: ImageUpdateStage) -> bool {
         #[cfg(feature = "svg")]
-        if stage == ImageUpdateStage::StableState && self.fe_images.has_updates() {
+        if self.fe_images.has_updates(stage) {
             return true;
         }
         match stage {
@@ -243,8 +243,8 @@ impl BaseDocument {
         }
         let mut pending = VecDeque::new();
         #[cfg(feature = "svg")]
-        if stage == ImageUpdateStage::StableState {
-            for node in self.take_fe_image_updates() {
+        {
+            for node in self.take_fe_image_updates(stage) {
                 pending.push_back(ImageUpdate::Filter(self.lease_node(node)));
             }
         }
@@ -274,7 +274,9 @@ impl BaseDocument {
         match update {
             ImageUpdate::Html(lease) => self.run_image_update(lease.id(), updates, &is_active),
             #[cfg(feature = "svg")]
-            ImageUpdate::Filter(lease) => self.run_fe_image_update(lease.id(), &is_active),
+            ImageUpdate::Filter(lease) => {
+                self.run_fe_image_update(lease.id(), updates.stage, &is_active)
+            }
         }
         true
     }
