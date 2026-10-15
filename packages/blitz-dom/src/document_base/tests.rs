@@ -405,3 +405,31 @@ fn native_inline_style_edits_survive_document_adoption() {
     assert!(css.contains("width: 20px"), "{css}");
     assert!(!css.contains("height"), "{css}");
 }
+
+#[test]
+fn bounded_base_clone_admits_before_copying_frozen_or_fallback_url() {
+    let (mut doc, body) = document();
+    let expected = doc.document_base_url(body);
+    assert_eq!(
+        doc.document_base_url_with_limit(body, expected.as_str().len()),
+        Some(expected.clone())
+    );
+    assert!(
+        doc.document_base_url_with_limit(body, expected.as_str().len() - 1)
+            .is_none()
+    );
+    let long = format!("https://base.test/{}/", "x".repeat(1024 * 1024));
+    let first = base(&mut doc.mutate(), body, &long);
+    assert!(doc.document_base_url_with_limit(body, 16 * 1024).is_none());
+    doc.mutate().set_attribute(
+        first,
+        QualName::new(None, ns!(), "href".into()),
+        "https://short.test/",
+    );
+    assert_eq!(
+        doc.document_base_url_with_limit(body, 16 * 1024)
+            .unwrap()
+            .as_str(),
+        "https://short.test/"
+    );
+}

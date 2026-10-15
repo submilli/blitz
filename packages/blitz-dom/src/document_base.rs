@@ -44,6 +44,31 @@ impl BaseDocument {
         )
     }
 
+    /// Clone the authoritative HTML base only after admitting its byte length.
+    /// Consumers producing bounded output can reject a hostile base before
+    /// allocating another copy or resolving relative URLs against it.
+    pub fn document_base_url_with_limit(&self, node: NodeId, max_bytes: usize) -> Option<Url> {
+        let document = self.node_document(node);
+        let metadata = self.document_metadata(document);
+        let base = self
+            .document_base(document)
+            .frozen
+            .as_deref()
+            .or(metadata.inherited_base_url.as_ref())
+            .or_else(|| {
+                if document == self.root_node_id {
+                    Some(self.url())
+                } else {
+                    metadata.url.as_ref()
+                }
+            });
+        match base {
+            Some(base) => (base.as_str().len() <= max_bytes).then(|| base.clone()),
+            None => ("about:blank".len() <= max_bytes)
+                .then(|| Url::parse("about:blank").expect("static about-blank URL")),
+        }
+    }
+
     /// About-blank embedders capture an inherited fallback separately from the
     /// document's URL. Changing a parent later never changes this snapshot.
     pub fn document_fallback_base_url(&self, node: NodeId) -> Url {
