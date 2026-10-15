@@ -19,14 +19,16 @@
 //! [update the image data]: https://html.spec.whatwg.org/multipage/images.html#update-the-image-data
 //! [relevant mutations]: https://html.spec.whatwg.org/multipage/images.html#relevant-mutations
 //! [list of available images]: https://html.spec.whatwg.org/multipage/images.html#list-of-available-images
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use markup5ever::{QualName, local_name, ns};
 
-use crate::document::DocumentEvent;
+mod answers;
+
 use crate::image_request::ImageKey;
 use crate::node::{ImageData, SpecialElementData};
-use crate::{BaseDocument, DocumentMutator, ElementData, NodeId};
+use crate::{BaseDocument, DocumentMutator, ElementData, NodeId, NodeLease};
+use answers::SynchronousAnswers;
 
 /// Events waiting for the embedder. Each relevant mutation can queue one,
 /// so a page could queue without end between drains; past this limit new
@@ -69,6 +71,22 @@ pub enum ImageUpdateStage {
     Immediate,
     /// At a stable state (a microtask): all of them.
     StableState,
+}
+
+/// A finite stage snapshot whose pending nodes survive garbage collection.
+/// Consume it with [`BaseDocument::step_image_updates`], then drop it before
+/// resuming script, event processing or another stage. Dropping restores
+/// unrelated resource answers held while the snapshot was processed.
+pub struct ImageUpdates {
+    stage: ImageUpdateStage,
+    pending: VecDeque<ImageUpdate>,
+    answers: SynchronousAnswers,
+}
+
+enum ImageUpdate {
+    Html(NodeLease),
+    #[cfg(feature = "svg")]
+    Filter(NodeLease),
 }
 
 /// What script can observe of an `<img>`, except its URL
@@ -187,7 +205,7 @@ impl BaseDocument {
     /// Whether [`Self::run_image_updates`] has work at `stage`.
     pub fn has_image_updates(&self, stage: ImageUpdateStage) -> bool {
         #[cfg(feature = "svg")]
-        if self.fe_images.has_updates() {
+        if stage == ImageUpdateStage::StableState && self.fe_images.has_updates() {
             return true;
         }
         match stage {
@@ -211,44 +229,88 @@ impl BaseDocument {
         stage: ImageUpdateStage,
         is_active: impl Fn(NodeId) -> bool,
     ) {
-        // `feImage` requests wait for no microtask: they run at either stage.
-        #[cfg(feature = "svg")]
-        self.run_fe_image_updates(&is_active);
+        let mut updates = self.take_image_updates(stage);
+        while self.step_image_updates(&mut updates, &is_active) {}
+    }
+
+    /// Snapshot this stage's queue. Finish and drop the snapshot before running
+    /// script, processing events or starting another image stage. Leases preserve queued nodes across reclamation;
+    /// updates queued while processing this snapshot belong to the next stage.
+    pub fn take_image_updates(&mut self, stage: ImageUpdateStage) -> ImageUpdates {
         let mut queued = std::mem::take(&mut self.images.fresh);
         if stage == ImageUpdateStage::StableState {
             queued.splice(0..0, std::mem::take(&mut self.images.deferred));
         }
-        let mut fetches = HashSet::new();
-        for node in queued {
-            let Some(state) = self.images.states.get_mut(&node) else {
-                continue;
-            };
-            state.fresh = false;
-            if stage == ImageUpdateStage::StableState {
-                state.deferred = false;
-            }
-            if !state.update_pending {
-                continue;
-            }
-            match self.update_image_data(node, stage, &is_active) {
-                Outcome::Deferred => {
-                    let state = self.images.states.entry(node).or_default();
-                    if !state.deferred {
-                        state.deferred = true;
-                        self.images.deferred.push(node);
-                    }
-                    continue;
-                }
-                Outcome::Fetched(request) => {
-                    fetches.insert(request);
-                }
-                Outcome::Done => {}
-            }
-            if let Some(state) = self.images.states.get_mut(&node) {
-                state.update_pending = false;
+        let mut pending = VecDeque::new();
+        #[cfg(feature = "svg")]
+        if stage == ImageUpdateStage::StableState {
+            for node in self.take_fe_image_updates() {
+                pending.push_back(ImageUpdate::Filter(self.lease_node(node)));
             }
         }
-        self.apply_synchronous_answers(&fetches);
+        pending.extend(
+            queued
+                .into_iter()
+                .map(|node| ImageUpdate::Html(self.lease_node(node))),
+        );
+        ImageUpdates {
+            stage,
+            pending,
+            answers: SynchronousAnswers::new(self.tx.clone()),
+        }
+    }
+
+    /// Process one snapshot entry, including its synchronous answer. Returns
+    /// false when exhausted. The caller may release the document borrow and
+    /// collect garbage between calls, but must not run page tasks or script.
+    pub fn step_image_updates(
+        &mut self,
+        updates: &mut ImageUpdates,
+        is_active: impl Fn(NodeId) -> bool,
+    ) -> bool {
+        let Some(update) = updates.pending.pop_front() else {
+            return false;
+        };
+        match update {
+            ImageUpdate::Html(lease) => self.run_image_update(lease.id(), updates, &is_active),
+            #[cfg(feature = "svg")]
+            ImageUpdate::Filter(lease) => self.run_fe_image_update(lease.id(), &is_active),
+        }
+        true
+    }
+
+    fn run_image_update(
+        &mut self,
+        node: NodeId,
+        updates: &mut ImageUpdates,
+        is_active: &impl Fn(NodeId) -> bool,
+    ) {
+        let stage = updates.stage;
+        let Some(state) = self.images.states.get_mut(&node) else {
+            return;
+        };
+        state.fresh = false;
+        if stage == ImageUpdateStage::StableState {
+            state.deferred = false;
+        }
+        if !state.update_pending {
+            return;
+        }
+        match self.update_image_data(node, stage, is_active) {
+            Outcome::Deferred => {
+                let state = self.images.states.entry(node).or_default();
+                if !state.deferred {
+                    state.deferred = true;
+                    self.images.deferred.push(node);
+                }
+                return;
+            }
+            Outcome::Fetched(request) => updates.answers.apply(self, request),
+            Outcome::Done => {}
+        }
+        if let Some(state) = self.images.states.get_mut(&node) {
+            state.update_pending = false;
+        }
     }
 
     /// Take the events queued since the last call, oldest first.
@@ -404,33 +466,6 @@ impl BaseDocument {
             kind,
             generation,
         });
-    }
-
-    /// Apply the answers to `requests` that a provider already sent, and
-    /// only those: other completions still wait for the embedder.
-    ///
-    /// Providers answer on the document's thread (the embedder's queue
-    /// runs there), so re-sending the others keeps their order.
-    fn apply_synchronous_answers(&mut self, requests: &HashSet<usize>) {
-        if requests.is_empty() {
-            return;
-        }
-        let Some(rx) = self.rx.take() else {
-            return;
-        };
-        let mut others = Vec::new();
-        while let Ok(message) = rx.try_recv() {
-            match message {
-                DocumentEvent::ResourceLoad(load) if requests.contains(&load.request_id) => {
-                    self.load_resource(load);
-                }
-                other => others.push(other),
-            }
-        }
-        self.rx = Some(rx);
-        for message in others {
-            let _ = self.tx.send(message);
-        }
     }
 }
 

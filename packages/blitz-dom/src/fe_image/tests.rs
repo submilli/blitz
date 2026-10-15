@@ -473,3 +473,22 @@ fn held_raster_index_is_weak_and_bounded() {
     index.index_raster("data:,replacement", &replacement);
     assert_eq!(index.held_rasters.len(), 1);
 }
+
+#[test]
+fn embedded_mutations_defer_data_decode_to_stable_steps() {
+    use crate::image_state::ImageUpdateStage;
+    let (mut doc, html) = document(Arc::new(Deferred::default()));
+    doc.embedder_updates_images = true;
+    let first = fe_image(&mut doc, html, &data_png());
+    let second = fe_image(&mut doc, html, &data_png());
+    doc.run_image_updates(ImageUpdateStage::Immediate, |_| true);
+    assert!(doc.fe_images.requests.is_empty());
+    assert!(doc.has_image_updates(ImageUpdateStage::StableState));
+    let mut updates = doc.take_image_updates(ImageUpdateStage::StableState);
+    assert!(doc.step_image_updates(&mut updates, |_| true));
+    assert!(doc.fe_images.requests.contains_key(&first));
+    assert!(!doc.fe_images.requests.contains_key(&second));
+    assert!(doc.step_image_updates(&mut updates, |_| true));
+    assert!(!doc.step_image_updates(&mut updates, |_| true));
+    assert_eq!(loaded(&doc, second), Some(true));
+}

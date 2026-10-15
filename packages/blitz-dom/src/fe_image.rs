@@ -134,18 +134,24 @@ impl BaseDocument {
         }
     }
 
-    /// Run the queued updates. `is_active(document)` says whether a document
-    /// has a browsing context: only connected elements in those fetch.
-    pub(crate) fn run_fe_image_updates(&mut self, is_active: &impl Fn(NodeId) -> bool) {
+    /// Take the stable-state snapshot. Mutations cannot decode data images:
+    /// the embedder must be free to reclaim detached images before each step.
+    pub(crate) fn take_fe_image_updates(&mut self) -> Vec<NodeId> {
         self.fe_images.queued.clear();
-        for node in std::mem::take(&mut self.fe_images.queue) {
-            let Some(element) = self.get_node(node) else {
-                continue;
-            };
-            if self.is_fe_image(node) {
-                let active = element.flags.is_in_document() && is_active(element.owner_document);
-                self.update_fe_image(node, active);
-            }
+        std::mem::take(&mut self.fe_images.queue)
+    }
+
+    pub(crate) fn run_fe_image_update(
+        &mut self,
+        node: NodeId,
+        is_active: &impl Fn(NodeId) -> bool,
+    ) {
+        let Some(element) = self.get_node(node) else {
+            return;
+        };
+        if self.is_fe_image(node) {
+            let active = element.flags.is_in_document() && is_active(element.owner_document);
+            self.update_fe_image(node, active);
         }
     }
 

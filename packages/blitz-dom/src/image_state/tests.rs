@@ -1,6 +1,7 @@
 //! `<img>` request state, staged updates and events, against the Chrome
 //! behavior recorded in submilli-browser's `fixtures/local/image-state`.
 use super::*;
+use crate::document::DocumentEvent;
 use crate::{DocumentConfig, qual_name};
 use blitz_traits::net::{Bytes, NetHandler, NetProvider, Request};
 use std::io::Cursor;
@@ -431,4 +432,104 @@ fn svg_images_without_area_load() {
         assert_eq!(state, ImageRequestState::CompletelyAvailable, "{root}");
         assert_eq!(events(&mut doc), [(img, ImageEventKind::Load)], "{root}");
     }
+}
+
+#[test]
+fn stepped_updates_decode_one_image_and_keep_the_snapshot_rooted() {
+    let mut doc = document(Arc::new(Provider::default()));
+    let first = image(&mut doc);
+    let second = image(&mut doc);
+    set_src(&mut doc, first, "data:image/png;first,AA");
+    set_src(&mut doc, second, "data:image/png;second,AA");
+    let mut updates = doc.take_image_updates(ImageUpdateStage::StableState);
+    let root = doc.root_node_id;
+    assert!(doc.pending_resource_nodes().contains(&second));
+    assert!(doc.step_image_updates(&mut updates, |id| id == root));
+    assert_eq!(doc.image_status(first).unwrap().natural_size, (3, 2));
+    assert_eq!(doc.image_status(second).unwrap().natural_size, (0, 0));
+    assert!(
+        doc.node_reachability()
+            .retained_nodes(&[])
+            .contains(&second)
+    );
+    // Newly queued work must not extend the finite snapshot.
+    let later = image(&mut doc);
+    doc.mutate()
+        .set_attribute(later, qual_name!("src"), "data:image/png;later,AA");
+    assert!(doc.step_image_updates(&mut updates, |id| id == root));
+    assert!(!doc.step_image_updates(&mut updates, |id| id == root));
+    assert_eq!(doc.image_status(second).unwrap().natural_size, (3, 2));
+    assert_eq!(doc.image_status(later).unwrap().natural_size, (0, 0));
+    assert_eq!(
+        events(&mut doc),
+        [
+            (first, ImageEventKind::Load),
+            (second, ImageEventKind::Load)
+        ]
+    );
+    drop(updates);
+    stable(&mut doc);
+    assert_eq!(doc.image_status(later).unwrap().natural_size, (3, 2));
+}
+
+#[test]
+fn stepped_updates_hold_unrelated_answers_once_and_restore_their_order() {
+    let mut doc = document(Arc::new(Provider::default()));
+    for index in 0..16 {
+        let img = image(&mut doc);
+        set_src(&mut doc, img, &format!("data:image/png;n={index},AA"));
+    }
+    let root = doc.root_node_id;
+    for index in 0..32 {
+        doc.tx
+            .send(DocumentEvent::NavigateIframe {
+                node_id: root,
+                url: url::Url::parse(&format!("https://page.test/{index}")).unwrap(),
+            })
+            .unwrap();
+    }
+    let mut updates = doc.take_image_updates(ImageUpdateStage::StableState);
+    for _ in 0..16 {
+        assert!(doc.step_image_updates(&mut updates, |_| true));
+        assert!(
+            doc.rx.as_ref().unwrap().try_recv().is_err(),
+            "unrelated answers stay outside the channel between steps"
+        );
+    }
+    assert!(!doc.step_image_updates(&mut updates, |_| true));
+    drop(updates);
+    for index in 0..32 {
+        let DocumentEvent::NavigateIframe { url, .. } =
+            doc.rx.as_ref().unwrap().try_recv().unwrap()
+        else {
+            panic!("expected the preserved navigation");
+        };
+        assert_eq!(url.path(), format!("/{index}"));
+    }
+    assert!(doc.rx.as_ref().unwrap().try_recv().is_err());
+}
+
+#[test]
+fn a_later_step_applies_a_held_answer_when_joining_its_request() {
+    let provider = Arc::new(Provider::default());
+    let mut doc = document(provider.clone());
+    let pending = image(&mut doc);
+    set_src(&mut doc, pending, "/pending.png");
+    stable(&mut doc);
+    // The provider answers, but ordinary message handling has not run.
+    let (request, handler) = provider.0.lock().unwrap().remove(0);
+    handler.bytes(request.url.to_string(), png());
+    let first = image(&mut doc);
+    let joining = image(&mut doc);
+    set_src(&mut doc, first, "data:image/png;first,AA");
+    set_src(&mut doc, joining, "/pending.png");
+    let mut updates = doc.take_image_updates(ImageUpdateStage::StableState);
+    assert!(doc.step_image_updates(&mut updates, |_| true));
+    assert_eq!(doc.image_status(pending).unwrap().natural_size, (0, 0));
+    assert!(doc.step_image_updates(&mut updates, |_| true));
+    assert_eq!(doc.image_status(pending).unwrap().natural_size, (3, 2));
+    assert_eq!(doc.image_status(joining).unwrap().natural_size, (3, 2));
+    assert!(!doc.step_image_updates(&mut updates, |_| true));
+    drop(updates);
+    assert!(doc.rx.as_ref().unwrap().try_recv().is_err());
 }
