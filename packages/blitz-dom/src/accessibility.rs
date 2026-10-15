@@ -1,18 +1,77 @@
+mod budget;
+#[cfg(test)]
+mod tests;
 use crate::{BaseDocument, ElementData, Node as BlitzDomNode, local_name};
 use accesskit::{
     Invalid, Node as AccessKitNode, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate,
 };
-use markup5ever::ns;
+use budget::Builder;
+pub use budget::{AccessibilityBudget, AccessibilityLimit};
 use style::properties::longhands::visibility;
 
 impl BaseDocument {
+    /// Bounded default for legacy consumers. Use the fallible form when a
+    /// caller must distinguish admission failure from an empty document.
     pub fn build_accessibility_tree(&self) -> TreeUpdate {
+        self.try_build_accessibility_tree(&AccessibilityBudget::new(1_000_000, 4 * 1024 * 1024))
+            .unwrap_or_else(|_| TreeUpdate {
+                tree_id: TreeId::ROOT,
+                nodes: Vec::new(),
+                tree: None,
+                focus: NodeId(u64::MAX),
+            })
+    }
+
+    pub fn try_build_accessibility_tree(
+        &self,
+        budget: &AccessibilityBudget,
+    ) -> Result<TreeUpdate, AccessibilityLimit> {
+        let tree = Builder {
+            document: self,
+            budget,
+        }
+        .build();
+        if budget.failed() {
+            Err(AccessibilityLimit)
+        } else {
+            Ok(tree)
+        }
+    }
+    /// Labeling sources only, in ARIA precedence order. Unlike a full accessible
+    /// name, this never falls back to content, title, or placeholder.
+    pub fn try_accessibility_labels(
+        &self,
+        id: crate::NodeId,
+        budget: &AccessibilityBudget,
+    ) -> Result<Vec<String>, AccessibilityLimit> {
+        let builder = Builder {
+            document: self,
+            budget,
+        };
+        let names = self
+            .get_node(id)
+            .filter(|node| builder.admit_node(node))
+            .map(|node| builder.label_names(node))
+            .unwrap_or_default();
+        if budget.failed() {
+            Err(AccessibilityLimit)
+        } else {
+            Ok(names)
+        }
+    }
+}
+
+impl Builder<'_> {
+    fn build(&self) -> TreeUpdate {
         let mut nodes = std::collections::HashMap::new();
         let mut window = AccessKitNode::new(Role::Window);
         let mut hidden_nodes = std::collections::HashSet::new();
 
         // The flat tree: shadow content where it renders.
         self.visit_flat(|node_id, node| {
+            if !self.admit_node(node) {
+                return;
+            }
             // A collapsed `<select>`'s options are not rendered, but they are
             // its popup list: keep them.
             if (node.is_hidden_from_accessibility_tree() && !node.is_select_option())
@@ -80,7 +139,7 @@ impl BaseDocument {
             self.set_element_properties(node, element_data, role, &mut builder);
         } else if node.is_text_node() {
             builder.set_role(Role::TextRun);
-            builder.set_value(node.text_content());
+            builder.set_value(self.raw_text(node));
             parent.push_labelled_by(id)
         }
 
@@ -122,7 +181,7 @@ fn normalize(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-impl BaseDocument {
+impl Builder<'_> {
     /// Name, description, states, value and bounds of an element's node.
     fn set_element_properties(
         &self,
@@ -131,13 +190,7 @@ impl BaseDocument {
         role: Role,
         builder: &mut AccessKitNode,
     ) {
-        let attr = |name: &str| {
-            element
-                .attrs()
-                .iter()
-                .find(|a| &*a.name.local == name)
-                .map(|a| a.value.to_string())
-        };
+        let attr = |name: &str| self.attribute(element, name);
         let tag = &*element.name.local;
 
         if let Some(name) = self.accessible_name(node, element, role) {
@@ -210,7 +263,7 @@ impl BaseDocument {
             "input" | "textarea"
                 if !matches!(role, Role::CheckBox | Role::RadioButton | Role::Button) =>
             {
-                if let Some(value) = self.form_value(node.id) {
+                if let Some(value) = self.form_value(node) {
                     builder.set_value(value);
                 }
                 if let Some(placeholder) = attr("placeholder") {
@@ -219,7 +272,7 @@ impl BaseDocument {
             }
             "select" => {
                 if let Some(option) = self.selected_option(node.id) {
-                    builder.set_value(normalize(&self.nodes[option].text_content()));
+                    builder.set_value(normalize(&self.raw_text(&self.nodes[option])));
                 }
             }
             "progress" | "meter" => {
@@ -247,7 +300,21 @@ impl BaseDocument {
             builder.set_level(level);
         }
         if role == Role::Link
-            && let Some(url) = attr("href").and_then(|href| self.resolve_url(node.id, &href))
+            && let Some(url) = attr("href").and_then(|href| {
+                let Some(base) =
+                    self.document_base_url_with_limit(node.id, self.budget.remaining().1)
+                else {
+                    self.budget.refuse();
+                    return None;
+                };
+                if !self
+                    .budget
+                    .text(base.as_str().len().saturating_add(href.len()))
+                {
+                    return None;
+                }
+                base.join(&href).ok()
+            })
         {
             builder.set_url(url.to_string());
         }
@@ -271,13 +338,7 @@ impl BaseDocument {
         element: &ElementData,
         role: Role,
     ) -> Option<String> {
-        let attr = |name: &str| {
-            element
-                .attrs()
-                .iter()
-                .find(|a| &*a.name.local == name)
-                .map(|a| a.value.to_string())
-        };
+        let attr = |name: &str| self.attribute(element, name);
         let non_empty = |s: String| Some(normalize(&s)).filter(|s| !s.is_empty());
         if let Some(name) = attr("aria-labelledby")
             .map(|ids| self.text_of_ids(&ids))
@@ -302,7 +363,7 @@ impl BaseDocument {
             "select" | "textarea" | "meter" | "progress" | "output" => self.label_text(node),
             // Options are not rendered while their select is collapsed; their
             // text is still their name.
-            "option" => attr("label").or_else(|| Some(node.text_content())),
+            "option" => attr("label").or_else(|| Some(self.raw_text(node))),
             "fieldset" => self.first_child_text(node, "legend"),
             "figure" => self.first_child_text(node, "figcaption"),
             "table" => self.first_child_text(node, "caption"),
@@ -332,7 +393,12 @@ impl BaseDocument {
     fn text_of_ids(&self, ids: &str) -> String {
         let parts: Vec<String> = ids
             .split_whitespace()
-            .filter_map(|id| self.get_element_by_id(id))
+            .filter_map(|id| {
+                if !self.budget.work(self.node_count()) {
+                    return None;
+                }
+                self.get_element_by_id(id)
+            })
             .map(|id| {
                 let mut text = String::new();
                 self.text_alternative(id, &mut text);
@@ -342,46 +408,70 @@ impl BaseDocument {
         parts.join(" ")
     }
 
-    /// Text of a form control's labels: `<label for=id>`, and an ancestor
-    /// `<label>`.
-    fn label_text(&self, node: &BlitzDomNode) -> Option<String> {
-        let mut labels = Vec::new();
-        if let Some(id) = node.element_data().and_then(|e| e.attr(local_name!("id"))) {
-            self.visit(|label_id, label| {
-                if label.element_data().is_some_and(|l| {
-                    l.name.ns == ns!(html)
-                        && &*l.name.local == "label"
-                        && l.attr(local_name!("for")) == Some(id)
-                }) {
-                    labels.push(label_id);
+    fn label_names(&self, node: &BlitzDomNode) -> Vec<String> {
+        let Some(element) = node.element_data() else {
+            return Vec::new();
+        };
+        if let Some(ids) = self.attribute(element, "aria-labelledby") {
+            let mut valid = false;
+            for id in ids.split_whitespace() {
+                if !self.budget.work(self.node_count()) {
+                    return Vec::new();
                 }
-            });
-        }
-        let mut ancestor = node.parent;
-        while let Some(id) = ancestor {
-            if self.nodes[id]
-                .element_data()
-                .is_some_and(|e| &*e.name.local == "label")
-            {
-                labels.push(id);
-                break;
+                valid |= self.get_element_by_id(id).is_some();
             }
-            ancestor = self.nodes[id].parent;
+            if valid {
+                return vec![normalize(&self.text_of_ids(&ids))];
+            }
         }
-        let text: Vec<String> = labels
+        if let Some(label) = self
+            .attribute(element, "aria-label")
+            .map(|s| normalize(&s))
+            .filter(|s| !s.is_empty())
+        {
+            return vec![label];
+        }
+        self.native_label_names(node)
+    }
+
+    fn native_label_names(&self, node: &BlitzDomNode) -> Vec<String> {
+        if !self.is_labelable_control(node.id) {
+            return Vec::new();
+        }
+        if !self.budget.work(self.node_count().saturating_mul(2)) {
+            return Vec::new();
+        }
+        // Label association compares IDs and `for` values throughout the DOM.
+        // Admit their source bytes before the engine's association scan, too.
+        for id in
+            crate::traversal::TreeTraverser::new_with_root(self.document, self.tree_root(node.id))
+        {
+            if !self.admit_node(&self.nodes[id]) {
+                return Vec::new();
+            }
+        }
+        self.custom_element_labels(node.id)
             .into_iter()
             .map(|id| {
                 let mut text = String::new();
                 self.text_alternative_skipping(id, Some(node.id), &mut text);
                 normalize(&text)
             })
-            .filter(|t| !t.is_empty())
-            .collect();
-        (!text.is_empty()).then(|| text.join(" "))
+            .filter(|text| !text.is_empty())
+            .collect()
+    }
+
+    /// Native label text for the full accessible-name computation.
+    fn label_text(&self, node: &BlitzDomNode) -> Option<String> {
+        let names = self.native_label_names(node);
+        (!names.is_empty()).then(|| names.join(" "))
     }
 
     fn first_child_text(&self, node: &BlitzDomNode, tag: &str) -> Option<String> {
         let child = node.children.iter().copied().find(|&c| {
+            if !self.budget.work(1) {
+                return false;
+            }
             self.nodes[c]
                 .element_data()
                 .is_some_and(|e| &*e.name.local == tag)
@@ -403,15 +493,32 @@ impl BaseDocument {
         skip: Option<crate::NodeId>,
         out: &mut String,
     ) {
+        self.text_alternative_at_depth(id, skip, out, 0);
+    }
+
+    fn text_alternative_at_depth(
+        &self,
+        id: crate::NodeId,
+        skip: Option<crate::NodeId>,
+        out: &mut String,
+        depth: usize,
+    ) {
+        if depth >= 128 {
+            self.budget.refuse();
+            return;
+        }
         if Some(id) == skip {
             return;
         }
         let node = &self.nodes[id];
+        if !self.admit_node(node) {
+            return;
+        }
         if node.is_hidden_from_accessibility_tree() {
             return;
         }
         if node.is_text_node() {
-            out.push_str(&node.text_content());
+            out.push_str(&self.raw_text(node));
             return;
         }
         if let Some(element) = node.element_data() {
@@ -419,36 +526,45 @@ impl BaseDocument {
                 return;
             }
             if &*element.name.local == "img" {
-                if let Some(alt) = element.attr(local_name!("alt")) {
+                if let Some(alt) = self.attribute(element, "alt") {
                     out.push(' ');
-                    out.push_str(alt);
+                    out.push_str(&alt);
                     out.push(' ');
                 }
                 return;
             }
-            if let Some(label) = element.attr(local_name!("aria-label")) {
+            if let Some(label) = self.attribute(element, "aria-label") {
                 out.push(' ');
-                out.push_str(label);
+                out.push_str(&label);
                 out.push(' ');
                 return;
             }
         }
+        if !self.budget.text(out.len()) {
+            return;
+        }
         let before = out.trim_end().len();
         for &child in node.flat_children() {
-            self.text_alternative_skipping(child, skip, out);
+            if self.budget.failed() {
+                break;
+            }
+            self.text_alternative_at_depth(child, skip, out, depth + 1);
         }
         // An element that contributed no text contributes its tooltip
         // (accname: a descendant's name falls back to `title`).
+        if !self.budget.text(out.len()) {
+            return;
+        }
         if out.trim_end().len() == before
-            && let Some(title) = node
-                .element_data()
-                .and_then(|e| e.attr(local_name!("title")))
+            && let Some(title) = node.element_data().and_then(|e| self.attribute(e, "title"))
         {
             out.push(' ');
-            out.push_str(title);
+            out.push_str(&title);
         }
         // Block boundaries separate words.
-        out.push(' ');
+        if self.budget.text(1) {
+            out.push(' ');
+        }
     }
 }
 
@@ -492,12 +608,12 @@ impl BlitzDomNode {
         self.try_stylo_element_data()
             .as_ref()
             .and_then(|s| s.get())
-            .map(|s| {
-                s.styles.is_display_none()
-                    || s.styles.primary().clone_visibility()
-                        == visibility::computed_value::T::Hidden
+            .is_some_and(|s| {
+                s.styles.get_primary().is_some_and(|style| {
+                    style.get_box().clone_display().is_none()
+                        || style.clone_visibility() == visibility::computed_value::T::Hidden
+                })
             })
-            .unwrap_or(false)
     }
 }
 

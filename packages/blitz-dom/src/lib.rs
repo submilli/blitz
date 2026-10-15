@@ -198,6 +198,8 @@ pub mod util;
 
 #[cfg(feature = "accessibility")]
 mod accessibility;
+#[cfg(feature = "accessibility")]
+pub use accessibility::{AccessibilityBudget, AccessibilityLimit};
 
 pub use crate::layout::paint_tree::{HoistedPaintChild, StackingContext, hoisted_child_position};
 pub use crate::layout::replaced::IntrinsicSizes;
