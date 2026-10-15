@@ -87,6 +87,7 @@ pub struct EventDriver<'doc, Handler: EventHandler> {
     pub(super) doc: &'doc mut dyn Document,
     pub(super) handler: Handler,
     queue: VecDeque<(super::GeneratedEvent, Vec<NodeLease>)>,
+    logical_backspace: Option<&'static str>,
 }
 
 impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
@@ -95,6 +96,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             doc,
             handler,
             queue: VecDeque::with_capacity(4),
+            logical_backspace: None,
         }
     }
 
@@ -202,6 +204,28 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
         }
 
         hover_node_id
+    }
+
+    /// Deliver a logical key without a desktop shell's separate text-editing
+    /// callback. Defaults still run only after the cancellable keydown listeners.
+    /// Physical desktop integrations should continue using `handle_ui_event`.
+    pub fn handle_logical_key(&mut self, key: blitz_traits::events::BlitzKeyEvent) {
+        use keyboard_types::{Key, Modifiers};
+        self.logical_backspace = (key.key == Key::Backspace).then_some(
+            if cfg!(target_os = "macos") && key.modifiers.contains(Modifiers::META) {
+                "deleteToBeginningOfLine:"
+            } else if key.modifiers.contains(if cfg!(target_os = "macos") {
+                Modifiers::ALT
+            } else {
+                Modifiers::CONTROL
+            }) {
+                "deleteWordBackward:"
+            } else {
+                "deleteBackward:"
+            },
+        );
+        self.handle_ui_event(UiEvent::KeyDown(key));
+        self.logical_backspace = None;
     }
 
     pub fn handle_ui_event(&mut self, event: UiEvent) {
@@ -597,7 +621,15 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
     fn run_default_action_mode(&mut self, event: &mut DomEvent, text_input: bool) {
         let mut doc = self.doc.inner_mut();
         let mut generated = Vec::new();
-        let action = if text_input {
+        let action = if let Some(command) = self.logical_backspace.filter(|_| {
+            matches!(&event.data, DomEventData::KeyDown(key) if key.key == keyboard_types::Key::Backspace)
+        }) {
+            super::keyboard::handle_key_or_input_event(
+                &mut doc, event.target,
+                super::keyboard::KeyboardOrTextInputEvent::AppleStandardKeyBinding(command.into()),
+                false, |new_evt| generated.push(new_evt),
+            )
+        } else if text_input {
             // A transferred control builds its editor in the destination.
             doc.flush_style_and_layout(0.0);
             match &event.data {
