@@ -124,6 +124,7 @@ impl crate::document::BaseDocument {
             }
         }
         drop(sets);
+        self.nodes.prepare_style_roots();
 
         // Build the style context used by the style traversal
         let context = SharedStyleContext {
@@ -869,11 +870,8 @@ impl<'a> TElement for BlitzNode<'a> {
     }
 
     fn containing_shadow(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {
-        let mut node = *self;
-        while let Some(parent) = node.parent {
-            node = node.with(parent);
-        }
-        node.is_shadow_root().then_some(node)
+        let root = self.with(self.tree().style_tree_root(self.id));
+        root.is_shadow_root().then_some(root)
     }
 
     fn get_attr(&self, attr: &style::LocalName, ns: &style::Namespace) -> Option<String> {

@@ -1,5 +1,6 @@
 //! Versioned storage for the nodes of the DOM tree.
 
+use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,6 +34,9 @@ fn to_id(key: NodeKey) -> NodeId {
 /// `None`, and indexing panics) instead of aliasing the new occupant.
 pub struct NodeTree {
     map: SlotMap<NodeKey, Node>,
+    // Prepared before style traversal, immutable across its worker threads.
+    // Every mutable node access invalidates it, including direct embedder edits.
+    style_roots: Option<HashMap<NodeId, NodeId>>,
     /// Bumped whenever box geometry may have moved (layout ran or a scroll
     /// offset changed). Values derived from `final_layout()` (e.g. hoisted
     /// paint child offsets) are memoised against it. Starts at 1 so that a
@@ -47,6 +51,7 @@ impl NodeTree {
     pub(crate) fn new() -> Self {
         Self {
             map: SlotMap::with_key(),
+            style_roots: None,
             geometry_generation: AtomicU64::new(1),
             viewport_scroll: crate::Point::ZERO,
         }
@@ -72,6 +77,45 @@ impl NodeTree {
         self.geometry_generation.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Cache DOM roots once for style matching, which queries each element's
+    /// containing shadow tree repeatedly. Path compression visits each node at
+    /// most once even when arena order differs from ancestry after a move.
+    pub(crate) fn prepare_style_roots(&mut self) {
+        if self.style_roots.is_some() {
+            return;
+        }
+        let mut roots = HashMap::with_capacity(self.len());
+        let mut path = Vec::new();
+        for (id, _) in self.iter() {
+            let mut current = id;
+            let root = loop {
+                if let Some(&root) = roots.get(&current) {
+                    break root;
+                }
+                path.push(current);
+                match self[current].parent {
+                    Some(parent) => current = parent,
+                    None => break current,
+                }
+            };
+            for node in path.drain(..) {
+                roots.insert(node, root);
+            }
+        }
+        self.style_roots = Some(roots);
+    }
+
+    /// Style queries outside a prepared traversal still see current ancestry.
+    pub(crate) fn style_tree_root(&self, mut id: NodeId) -> NodeId {
+        if let Some(root) = self.style_roots.as_ref().and_then(|roots| roots.get(&id)) {
+            return *root;
+        }
+        while let Some(parent) = self[id].parent {
+            id = parent;
+        }
+        id
+    }
+
     /// The number of live nodes in the map.
     pub fn len(&self) -> usize {
         self.map.len()
@@ -93,16 +137,19 @@ impl NodeTree {
 
     /// Get a mutable reference to the node with the given id, if it is still live.
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.style_roots = None;
         self.map.get_mut(to_key(id))
     }
 
     /// Insert a node constructed with knowledge of its own id.
     pub(crate) fn insert_with_key(&mut self, f: impl FnOnce(NodeId) -> Node) -> NodeId {
+        self.style_roots = None;
         to_id(self.map.insert_with_key(|key| f(to_id(key))))
     }
 
     /// Remove the node with the given id, returning it if it was still live.
     pub(crate) fn remove(&mut self, id: NodeId) -> Option<Node> {
+        self.style_roots = None;
         self.map.remove(to_key(id))
     }
 
@@ -113,6 +160,7 @@ impl NodeTree {
 
     /// Iterate over all live `(NodeId, &mut Node)` pairs.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (NodeId, &mut Node)> {
+        self.style_roots = None;
         self.map.iter_mut().map(|(key, node)| (to_id(key), node))
     }
 }
@@ -131,6 +179,7 @@ impl IndexMut<NodeId> for NodeTree {
     #[track_caller]
     #[inline]
     fn index_mut(&mut self, id: NodeId) -> &mut Node {
+        self.style_roots = None;
         &mut self.map[to_key(id)]
     }
 }

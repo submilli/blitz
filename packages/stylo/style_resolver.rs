@@ -107,7 +107,11 @@ impl From<ResolvedElementStyles> for ElementStyles {
     }
 }
 
-pub(crate) fn with_default_parent_styles<E, F, R>(element: E, f: F) -> R
+pub(crate) fn with_default_parent_styles<E, F, R>(
+    element: E,
+    cached_layout_parent: Option<E>,
+    f: F,
+) -> R
 where
     E: TElement,
     F: FnOnce(Option<&ComputedValues>, Option<&ComputedValues>) -> R,
@@ -120,7 +124,8 @@ where
     let layout_parent_data;
     let mut layout_parent_style = parent_style;
     if parent_style.map_or(false, |s| s.is_display_contents()) {
-        layout_parent_el = Some(layout_parent_el.unwrap().layout_parent());
+        layout_parent_el =
+            Some(cached_layout_parent.unwrap_or_else(|| layout_parent_el.unwrap().layout_parent()));
         layout_parent_data = layout_parent_el.as_ref().unwrap().borrow_data().unwrap();
         layout_parent_style = Some(layout_parent_data.styles.primary());
     }
@@ -298,9 +303,18 @@ where
     /// Resolve an element's styles with the default inheritance parent/layout
     /// parents.
     pub fn resolve_style_with_default_parents(&mut self) -> ResolvedElementStyles {
-        with_default_parent_styles(self.element, |parent_style, layout_parent_style| {
-            self.resolve_style(parent_style, layout_parent_style)
-        })
+        let layout_parent = self
+            .context
+            .thread_local
+            .layout_parent_cache
+            .resolve(self.element);
+        with_default_parent_styles(
+            self.element,
+            layout_parent,
+            |parent_style, layout_parent_style| {
+                self.resolve_style(parent_style, layout_parent_style)
+            },
+        )
     }
 
     /// Cascade a set of rules, using the default parent for inheritance.
@@ -308,14 +322,23 @@ where
         &mut self,
         inputs: CascadeInputs,
     ) -> ResolvedStyle {
-        with_default_parent_styles(self.element, |parent_style, layout_parent_style| {
-            self.cascade_style_and_visited(
-                inputs,
-                parent_style,
-                layout_parent_style,
-                /* pseudo = */ None,
-            )
-        })
+        let layout_parent = self
+            .context
+            .thread_local
+            .layout_parent_cache
+            .resolve(self.element);
+        with_default_parent_styles(
+            self.element,
+            layout_parent,
+            |parent_style, layout_parent_style| {
+                self.cascade_style_and_visited(
+                    inputs,
+                    parent_style,
+                    layout_parent_style,
+                    /* pseudo = */ None,
+                )
+            },
+        )
     }
 
     /// Cascade a set of rules for pseudo element, using the default parent for inheritance.
@@ -325,7 +348,12 @@ where
         pseudo: &PseudoElement,
         primary_style: &PrimaryStyle,
     ) -> ResolvedStyle {
-        with_default_parent_styles(self.element, |_, layout_parent_style| {
+        let layout_parent = self
+            .context
+            .thread_local
+            .layout_parent_cache
+            .resolve(self.element);
+        with_default_parent_styles(self.element, layout_parent, |_, layout_parent_style| {
             let layout_parent_style_for_pseudo =
                 layout_parent_style_for_pseudo(primary_style, layout_parent_style);
 
@@ -378,46 +406,55 @@ where
         &mut self,
         inputs: ElementCascadeInputs,
     ) -> ResolvedElementStyles {
-        with_default_parent_styles(self.element, move |parent_style, layout_parent_style| {
-            let primary_style =
-                self.cascade_primary_style(inputs.primary, parent_style, layout_parent_style);
+        let layout_parent = self
+            .context
+            .thread_local
+            .layout_parent_cache
+            .resolve(self.element);
+        with_default_parent_styles(
+            self.element,
+            layout_parent,
+            move |parent_style, layout_parent_style| {
+                let primary_style =
+                    self.cascade_primary_style(inputs.primary, parent_style, layout_parent_style);
 
-            let mut pseudo_styles = EagerPseudoStyles::default();
-            if let Some(mut pseudo_array) = inputs.pseudos.into_array() {
-                let layout_parent_style_for_pseudo = if primary_style.style().is_display_contents()
-                {
-                    layout_parent_style
-                } else {
-                    Some(primary_style.style())
-                };
+                let mut pseudo_styles = EagerPseudoStyles::default();
+                if let Some(mut pseudo_array) = inputs.pseudos.into_array() {
+                    let layout_parent_style_for_pseudo =
+                        if primary_style.style().is_display_contents() {
+                            layout_parent_style
+                        } else {
+                            Some(primary_style.style())
+                        };
 
-                for (i, inputs) in pseudo_array.iter_mut().enumerate() {
-                    if let Some(inputs) = inputs.take() {
-                        let pseudo = PseudoElement::from_eager_index(i);
+                    for (i, inputs) in pseudo_array.iter_mut().enumerate() {
+                        if let Some(inputs) = inputs.take() {
+                            let pseudo = PseudoElement::from_eager_index(i);
 
-                        let style = self.cascade_style_and_visited(
-                            inputs,
-                            Some(primary_style.style()),
-                            layout_parent_style_for_pseudo,
-                            Some(&pseudo),
-                        );
+                            let style = self.cascade_style_and_visited(
+                                inputs,
+                                Some(primary_style.style()),
+                                layout_parent_style_for_pseudo,
+                                Some(&pseudo),
+                            );
 
-                        if !matches!(self.pseudo_resolution, PseudoElementResolution::Force)
-                            && eager_pseudo_is_definitely_not_generated(&pseudo, &style.0)
-                        {
-                            continue;
+                            if !matches!(self.pseudo_resolution, PseudoElementResolution::Force)
+                                && eager_pseudo_is_definitely_not_generated(&pseudo, &style.0)
+                            {
+                                continue;
+                            }
+
+                            pseudo_styles.set(&pseudo, style.0);
                         }
-
-                        pseudo_styles.set(&pseudo, style.0);
                     }
                 }
-            }
 
-            ResolvedElementStyles {
-                primary: primary_style,
-                pseudos: pseudo_styles,
-            }
-        })
+                ResolvedElementStyles {
+                    primary: primary_style,
+                    pseudos: pseudo_styles,
+                }
+            },
+        )
     }
 
     fn resolve_pseudo_style(

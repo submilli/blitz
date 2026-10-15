@@ -642,6 +642,8 @@ pub struct ThreadLocalStyleContext<E: TElement> {
     pub sharing_cache: StyleSharingCache<E>,
     /// A cache from matched properties to elements that match those.
     pub rule_cache: RuleCache,
+    /// Nearest box parents, valid only while this traversal is active.
+    pub(crate) layout_parent_cache: crate::layout_parent_cache::LayoutParentCache<E>,
     /// The bloom filter used to fast-reject selector-matching.
     pub bloom_filter: StyleBloom<E>,
     /// A set of tasks to be run (on the parent thread) in sequential mode after
@@ -669,6 +671,7 @@ impl<E: TElement> ThreadLocalStyleContext<E> {
         ThreadLocalStyleContext {
             sharing_cache: StyleSharingCache::new(),
             rule_cache: RuleCache::new(),
+            layout_parent_cache: crate::layout_parent_cache::LayoutParentCache::new(),
             bloom_filter: StyleBloom::new(),
             tasks: SequentialTaskList(Vec::new()),
             statistics: PerThreadTraversalStatistics::default(),

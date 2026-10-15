@@ -1447,6 +1447,7 @@ impl Stylist {
         };
         crate::style_resolver::with_default_parent_styles(
             element,
+            None,
             |parent_style, layout_parent_style| {
                 Some(self.cascade_style_and_visited(
                     Some(element),

@@ -88,6 +88,7 @@ pub mod global_style_data;
 pub mod invalidation;
 #[allow(missing_docs)] // TODO.
 pub mod logical_geometry;
+mod layout_parent_cache;
 pub mod matching;
 pub mod media_queries;
 pub mod parallel;
