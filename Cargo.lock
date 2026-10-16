@@ -3257,7 +3257,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.0"
-source = "git+https://github.com/submilli/parley?rev=bb4756d4424554ce32a317dae8f46494d77d0d63#bb4756d4424554ce32a317dae8f46494d77d0d63"
+source = "git+https://github.com/submilli/parley?rev=6a2c66c5f5e117cb26fe40c3695a52f016c76798#6a2c66c5f5e117cb26fe40c3695a52f016c76798"
 dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
@@ -5944,7 +5944,7 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/submilli/parley?rev=bb4756d4424554ce32a317dae8f46494d77d0d63#bb4756d4424554ce32a317dae8f46494d77d0d63"
+source = "git+https://github.com/submilli/parley?rev=6a2c66c5f5e117cb26fe40c3695a52f016c76798#6a2c66c5f5e117cb26fe40c3695a52f016c76798"
 dependencies = [
  "bytemuck",
 ]
@@ -5952,7 +5952,7 @@ dependencies = [
 [[package]]
 name = "parley"
 version = "0.11.0"
-source = "git+https://github.com/submilli/parley?rev=bb4756d4424554ce32a317dae8f46494d77d0d63#bb4756d4424554ce32a317dae8f46494d77d0d63"
+source = "git+https://github.com/submilli/parley?rev=6a2c66c5f5e117cb26fe40c3695a52f016c76798#6a2c66c5f5e117cb26fe40c3695a52f016c76798"
 dependencies = [
  "fontique",
  "hashbrown 0.17.1",
@@ -5965,7 +5965,7 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.11.0"
-source = "git+https://github.com/submilli/parley?rev=bb4756d4424554ce32a317dae8f46494d77d0d63#bb4756d4424554ce32a317dae8f46494d77d0d63"
+source = "git+https://github.com/submilli/parley?rev=6a2c66c5f5e117cb26fe40c3695a52f016c76798#6a2c66c5f5e117cb26fe40c3695a52f016c76798"
 dependencies = [
  "icu_properties",
 ]
@@ -5973,12 +5973,12 @@ dependencies = [
 [[package]]
 name = "parley_emoji"
 version = "0.11.0"
-source = "git+https://github.com/submilli/parley?rev=bb4756d4424554ce32a317dae8f46494d77d0d63#bb4756d4424554ce32a317dae8f46494d77d0d63"
+source = "git+https://github.com/submilli/parley?rev=6a2c66c5f5e117cb26fe40c3695a52f016c76798#6a2c66c5f5e117cb26fe40c3695a52f016c76798"
 
 [[package]]
 name = "parley_engine"
 version = "0.11.0"
-source = "git+https://github.com/submilli/parley?rev=bb4756d4424554ce32a317dae8f46494d77d0d63#bb4756d4424554ce32a317dae8f46494d77d0d63"
+source = "git+https://github.com/submilli/parley?rev=6a2c66c5f5e117cb26fe40c3695a52f016c76798#6a2c66c5f5e117cb26fe40c3695a52f016c76798"
 dependencies = [
  "fontique",
  "harfrust",

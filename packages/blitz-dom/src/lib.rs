@@ -40,6 +40,8 @@ mod document;
 mod document_base;
 mod document_metadata;
 mod document_ownership;
+#[cfg(test)]
+mod font_precedence_tests;
 pub mod foreign_import;
 pub mod form_history;
 mod frame_bases;
@@ -283,12 +285,12 @@ pub fn build_font_ctx(fonts: &[(FontRole, &[u8])]) -> FontContext {
         }),
     };
     ctx.collection
-        .register_fonts(Blob::new(Arc::new(BULLET_FONT) as _), None);
+        .register_base_fonts(Blob::new(Arc::new(BULLET_FONT) as _), None);
     for &(role, data) in fonts {
         let decoded = decode_font_bytes(data).into_owned();
         let families: Vec<_> = ctx
             .collection
-            .register_fonts(Blob::new(Arc::new(decoded) as _), None)
+            .register_base_fonts(Blob::new(Arc::new(decoded) as _), None)
             .iter()
             .map(|(id, _)| *id)
             .collect();
@@ -331,7 +333,7 @@ pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
     let decoded = decode_font_bytes(font_data).into_owned();
     let registered = ctx
         .collection
-        .register_fonts(Blob::new(Arc::new(decoded) as _), None);
+        .register_base_fonts(Blob::new(Arc::new(decoded) as _), None);
     let family_ids: Vec<_> = registered.iter().map(|(id, _)| *id).collect();
     for generic in [
         GenericFamily::SansSerif,

@@ -458,7 +458,7 @@ impl BaseDocument {
                 };
                 font_ctx
                     .collection
-                    .register_fonts(Blob::new(Arc::new(crate::BULLET_FONT) as _), None);
+                    .register_base_fonts(Blob::new(Arc::new(crate::BULLET_FONT) as _), None);
                 font_ctx
             });
         let font_ctx = Arc::new(Mutex::new(font_ctx));
