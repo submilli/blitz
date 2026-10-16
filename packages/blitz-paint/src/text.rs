@@ -11,6 +11,7 @@ use style::values::computed::{
 use style::values::generics::text::{GenericTextDecorationInset, GenericTextDecorationLength};
 
 use crate::color::{Color, ToColorColor as _};
+use crate::inline_opacity::NodeScene;
 use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};
 
 /// Draw the backgrounds of inline elements (e.g. `<span style="background: ...">`).
@@ -23,7 +24,7 @@ use crate::{FONT_EMBOLDEN_ENABLED, SELECTION_COLOR};
 /// The inline root's own background is painted separately (as a normal block box), so
 /// runs belonging to the root are skipped to avoid drawing it twice.
 pub(crate) fn draw_inline_backgrounds<'a>(
-    scene: &mut impl PaintScene,
+    scenes: &mut impl NodeScene,
     lines: impl Iterator<Item = Line<'a, TextBrush>>,
     doc: &BaseDocument,
     transform: Affine,
@@ -62,7 +63,9 @@ pub(crate) fn draw_inline_backgrounds<'a>(
             let y1 = baseline + metrics.descent as f64;
             let rect = Rect::new(x, y0, x + w, y1);
 
-            scene.fill(Fill::NonZero, transform, bg_color, None, &rect);
+            scenes
+                .for_node(node_id)
+                .fill(Fill::NonZero, transform, bg_color, None, &rect);
         }
     }
 }
@@ -386,7 +389,7 @@ fn draw_decoration_line(
 
 /// Paint the decorations accumulated for one line, one line per decorating box.
 fn flush_line_decorations(
-    scene: &mut impl PaintScene,
+    scenes: &mut impl NodeScene,
     transform: Affine,
     scale: f64,
     deco_boxes: &[LineDecoration],
@@ -396,6 +399,7 @@ fn flush_line_decorations(
     // per-run drawing order this replaced (`stack.iter().rev()`).
     for acc in deco_boxes.iter().rev() {
         let deco = &acc.deco;
+        let scene = scenes.for_node(acc.node_id);
         // Prefer the decorating box's own font; fall back to the first run it covers.
         let Some(geom) = acc.own.as_ref().or(acc.first.as_ref()) else {
             continue;
@@ -539,7 +543,7 @@ fn flush_line_decorations(
 }
 
 pub(crate) fn stroke_text<'a>(
-    scene: &mut impl PaintScene,
+    scenes: &mut impl NodeScene,
     lines: impl Iterator<Item = Line<'a, TextBrush>>,
     doc: &BaseDocument,
     transform: Affine,
@@ -621,7 +625,7 @@ pub(crate) fn stroke_text<'a>(
                 };
 
                 let normalized_coords: &[i16] = bytemuck::cast_slice(run.normalized_coords());
-                scene.draw_glyphs(
+                scenes.for_node(style.brush.id).draw_glyphs(
                     font,
                     font_size,
                     !FONT_EMBOLDEN_ENABLED, // hint
@@ -691,14 +695,14 @@ pub(crate) fn stroke_text<'a>(
             }
         }
 
-        flush_line_decorations(scene, transform, scale, deco_boxes, win_ascent_ratios);
+        flush_line_decorations(scenes, transform, scale, deco_boxes, win_ascent_ratios);
     }
 }
 
 /// Draw selection highlight rectangles for the given byte range in a layout.
 /// Uses Parley's Selection type for accurate geometry calculation.
 pub(crate) fn draw_text_selection(
-    scene: &mut impl PaintScene,
+    scenes: &mut impl NodeScene,
     layout: &Layout<TextBrush>,
     transform: Affine,
     selection_start: usize,
@@ -708,8 +712,26 @@ pub(crate) fn draw_text_selection(
     let focus = Cursor::from_byte_index(layout, selection_end, Affinity::Downstream);
     let selection = Selection::new(anchor, focus);
 
-    selection.geometry_with(layout, |rect, _line_idx| {
+    selection.geometry_with(layout, |rect, line_idx| {
         let rect = kurbo::Rect::new(rect.x0, rect.y0, rect.x1, rect.y1);
-        scene.fill(Fill::NonZero, transform, SELECTION_COLOR, None, &rect);
+        let Some(line) = layout.get(line_idx) else {
+            return;
+        };
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(run) = item else {
+                continue;
+            };
+            let x = f64::from(run.offset());
+            let clip = rect.intersect(Rect::new(x, rect.y0, x + f64::from(run.advance()), rect.y1));
+            if clip.width() > 0.0 {
+                scenes.for_node(run.style().brush.id).fill(
+                    Fill::NonZero,
+                    transform,
+                    SELECTION_COLOR,
+                    None,
+                    &clip,
+                );
+            }
+        }
     });
 }

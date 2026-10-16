@@ -7,8 +7,10 @@ mod color;
 mod debug_overlay;
 mod filters;
 mod gradient;
+mod inline_opacity;
 mod kurbo_css;
 mod layers;
+mod paint_graph;
 mod render;
 mod sizing;
 #[cfg(feature = "svg")]
@@ -158,3 +160,6 @@ mod select_tests;
 mod subdocument_tests;
 #[cfg(all(test, feature = "svg"))]
 mod svg_tests;
+
+#[cfg(all(test, feature = "svg"))]
+mod inline_opacity_tests;

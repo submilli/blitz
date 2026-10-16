@@ -131,7 +131,7 @@ impl ElementCx<'_, '_> {
         let transform = self.transform * Affine::translate((x * self.scale, top * self.scale));
         let mut context = self.context.draw_text_context.borrow_mut();
         crate::text::stroke_text(
-            scene,
+            &mut crate::inline_opacity::DirectScene(scene),
             label.lines(),
             self.context.dom,
             transform,

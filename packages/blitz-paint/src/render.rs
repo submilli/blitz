@@ -8,15 +8,17 @@ mod mask;
 pub(crate) mod select;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::kurbo_css::CssBox;
 use crate::color::{Color, ToColorColor};
 use crate::debug_overlay::render_debug_overlay;
 use crate::filters::convert_filters;
+use crate::inline_opacity::{DirectScene, NodeScene};
 use crate::kurbo_css::NonUniformRoundedRectRadii;
 use crate::layers::LayerManager;
+use crate::paint_graph::GraphScene;
 use crate::sizing::compute_object_fit;
 use crate::text::DrawTextContext;
 use crate::{CustomWidgetSceneMap, SELECTION_COLOR};
@@ -121,6 +123,7 @@ pub struct BlitzDomPainter<'dom, 'a> {
     #[cfg(feature = "scrollbars")]
     pub(crate) scrollbar_drag_target: Option<blitz_dom::node::ScrollbarRef>,
     pub(crate) layer_manager: LayerManager,
+    hidden_inline_descendants: HashSet<NodeId>,
     /// Reusable scratch allocations shared by all text layouts painted for this document.
     pub(crate) draw_text_context: RefCell<DrawTextContext>,
     /// Cached selection ranges for O(1) lookup: node_id -> (start_offset, end_offset)
@@ -147,7 +150,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             .map(|(node_id, start, end)| (node_id, (start, end)))
             .collect();
 
-        let layer_manager = LayerManager::default();
+        let layer_manager = LayerManager::recording();
         let root_element_id = dom.try_root_element().map(|el| el.id);
 
         Self {
@@ -163,6 +166,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             #[cfg(feature = "scrollbars")]
             scrollbar_drag_target: dom.scrollbar_drag_target(),
             layer_manager,
+            hidden_inline_descendants: crate::inline_opacity::hidden_inline_descendants(dom),
             draw_text_context: RefCell::new(DrawTextContext::default()),
             selection_ranges,
             custom_widget_scenes,
@@ -234,13 +238,21 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
         // scrollports narrow this rectangle further for their descendants.
         let viewport_clip_rect = Rect::new(0.0, 0.0, self.width as f64, self.height as f64);
 
+        let mut recording = GraphScene::new(root_id);
         self.render_element(
-            scene,
+            &mut recording,
             root_id,
             Affine::translate(Vec2 {
                 x: self.initial_x - (viewport_scroll.x * self.scale),
                 y: self.initial_y - (viewport_scroll.y * self.scale),
             }),
+            viewport_clip_rect,
+        );
+
+        recording.paint(
+            scene,
+            self.dom,
+            &LayerManager::default(),
             viewport_clip_rect,
         );
 
@@ -288,12 +300,16 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
     /// to traverse back to the parent for its styles, or needing to pass down styles
     fn render_element(
         &self,
-        scene: &mut impl PaintScene,
+        scene: &mut GraphScene,
         node_id: NodeId,
         parent_style_transform: Affine,
         clip_rect: Rect,
     ) {
+        let scene = &mut scene.at_node(node_id);
         let node = &self.dom.as_ref().tree()[node_id];
+        if self.hidden_inline_descendants.contains(&node_id) {
+            return;
+        }
 
         // Early return if the element is hidden
         if matches!(node.taffy_display(), taffy::Display::None) {
@@ -462,6 +478,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
         if css_clip_rect.is_some_and(|rect| rect.is_zero_area()) {
             return;
         }
+        scene.effect();
         let css_clip_layer_pushed = self.layer_manager.maybe_push_layer(
             scene,
             css_clip_rect.is_some(),
@@ -472,10 +489,12 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             None,
         );
 
+        scene.local();
         cx.draw_outline(scene);
         cx.draw_outset_box_shadow(scene);
 
-        // clip-path clip ayer
+        // clip-path is a flat-tree effect, unlike overflow clipping.
+        scene.effect();
         self.layer_manager.maybe_with_layer(
             scene,
             has_clip_path,
@@ -487,7 +506,9 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             |scene| {
                 // If the element has a CSS `mask`, then push an isolation layer for the
                 // masked content. The mask is applied when the layer is popped below.
+                scene.effect();
                 let mask_layer_pushed = cx.maybe_push_css_mask_layer(scene);
+                scene.local();
                 // `cx.transform` is mutated to apply scroll offsets while drawing content.
                 // Save it so that the mask can be drawn untransformed by scroll offsets.
                 let unscrolled_transform = cx.transform;
@@ -516,6 +537,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
 
                 // Opacity/Filter layer if box has opacity or a filter.
                 // Clipped to border-box as it needs to include the background and borders.
+                scene.effect();
                 self.layer_manager.maybe_with_layer(
                     scene,
                     has_opacity || filter.is_some() || backdrop_filter.is_some(),
@@ -525,6 +547,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                     filter,
                     backdrop_filter,
                     |scene| {
+                        scene.local();
                         let themed_button = cx.is_themed_button();
                         if themed_button {
                             cx.draw_themed_button(scene);
@@ -546,7 +569,9 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                             &cx.frame.padding_box_path()
                         };
 
-                        // Clip layer if box requires clipping. Opacity set to 1.0
+                        // Overflow follows containing-block ancestry, separately
+                        // from flat-tree effect ownership.
+                        scene.overflow();
                         self.layer_manager.maybe_with_layer(
                             scene,
                             should_clip,
@@ -556,6 +581,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                             None,
                             None,
                             |scene| {
+                                scene.local();
                                 // Now that background has been drawn, offset pos and cx in order to draw our contents scrolled
                                 let content_position = Point {
                                     x: content_position.x - node.scroll_offset().x,
@@ -575,8 +601,8 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
                                 cx.draw_input(scene);
                                 cx.draw_select(scene, content_position);
                                 cx.draw_text_input_text(scene, content_position);
-                                cx.draw_inline_layout(scene, content_position);
                                 cx.draw_marker(scene, content_position);
+                                cx.draw_inline_layout(scene, content_position);
                                 cx.draw_children(scene, cx.transform, child_clip_rect);
                             },
                         );
@@ -593,6 +619,9 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
 
                 // Apply the CSS `mask` (if any) to the content drawn above
                 cx.transform = unscrolled_transform;
+                if mask_layer_pushed {
+                    scene.postlude();
+                }
                 cx.maybe_pop_css_mask_layer(scene, mask_layer_pushed);
             },
         );
@@ -603,7 +632,7 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
 
     fn render_node(
         &self,
-        scene: &mut impl PaintScene,
+        scene: &mut GraphScene,
         node_id: NodeId,
         parent_style_transform: Affine,
         clip_rect: Rect,
@@ -846,51 +875,53 @@ impl ElementCx<'_, '_> {
         }
     }
 
-    fn draw_inline_layout(&self, scene: &mut impl PaintScene, pos: Point) {
-        if self.node.flags.is_inline_root() {
-            let text_layout = self.element
+    fn draw_inline_layout(&self, scene: &mut GraphScene, pos: Point) {
+        if !self.node.flags.is_inline_root() {
+            return;
+        }
+        let mut scenes = scene.at_node(self.node.id);
+        let text_layout = self.element
                 .inline_layout_data
                 .as_ref()
                 .unwrap_or_else(|| {
                     panic!("Tried to render node marked as inline root that does not have an inline layout: {:?}", self.node);
                 });
 
-            let transform =
-                self.transform * Affine::translate((pos.x * self.scale, pos.y * self.scale));
+        let transform =
+            self.transform * Affine::translate((pos.x * self.scale, pos.y * self.scale));
 
-            // Render inline element backgrounds (e.g. `<span style="background: ...">`)
-            // behind the text and selection highlight.
-            crate::text::draw_inline_backgrounds(
-                scene,
-                text_layout.layout.lines(),
-                self.context.dom,
+        // Render inline element backgrounds (e.g. `<span style="background: ...">`)
+        // behind the text and selection highlight.
+        crate::text::draw_inline_backgrounds(
+            &mut scenes,
+            text_layout.layout.lines(),
+            self.context.dom,
+            transform,
+            self.node.id,
+        );
+
+        // Render text selection highlight (if any) using cached selection ranges
+        if let Some(&(sel_start, sel_end)) = self.context.selection_ranges.get(&self.node.id) {
+            crate::text::draw_text_selection(
+                &mut scenes,
+                &text_layout.layout,
                 transform,
-                self.node.id,
-            );
-
-            // Render text selection highlight (if any) using cached selection ranges
-            if let Some(&(sel_start, sel_end)) = self.context.selection_ranges.get(&self.node.id) {
-                crate::text::draw_text_selection(
-                    scene,
-                    &text_layout.layout,
-                    transform,
-                    sel_start,
-                    sel_end,
-                );
-            }
-
-            // Render text
-            let mut draw_text_context = self.context.draw_text_context.borrow_mut();
-            crate::text::stroke_text(
-                scene,
-                text_layout.layout.lines(),
-                self.context.dom,
-                transform,
-                self.scale,
-                self.node.id,
-                &mut draw_text_context,
+                sel_start,
+                sel_end,
             );
         }
+
+        // Render text
+        let mut draw_text_context = self.context.draw_text_context.borrow_mut();
+        crate::text::stroke_text(
+            &mut scenes,
+            text_layout.layout.lines(),
+            self.context.dom,
+            transform,
+            self.scale,
+            self.node.id,
+            &mut draw_text_context,
+        );
     }
 
     fn draw_text_input_text(&self, scene: &mut impl PaintScene, pos: Point) {
@@ -948,7 +979,7 @@ impl ElementCx<'_, '_> {
             // Render text
             let mut draw_text_context = self.context.draw_text_context.borrow_mut();
             crate::text::stroke_text(
-                scene,
+                &mut DirectScene(scene),
                 input_data.editor.try_layout().unwrap().lines(),
                 self.context.dom,
                 transform,
@@ -996,7 +1027,7 @@ impl ElementCx<'_, '_> {
 
             let mut draw_text_context = self.context.draw_text_context.borrow_mut();
             crate::text::stroke_text(
-                scene,
+                &mut DirectScene(scene),
                 layout.lines(),
                 self.context.dom,
                 transform,
@@ -1009,10 +1040,11 @@ impl ElementCx<'_, '_> {
 
     fn draw_children(
         &self,
-        scene: &mut impl PaintScene,
+        scenes: &mut GraphScene,
         parent_style_transform: Affine,
         clip_rect: Rect,
     ) {
+        let scenes = &mut scenes.at_node(self.node.id);
         // Negative z_index hoisted nodes
 
         if let Some(hoisted) = &self.node.stacking_context {
@@ -1023,7 +1055,7 @@ impl ElementCx<'_, '_> {
                     y: position.y as f64 * self.scale,
                 };
                 self.render_node(
-                    scene,
+                    scenes.for_child(hoisted_child.node_id),
                     hoisted_child.node_id,
                     parent_style_transform.pre_translate(pos),
                     clip_rect,
@@ -1050,7 +1082,12 @@ impl ElementCx<'_, '_> {
                 } else {
                     parent_style_transform
                 };
-                self.render_node(scene, *child_id, child_transform, clip_rect);
+                self.render_node(
+                    scenes.for_child(*child_id),
+                    *child_id,
+                    child_transform,
+                    clip_rect,
+                );
             }
         }
 
@@ -1063,7 +1100,7 @@ impl ElementCx<'_, '_> {
                     y: position.y as f64 * self.scale,
                 };
                 self.render_node(
-                    scene,
+                    scenes.for_child(hoisted_child.node_id),
                     hoisted_child.node_id,
                     parent_style_transform.pre_translate(pos),
                     clip_rect,
