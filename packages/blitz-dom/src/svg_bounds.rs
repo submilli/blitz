@@ -133,7 +133,8 @@ fn svg_options(
     let rasters = collectors.rasters.clone();
     let decode = usvg::ImageHrefResolver::default_data_resolver();
     usvg::Options {
-        fontdb: Arc::clone(fonts),
+        fontdb: fonts.database.clone(),
+        font_resolver: fonts.resolver(),
         image_href_resolver: usvg::ImageHrefResolver {
             resolve_image: Some(Box::new(move |image| rasters.resolve(image))),
             resolve_data: Box::new(move |mime, data, options| {

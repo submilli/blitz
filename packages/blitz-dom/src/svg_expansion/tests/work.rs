@@ -246,7 +246,7 @@ fn parse_text_path(source: &str) -> Result<crate::node::SvgImageData, SvgRefusal
     fonts.set_sans_serif_family("Liberation Sans");
     crate::svg_bounds::parse_svg_image(
         source.as_bytes(),
-        &std::sync::Arc::new(fonts),
+        &crate::SvgFontDb::new(std::sync::Arc::new(fonts)),
         &crate::DecodedImageBudget::default(),
     )
 }

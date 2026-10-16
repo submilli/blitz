@@ -350,7 +350,9 @@ pub fn build_single_font_ctx(font_data: &[u8]) -> FontContext {
 
 /// Fonts for text inside SVG images, which usvg lays out itself.
 #[cfg(feature = "svg")]
-pub type SvgFontDb = std::sync::Arc<usvg::fontdb::Database>;
+pub use svg_fonts::SvgFontDb;
+#[cfg(feature = "svg")]
+mod svg_fonts;
 
 /// Build the SVG font database from the same supplied fonts as
 /// [`build_font_ctx`], so text in SVG images uses only those fonts too. Pass
@@ -392,7 +394,7 @@ pub fn build_svg_font_db(fonts: &[(FontRole, &[u8])]) -> SvgFontDb {
     if let Some(family) = family_for(FontRole::Monospace) {
         db.set_monospace_family(family);
     }
-    std::sync::Arc::new(db)
+    SvgFontDb::new(std::sync::Arc::new(db))
 }
 
 /// Unit fixtures use the same packaged font with and without system discovery.

@@ -55,14 +55,14 @@ pub(crate) struct SvgFonts;
 /// (loaded once per process), or none without the `system-fonts` feature.
 #[cfg(feature = "svg")]
 pub(crate) fn default_svg_fonts() -> crate::SvgFontDb {
-    static FONT_DB: LazyLock<Arc<fontdb::Database>> = LazyLock::new(|| {
+    static FONT_DB: LazyLock<crate::SvgFontDb> = LazyLock::new(|| {
         #[allow(unused_mut)]
         let mut db = fontdb::Database::new();
         #[cfg(feature = "system-fonts")]
         db.load_system_fonts();
-        Arc::new(db)
+        crate::SvgFontDb::new(Arc::new(db))
     });
-    Arc::clone(&FONT_DB)
+    FONT_DB.clone()
 }
 
 /// Which kind of CSS image layer list (`background-image` or `mask-image`) to

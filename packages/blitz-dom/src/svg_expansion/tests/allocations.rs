@@ -9,7 +9,7 @@ use crate::test_allocator::peak_held;
 fn peak(source: &str) -> usize {
     let doc = crate::svg_root_size::parse_xml(source).unwrap();
     let options = usvg::Options {
-        fontdb: crate::util::default_svg_fonts(),
+        fontdb: crate::util::default_svg_fonts().database,
         ..Default::default()
     };
     // The font database is loaded before tracking, as documents share it.
