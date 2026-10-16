@@ -58,6 +58,19 @@ pub fn inner_html(node: &Node) -> DomString {
     write_steps(steps, DomString::new(), &ShadowOptions::default())
 }
 
+pub(crate) fn observation_html(node: &Node) -> DomString {
+    let mut steps = Vec::new();
+    push_children(node, &mut steps);
+    write_steps(
+        steps,
+        DomString::new(),
+        &ShadowOptions {
+            masked: true,
+            ..Default::default()
+        },
+    )
+}
+
 /// `outerHTML`: serialize `node` itself followed by its descendants.
 pub fn outer_html(node: &Node) -> DomString {
     write_steps(
@@ -79,6 +92,7 @@ enum Step<'a> {
 #[derive(Default)]
 struct ShadowOptions<'a> {
     serializable: bool,
+    masked: bool,
     roots: &'a [crate::NodeId],
 }
 
@@ -95,6 +109,7 @@ impl crate::BaseDocument {
         };
         let options = ShadowOptions {
             serializable,
+            masked: false,
             roots,
         };
         let mut steps = Vec::new();
@@ -185,6 +200,10 @@ fn write_node<'a>(
     out: &mut DomString,
     options: &ShadowOptions<'_>,
 ) {
+    if options.masked && node.masks_observation() {
+        out.push_str("<span>[REDACTED]</span>");
+        return;
+    }
     match &node.data {
         NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
             // AnonymousBlocks are layout artefacts, not part of the DOM.

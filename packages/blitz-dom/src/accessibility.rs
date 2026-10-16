@@ -91,6 +91,10 @@ impl Builder<'_> {
             let (id, builder) = self.build_accessibility_node(node, parent);
 
             nodes.insert(node_id, (id, builder));
+            // Keep the control itself, but not textarea/default-value descendants.
+            if node.masks_observation() {
+                hidden_nodes.insert(node_id);
+            }
         });
 
         let mut nodes: Vec<_> = nodes
@@ -258,7 +262,11 @@ impl Builder<'_> {
             builder.set_expanded(open);
         }
 
-        // Values.
+        // Values. Masking is independent of author-selected roles and input type.
+        if node.masks_observation() {
+            builder.set_value("[REDACTED]".to_owned());
+            return;
+        }
         match tag {
             "input" | "textarea"
                 if !matches!(role, Role::CheckBox | Role::RadioButton | Role::Button) =>
@@ -352,6 +360,7 @@ impl Builder<'_> {
         let tag = &*element.name.local;
         let native = match tag {
             "img" | "area" => attr("alt"),
+            "input" if node.masks_observation() => self.label_text(node),
             "input" => match attr("type").as_deref() {
                 Some("image") => attr("alt"),
                 Some("submit") => attr("value").or(Some("Submit".into())),
@@ -512,6 +521,12 @@ impl Builder<'_> {
         }
         let node = &self.nodes[id];
         if !self.admit_node(node) {
+            return;
+        }
+        if node.masks_observation() {
+            if self.budget.text(10) {
+                out.push_str("[REDACTED]");
+            }
             return;
         }
         if node.is_hidden_from_accessibility_tree() {

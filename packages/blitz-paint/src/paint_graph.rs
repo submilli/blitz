@@ -140,7 +140,14 @@ impl GraphScene {
         layers: &LayerManager,
         clip: Rect,
     ) {
-        let recording = std::mem::take(&mut *self.recording.borrow_mut());
+        let mut recording = std::mem::take(&mut *self.recording.borrow_mut());
+        // Text can be recorded by an ancestor inline layout, and positioned
+        // descendants can be hoisted. Suppress by flat ownership as well as
+        // render traversal so neither can bypass protected control masking.
+        let hidden = crate::inline_opacity::hidden_inline_descendants(doc);
+        recording
+            .drawings
+            .retain(|drawing| !hidden.contains(&drawing.node));
         if recording.exhausted {
             return;
         }

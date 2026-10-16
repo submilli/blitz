@@ -311,6 +311,12 @@ impl<'dom, 'a> BlitzDomPainter<'dom, 'a> {
             return;
         }
 
+        // Protected controls are opaque in rendered observations, including their
+        // pseudo-elements and text after author changes to the input type.
+        if node.masks_observation() {
+            return;
+        }
+
         // Early return if the element is hidden
         if matches!(node.taffy_display(), taffy::Display::None) {
             return;

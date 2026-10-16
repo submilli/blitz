@@ -30,9 +30,10 @@ pub(crate) fn hidden_inline_descendants(doc: &BaseDocument) -> HashSet<NodeId> {
     let mut work = vec![(doc.root_node().id, false)];
     while let Some((id, ancestor_hidden)) = work.pop() {
         let node = &doc.as_ref().tree()[id];
-        let own_hidden = node.primary_styles().is_some_and(|styles| {
-            styles.clone_display().is_inline_flow() && styles.get_effects().opacity == 0.0
-        });
+        let own_hidden = node.masks_observation()
+            || node.primary_styles().is_some_and(|styles| {
+                styles.clone_display().is_inline_flow() && styles.get_effects().opacity == 0.0
+            });
         let suppressed = ancestor_hidden || own_hidden;
         if suppressed {
             hidden.insert(id);

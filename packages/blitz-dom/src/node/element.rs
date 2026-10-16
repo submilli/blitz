@@ -100,6 +100,10 @@ pub struct ElementData {
     /// Embedders use this to reset their bitmap before exposing mutation reactions.
     pub canvas_dimension_revision: u64,
 
+    /// Host-injected credential field. Not an HTML attribute and never cleared
+    /// by page mutations. Observation APIs mask this independently of input type.
+    pub credential_field: bool,
+
     /// Whether the element is focussable
     pub is_focussable: bool,
 
@@ -365,6 +369,7 @@ impl Clone for ElementData {
             id: self.id.clone(),
             attrs: self.attrs.clone(),
             canvas_dimension_revision: 0,
+            credential_field: self.credential_field,
             is_focussable: self.is_focussable,
             style_attribute: self.style_attribute.clone(),
             special_data: self.special_data.clone(),
@@ -510,6 +515,7 @@ impl ElementData {
             id: id_attr_atom,
             attrs: Attributes::new(attrs),
             canvas_dimension_revision: 0,
+            credential_field: false,
             is_focussable: false,
             style_attribute: Default::default(),
             inline_layout_data: None,

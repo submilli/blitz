@@ -49,6 +49,7 @@ impl DocumentMutator<'_> {
             element.custom_states = seed.custom_states;
             element.script_state = seed.script;
             element.canvas_dimension_revision = seed.canvas_revision;
+            element.credential_field = seed.credential_field;
         }
         self.doc.set_custom_element_state(id, seed.custom);
         if associated {
@@ -104,6 +105,7 @@ struct ElementSeed {
     script: ScriptState,
     /// Embedders compare this to keep a moved canvas's bitmap.
     canvas_revision: u64,
+    credential_field: bool,
 }
 
 impl Seed {
@@ -164,6 +166,7 @@ impl ElementSeed {
             custom_states: element.custom_states.clone(),
             script: element.script_state,
             canvas_revision: element.canvas_dimension_revision,
+            credential_field: element.credential_field,
         }
     }
 
@@ -194,6 +197,7 @@ impl ElementSeed {
             custom_states: Vec::new(),
             script: ScriptState::default(),
             canvas_revision: 0,
+            credential_field: element.credential_field,
         }
     }
 }

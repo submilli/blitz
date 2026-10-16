@@ -165,6 +165,7 @@ pub use node_budget::{DEFAULT_NODE_LIMIT, NodeBudgetExceeded};
 pub use reclamation::NodeReachability;
 pub use resource_roots::NodeLease;
 pub use validation::{ValidationError, ValidityState};
+mod observation;
 mod query_selector;
 mod resolve;
 /// Computation of resolved CSS property values (`getComputedStyle()`)

@@ -163,3 +163,6 @@ mod svg_tests;
 
 #[cfg(all(test, feature = "svg"))]
 mod inline_opacity_tests;
+
+#[cfg(test)]
+mod credential_tests;

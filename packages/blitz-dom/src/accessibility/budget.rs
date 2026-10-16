@@ -111,6 +111,12 @@ impl Builder<'_> {
             if !self.admit_node(node) {
                 break;
             }
+            if node.masks_observation() {
+                if self.budget.text(10) {
+                    out.push_str("[REDACTED]");
+                }
+                continue;
+            }
             if let Some(text) = node.text_data() {
                 if !self
                     .budget
