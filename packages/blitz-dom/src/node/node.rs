@@ -145,6 +145,8 @@ pub struct Node {
 
     /// Our Id
     pub id: NodeId,
+    /// Stable pointer-sized identity for Stylo, including on wasm32.
+    style_identity: Box<u8>,
     /// Persistent node document; Document nodes point to themselves.
     pub(crate) owner_document: NodeId,
     /// Appropriate inert template document (Document nodes only).
@@ -489,6 +491,7 @@ impl Node {
             tree,
 
             id,
+            style_identity: Box::new(0),
             owner_document: id,
             template_document: None,
             parent: None,
@@ -1100,6 +1103,10 @@ impl TextNodeData {
 // }
 
 impl Node {
+    pub(crate) fn style_identity(&self) -> std::ptr::NonNull<()> {
+        std::ptr::NonNull::from(self.style_identity.as_ref()).cast()
+    }
+
     pub fn tree(&self) -> &crate::NodeTree {
         unsafe { &*self.tree }
     }

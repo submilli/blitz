@@ -131,3 +131,22 @@ fn simultaneous_completions_sort_by_style_generation_before_property() {
         ["width", "opacity"]
     );
 }
+
+#[test]
+fn dropping_an_animating_node_removes_opaque_state_before_allocation() {
+    let mut doc = parse("<style>#x { opacity:0; transition:opacity .2s }</style><div id=x></div>");
+    doc.resolve(0.0);
+    let node = q(&doc, "#x");
+    doc.mutate()
+        .set_attribute_by_name(node, "style", "opacity:1")
+        .unwrap();
+    doc.resolve(0.0);
+    assert!(doc.has_pending_css_animation_work());
+    doc.mutate().remove_and_drop_node(node);
+    for _ in 0..128 {
+        doc.mutate().create_text_node("reuse allocations");
+    }
+    doc.resolve(1.0);
+    assert!(doc.take_transition_ends().is_empty());
+    assert!(!doc.has_pending_css_animation_work());
+}

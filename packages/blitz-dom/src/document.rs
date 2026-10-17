@@ -1070,7 +1070,13 @@ impl BaseDocument {
         self.clear_interaction_state_for_removed_node(node_id);
         self.changed_nodes.remove(&node_id);
         if let Some(node) = self.nodes.get(node_id) {
-            self.snapshots.remove(&style::dom::TNode::opaque(&node));
+            let opaque = style::dom::TNode::opaque(&node);
+            self.snapshots.remove(&opaque);
+            // Drop all pointer-keyed state before its identity allocation can be reused.
+            self.animations
+                .sets
+                .write()
+                .retain(|key, _| key.node != opaque);
         }
         self.nodes.remove(node_id)
     }

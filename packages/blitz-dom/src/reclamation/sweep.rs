@@ -41,12 +41,16 @@ impl BaseDocument {
         self.changed_nodes.retain(|id| live.contains(id));
         self.shadow_hosts.retain(|id| live.contains(id));
         self.scrollbar_activity.retain(|id, _| live.contains(id));
-        self.snapshots
-            .retain(|node, _| live.contains(&NodeId::from_u64(node.id() as u64)));
-        self.animations
-            .sets
-            .write()
-            .retain(|key, _| live.contains(&NodeId::from_u64(key.node.id() as u64)));
+        self.snapshots.retain(|node, _| {
+            self.nodes
+                .node_for_style_identity(node.id())
+                .is_some_and(|id| live.contains(&id))
+        });
+        self.animations.sets.write().retain(|key, _| {
+            self.nodes
+                .node_for_style_identity(key.node.id())
+                .is_some_and(|id| live.contains(&id))
+        });
         let guard = self.guard.read();
         let previous_sheets = self.nodes_to_stylesheet.len();
         self.nodes_to_stylesheet.retain(|id, sheet| {

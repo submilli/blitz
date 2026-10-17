@@ -2,7 +2,6 @@
 //!
 
 use blitz_traits::node_id::NodeId;
-use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
@@ -86,7 +85,11 @@ impl crate::document::BaseDocument {
         // Mark actively animating nodes as dirty
         let mut sets = self.animations.sets.write();
         for (key, set) in sets.iter_mut() {
-            let node_id = NodeId::from_u64(key.node.id() as u64);
+            let Some(node_id) = self.nodes.node_for_style_identity(key.node.id()) else {
+                set.animations.clear();
+                set.transitions.clear();
+                continue;
+            };
 
             // Drop animations belonging to nodes that are no longer in the
             // document. A removed element is never restyled, so it would never
@@ -185,8 +188,9 @@ impl crate::document::BaseDocument {
             .extend(nodes_needing_style_image_flush);
 
         for opaque in self.snapshots.keys() {
-            let id = NodeId::from_u64(opaque.id() as u64);
-            if let Some(node) = self.nodes.get_mut(id) {
+            if let Some(id) = self.nodes.node_for_style_identity(opaque.id())
+                && let Some(node) = self.nodes.get_mut(id)
+            {
                 node.set_has_snapshot(false);
             }
         }
@@ -380,7 +384,7 @@ impl<'a> TNode for BlitzNode<'a> {
     }
 
     fn opaque(&self) -> OpaqueNode {
-        OpaqueNode(self.id.as_u64() as usize)
+        OpaqueNode(self.style_identity().as_ptr() as usize)
     }
 
     fn debug_id(self) -> usize {
@@ -410,16 +414,7 @@ impl selectors::Element for BlitzNode<'_> {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> selectors::OpaqueElement {
-        // This correctly uses a unique id for the OpaqueElement (unlike using a pointer to the "slot")
-        // However, it makes it impossible for us to "rehydrate" the OpaqueElement back into an actual Element
-        // which is required to implement the `implicit_scope_for_sheet_in_shadow_root` method below
-        //
-        // We should see if selectors will accept a PR that allows us to use 128bits for the OpaqueElement. Or
-        // find some other solution that will enable "rehydration". This is required to enable and use the
-        // Shadow DOM functionality in Stylo.
-        let non_null =
-            NonNull::new((self.id.as_u64() as usize).wrapping_add(1) as *mut ()).unwrap();
-        OpaqueElement::from_non_null_ptr(non_null)
+        OpaqueElement::from_non_null_ptr(self.style_identity())
     }
 
     fn parent_element(&self) -> Option<Self> {

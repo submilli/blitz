@@ -34,6 +34,7 @@ fn to_id(key: NodeKey) -> NodeId {
 /// `None`, and indexing panics) instead of aliasing the new occupant.
 pub struct NodeTree {
     map: SlotMap<NodeKey, Node>,
+    style_ids: HashMap<usize, NodeId>,
     // Prepared before style traversal, immutable across its worker threads.
     // Every mutable node access invalidates it, including direct embedder edits.
     style_roots: Option<HashMap<NodeId, NodeId>>,
@@ -51,6 +52,7 @@ impl NodeTree {
     pub(crate) fn new() -> Self {
         Self {
             map: SlotMap::with_key(),
+            style_ids: HashMap::new(),
             style_roots: None,
             geometry_generation: AtomicU64::new(1),
             viewport_scroll: crate::Point::ZERO,
@@ -141,16 +143,27 @@ impl NodeTree {
         self.map.get_mut(to_key(id))
     }
 
+    /// Resolve an opaque Stylo identity without dereferencing page-influenced data.
+    pub(crate) fn node_for_style_identity(&self, identity: usize) -> Option<NodeId> {
+        self.style_ids.get(&identity).copied()
+    }
+
     /// Insert a node constructed with knowledge of its own id.
     pub(crate) fn insert_with_key(&mut self, f: impl FnOnce(NodeId) -> Node) -> NodeId {
         self.style_roots = None;
-        to_id(self.map.insert_with_key(|key| f(to_id(key))))
+        let id = to_id(self.map.insert_with_key(|key| f(to_id(key))));
+        self.style_ids
+            .insert(self[id].style_identity().as_ptr() as usize, id);
+        id
     }
 
     /// Remove the node with the given id, returning it if it was still live.
     pub(crate) fn remove(&mut self, id: NodeId) -> Option<Node> {
         self.style_roots = None;
-        self.map.remove(to_key(id))
+        let node = self.map.remove(to_key(id))?;
+        self.style_ids
+            .remove(&(node.style_identity().as_ptr() as usize));
+        Some(node)
     }
 
     /// Iterate over all live `(NodeId, &Node)` pairs.
@@ -181,5 +194,26 @@ impl IndexMut<NodeId> for NodeTree {
     fn index_mut(&mut self, id: NodeId) -> &mut Node {
         self.style_roots = None;
         &mut self.map[to_key(id)]
+    }
+}
+
+#[cfg(test)]
+mod style_identity_tests {
+    use crate::{BaseDocument, DocumentConfig};
+
+    #[test]
+    fn opaque_identity_survives_storage_growth_and_is_removed_with_its_node() {
+        let mut doc = BaseDocument::new(DocumentConfig::default());
+        let id = doc.mutate().create_text_node("retained");
+        let opaque = doc.nodes[id].style_identity().as_ptr() as usize;
+        for _ in 0..1024 {
+            doc.mutate().create_text_node("grow storage");
+        }
+        assert_eq!(doc.nodes[id].style_identity().as_ptr() as usize, opaque);
+        assert_eq!(doc.nodes.node_for_style_identity(opaque), Some(id));
+        doc.reclaim_detached_nodes(&[id]);
+        assert_eq!(doc.nodes.node_for_style_identity(opaque), Some(id));
+        doc.reclaim_detached_nodes(&[]);
+        assert_eq!(doc.nodes.node_for_style_identity(opaque), None);
     }
 }
