@@ -12,10 +12,11 @@ fn transition_end_has_duration_and_geometry_reads_do_not_rewind_time() {
         .set_attribute_by_name(node, "style", "opacity:1")
         .unwrap();
     doc.resolve(0.0);
-    assert!(doc.has_active_css_animations());
+    assert!(doc.has_pending_css_animation_work());
     doc.resolve(0.15);
     assert!(doc.take_transition_ends().is_empty());
     doc.resolve(0.31);
+    assert!(doc.has_pending_css_animation_work());
     let events = doc.take_transition_ends();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].target.id(), node);
@@ -25,7 +26,7 @@ fn transition_end_has_duration_and_geometry_reads_do_not_rewind_time() {
     doc.resolve(0.0);
     doc.resolve(1.0);
     assert!(doc.take_transition_ends().is_empty());
-    assert!(!doc.has_active_css_animations());
+    assert!(!doc.has_pending_css_animation_work());
     assert_eq!(doc.resolved_style_value(node, "opacity"), "1");
 }
 

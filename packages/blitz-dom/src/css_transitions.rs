@@ -75,9 +75,10 @@ impl BaseDocument {
     pub fn take_transition_end_overflow(&mut self) -> bool {
         std::mem::take(&mut self.transition_ends.overflowed)
     }
-    /// Active CSS animations need rendering opportunities even without timers or I/O.
-    pub fn has_active_css_animations(&self) -> bool {
-        self.has_active_animations
+    /// Active animations and queued completions need a rendering opportunity.
+    /// A synchronous style read can finish a transition before event dispatch.
+    pub fn has_pending_css_animation_work(&self) -> bool {
+        self.has_active_animations || !self.transition_ends.pending.is_empty()
     }
 }
 
