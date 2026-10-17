@@ -299,6 +299,9 @@ pub struct BaseDocument {
     // TODO: collapse animating state into a bitflags
     /// Whether there are active CSS animations/transitions (so we should re-render every frame)
     pub(crate) has_active_animations: bool,
+    pub(crate) animation_time: f64,
+    pub(crate) style_change_generation: u64,
+    pub(crate) transition_ends: crate::css_transitions::TransitionEnds,
     /// Whether there is a `<canvas>` element in the DOM (so we should re-render every frame)
     pub(crate) has_canvas: bool,
     /// Whether there are subdocuments that are animating (so we should re-render every frame)
@@ -556,6 +559,9 @@ impl BaseDocument {
             active_node_id: None,
             mousedown_node_id: None,
             has_active_animations: false,
+            animation_time: 0.0,
+            style_change_generation: 0,
+            transition_ends: Default::default(),
             subdoc_is_animating: false,
             has_canvas: false,
             sub_document_nodes: HashSet::new(),

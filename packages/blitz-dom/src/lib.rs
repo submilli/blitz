@@ -47,6 +47,7 @@ pub mod form_history;
 mod frame_bases;
 mod node_seed;
 pub use document_metadata::{DocumentMetadata, DocumentType};
+pub mod css_transitions;
 pub mod dom_api;
 pub mod dom_events;
 pub mod mutations;

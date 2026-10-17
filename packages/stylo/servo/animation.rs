@@ -1049,6 +1049,9 @@ pub struct Transition {
     /// by the script thread.
     pub is_new: bool,
 
+    /// Embedder style-change generation, used to order native transition events.
+    pub event_generation: u64,
+
     /// If this `Transition` has been replaced by a new one this field is
     /// used to help produce better reversed transitions.
     pub reversing_adjusted_start_value: AnimationValue,
@@ -1079,6 +1082,7 @@ impl Transition {
             property_animation,
             state: AnimationState::Pending,
             is_new: true,
+            event_generation: 0,
             reversing_adjusted_start_value: from,
             reversing_shortening_factor: 1.0,
         }

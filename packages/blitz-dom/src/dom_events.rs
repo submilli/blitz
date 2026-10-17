@@ -175,6 +175,13 @@ pub trait DispatchHost {
     fn document_mut(&self) -> std::cell::RefMut<'_, BaseDocument>;
     fn event_type(&self) -> String;
     fn bubbles(&self) -> bool;
+    /// DOM's legacy vendor event fallback, only for trusted native events.
+    /// Embedders opting in must implement `set_event_type` as well.
+    fn legacy_event_type(&self) -> Option<&'static str> {
+        None
+    }
+    fn set_event_type(&mut self, _name: &str) {}
+
     /// True only for MouseEvent click dispatch that owns element activation.
     /// Native driver dispatch returns false because the driver owns its defaults.
     fn handles_click_activation(&self) -> bool {
@@ -544,17 +551,31 @@ pub fn dispatch(host: &mut dyn DispatchHost, target: EventTargetId) -> bool {
     !host.canceled()
 }
 
-fn has_listeners(host: &dyn DispatchHost, target: EventTargetId, capture: bool) -> bool {
-    host.listeners(target, &host.event_type())
+fn listener_event_type(host: &dyn DispatchHost, target: EventTargetId) -> String {
+    let name = host.event_type();
+    if host
+        .listeners(target, &name)
         .iter()
-        .any(|listener| listener.capture == capture)
+        .any(|listener| !listener.removed.get())
+    {
+        return name;
+    }
+    host.legacy_event_type().map(str::to_owned).unwrap_or(name)
+}
+
+fn has_listeners(host: &dyn DispatchHost, target: EventTargetId, capture: bool) -> bool {
+    host.listeners(target, &listener_event_type(host, target))
+        .iter()
+        .any(|listener| !listener.removed.get() && listener.capture == capture)
 }
 
 /// "Inner invoke": run matching listeners registered on `target` (with the
 /// given capture flag), in order, against a snapshot of the list.
 fn invoke_listeners(host: &mut dyn DispatchHost, target: EventTargetId, capture: Option<bool>) {
     let event_type = host.event_type();
-    let listeners = host.listeners(target, &event_type);
+    let selected_type = listener_event_type(host, target);
+    let listeners = host.listeners(target, &selected_type);
+    host.set_event_type(&selected_type);
     for listener in listeners {
         if listener.removed.get() {
             continue;
@@ -572,6 +593,7 @@ fn invoke_listeners(host: &mut dyn DispatchHost, target: EventTargetId, capture:
             break;
         }
     }
+    host.set_event_type(&event_type);
 }
 
 #[cfg(test)]
@@ -622,6 +644,9 @@ mod host_listener_tests {
         outer: NodeId,
         moved: Cell<bool>,
         invoked: Vec<u64>,
+        event_name: String,
+        legacy: bool,
+        names: Vec<String>,
     }
 
     const MOVED: EventTargetId = EventTargetId::Other(99);
@@ -634,7 +659,13 @@ mod host_listener_tests {
             self.document.borrow_mut()
         }
         fn event_type(&self) -> String {
-            "ping".into()
+            self.event_name.clone()
+        }
+        fn legacy_event_type(&self) -> Option<&'static str> {
+            (self.legacy && self.event_name == "transitionend").then_some("webkitTransitionEnd")
+        }
+        fn set_event_type(&mut self, name: &str) {
+            self.event_name = name.into();
         }
         fn bubbles(&self) -> bool {
             true
@@ -654,6 +685,7 @@ mod host_listener_tests {
         fn clear_propagation_flags(&mut self) {}
         fn invoke(&mut self, listener: &Listener) {
             self.invoked.push(listener.callback);
+            self.names.push(self.event_name.clone());
             if listener.callback == 1 {
                 let outer = EventTargetId::Node(self.outer);
                 let taken = self
@@ -733,10 +765,61 @@ mod host_listener_tests {
             outer,
             moved: Cell::new(false),
             invoked: Vec::new(),
+            event_name: "ping".into(),
+            legacy: false,
+            names: Vec::new(),
         };
         dispatch(&mut host, EventTargetId::Node(inner));
         assert_eq!(host.invoked, [1, 2]);
         // The `once` listener was removed where the node lives now.
         assert!(host.elsewhere.borrow().listeners(MOVED, "ping").is_empty());
+    }
+    #[test]
+    fn trusted_legacy_names_are_fallbacks_per_target_without_double_delivery() {
+        for (standard, trusted, expected) in [
+            (false, true, vec![12]),
+            (true, true, vec![11]),
+            (false, false, vec![]),
+        ] {
+            let document = BaseDocument::new(DocumentConfig::default());
+            let mut host = MovingHost {
+                outer: document.root_node().id,
+                document: RefCell::new(document),
+                elsewhere: RefCell::default(),
+                moved: Cell::new(false),
+                invoked: Vec::new(),
+                event_name: "transitionend".into(),
+                legacy: trusted,
+                names: Vec::new(),
+            };
+            let target = EventTargetId::Other(2);
+            if standard {
+                host.document_mut().event_listeners.add(
+                    target,
+                    "transitionend",
+                    11,
+                    ListenerOptions::default(),
+                );
+            }
+            host.document_mut().event_listeners.add(
+                target,
+                "webkitTransitionEnd",
+                12,
+                ListenerOptions::default(),
+            );
+            dispatch(&mut host, target);
+            assert_eq!(host.invoked, expected);
+            assert_eq!(host.event_name, "transitionend");
+            if !host.names.is_empty() {
+                assert_eq!(
+                    host.names[0],
+                    if standard {
+                        "transitionend"
+                    } else {
+                        "webkitTransitionEnd"
+                    }
+                );
+            }
+        }
     }
 }

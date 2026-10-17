@@ -49,6 +49,10 @@ impl BaseDocument {
     /// Synchronous geometry reads flush rendering without delivering queued
     /// resource completions in the middle of the caller's script.
     pub fn flush_style_and_layout(&mut self, current_time_for_animations: f64) {
+        // Geometry/style reads commonly pass zero. They must not rewind an
+        // animation timeline already advanced by the embedder's rendering clock.
+        self.advance_animation_time(current_time_for_animations);
+        let current_time_for_animations = self.animation_time;
         if TDocument::as_node(&self.root_node())
             .first_element_child()
             .is_none()

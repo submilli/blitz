@@ -10,6 +10,7 @@ use crate::StyleThreading;
 use crate::layout::damage::compute_layout_damage;
 use crate::node::Node;
 use crate::node::NodeData;
+use cssparser::ToCss;
 use markup5ever::{LocalName, LocalNameStaticSet, Namespace, NamespaceStaticSet, local_name, ns};
 use selectors::bloom::BLOOM_HASH_MASK;
 use selectors::{
@@ -61,10 +62,11 @@ use style::values::computed::text::TextAlign as StyloTextAlign;
 
 impl crate::document::BaseDocument {
     pub fn resolve_stylist(&mut self, now: f64) {
+        self.style_change_generation = self.style_change_generation.saturating_add(1);
         self.flush_author_stylesheet_order();
         style::thread_state::enter(ThreadState::LAYOUT);
 
-        let guard = &self.guard;
+        let guard = self.guard.clone();
         let guards = StylesheetGuards {
             author: &guard.read(),
             ua_or_user: &guard.read(),
@@ -80,6 +82,7 @@ impl crate::document::BaseDocument {
             .flush(&guards)
             .process_style(root, Some(&self.snapshots));
 
+        let mut completed_transitions = Vec::new();
         // Mark actively animating nodes as dirty
         let mut sets = self.animations.sets.write();
         for (key, set) in sets.iter_mut() {
@@ -120,10 +123,32 @@ impl crate::document::BaseDocument {
                 }
                 if transition.state == AnimationState::Running && transition.has_ended(now) {
                     transition.state = AnimationState::Finished;
+                    if completed_transitions.len() < crate::css_transitions::MAX_TRANSITION_ENDS {
+                        completed_transitions.push((
+                            node_id,
+                            transition
+                                .property_animation
+                                .property_id()
+                                .name()
+                                .into_owned(),
+                            key.pseudo_element
+                                .as_ref()
+                                .map(ToCss::to_css_string)
+                                .unwrap_or_default(),
+                            transition.property_animation.duration,
+                            transition.start_time + transition.property_animation.duration,
+                            transition.event_generation,
+                        ));
+                    } else {
+                        self.transition_ends.overflowed = true;
+                    }
                 }
             }
         }
         drop(sets);
+        for (node, property, pseudo, elapsed, end, generation) in completed_transitions {
+            self.queue_transition_end(node, property, pseudo, elapsed, end, generation);
+        }
         self.nodes.prepare_style_roots();
 
         // Build the style context used by the style traversal
@@ -174,11 +199,16 @@ impl crate::document::BaseDocument {
                 animation.is_new = false;
             }
             for transition in set.transitions.iter_mut() {
+                if transition.is_new {
+                    transition.event_generation = self.style_change_generation;
+                }
                 transition.is_new = false;
             }
         }
         sets.retain(|_, state| !state.is_empty());
         self.has_active_animations = sets.values().any(|state| state.needs_animation_ticks());
+
+        drop(sets);
 
         // Maybe run garbage collection. Stylo has internal to determine whether to run or not.
         self.stylist.rule_tree().maybe_gc();
