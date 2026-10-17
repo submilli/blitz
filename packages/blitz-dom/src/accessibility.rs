@@ -262,6 +262,16 @@ impl Builder<'_> {
             builder.set_expanded(open);
         }
 
+        // Bounds, from layout, in CSS pixels relative to the viewport.
+        if let Some(rect) = self.get_client_bounding_rect(node.id) {
+            builder.set_bounds(Rect {
+                x0: rect.x,
+                y0: rect.y,
+                x1: rect.x + rect.width,
+                y1: rect.y + rect.height,
+            });
+        }
+
         // Values. Masking is independent of author-selected roles and input type.
         if node.masks_observation() {
             builder.set_value("[REDACTED]".to_owned());
@@ -325,16 +335,6 @@ impl Builder<'_> {
             })
         {
             builder.set_url(url.to_string());
-        }
-
-        // Bounds, from layout, in CSS pixels relative to the viewport.
-        if let Some(rect) = self.get_client_bounding_rect(node.id) {
-            builder.set_bounds(Rect {
-                x0: rect.x,
-                y0: rect.y,
-                x1: rect.x + rect.width,
-                y1: rect.y + rect.height,
-            });
         }
     }
 

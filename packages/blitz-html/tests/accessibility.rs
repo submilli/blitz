@@ -95,3 +95,27 @@ fn hidden_elements_are_left_out_and_bounds_come_from_layout() {
     assert!(!tree.contains_key(&AxId(q(&doc, "#gone").as_u64())));
     assert_eq!(node(&tree, &doc, "#box").role(), Role::Region);
 }
+
+#[test]
+fn masked_controls_keep_layout_bounds_and_redact_values() {
+    let mut doc = common::laid_out(
+        "<style>input,textarea{display:block;width:160px;height:32px}</style><input id=p type=password value=private-password><input id=u value=private-username><textarea id=t>private-notes</textarea>",
+    );
+    for selector in ["#u", "#t"] {
+        let id = q(&doc, selector);
+        assert!(doc.mark_credential_field(id));
+    }
+    let snapshot = tree(&mut doc);
+    for selector in ["#p", "#u", "#t"] {
+        let target = node(&snapshot, &doc, selector);
+        assert_eq!(target.value(), Some("[REDACTED]"));
+        let bounds = target
+            .bounds()
+            .expect("masked controls retain their geometry");
+        assert!(bounds.x1 > bounds.x0 && bounds.y1 > bounds.y0);
+    }
+    let observation = format!("{snapshot:?}");
+    for secret in ["private-password", "private-username", "private-notes"] {
+        assert!(!observation.contains(secret));
+    }
+}
