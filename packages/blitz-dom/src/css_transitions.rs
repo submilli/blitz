@@ -50,6 +50,8 @@ impl BaseDocument {
         }
     }
     /// Drain only notifications already produced; dispatch must release the DOM borrow.
+    /// Scheduled times sort first, then CSS transition composite order within a tree.
+    /// https://www.w3.org/TR/css-transitions-2/#animation-composite-order
     pub fn take_transition_ends(&mut self) -> Vec<TransitionEnd> {
         let mut events: Vec<_> = self.transition_ends.pending.drain(..).collect();
         events.sort_by(|a, b| {
@@ -79,6 +81,8 @@ impl BaseDocument {
     }
 }
 
+// Pseudo-elements surround the owning element and its children in composite order.
+// https://www.w3.org/TR/css-transitions-2/#animation-composite-order
 fn pseudo_order(pseudo: &str) -> (u8, &str) {
     (
         match pseudo {
