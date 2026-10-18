@@ -166,3 +166,6 @@ mod inline_opacity_tests;
 
 #[cfg(test)]
 mod credential_tests;
+
+#[cfg(test)]
+mod positioned_order_tests;

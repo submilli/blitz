@@ -307,7 +307,7 @@ impl Graph {
             let path = index.path(&mut drawing, &mut budget)?;
             graph.append_path(&index, &mut lookup, path, drawing.command, &mut budget)?;
         }
-        graph.sort_inline_contexts(doc);
+        graph.sort_positioned_contexts(doc);
         graph.sort_postludes();
         Some(graph)
     }
@@ -349,38 +349,47 @@ impl Graph {
         }
     }
 
-    fn sort_inline_contexts(&mut self, doc: &BaseDocument) {
+    // CSS painting order: https://www.w3.org/TR/CSS22/zindex.html#painting-order
+    // Flex/grid use order-modified tree order:
+    // https://www.w3.org/TR/css-flexbox-1/#painting
+    // https://www.w3.org/TR/css-grid-1/#z-order
+    fn sort_positioned_contexts(&mut self, doc: &BaseDocument) {
         let mut preorder = HashMap::new();
         let mut work = vec![doc.root_node().id];
         while let Some(id) = work.pop() {
             preorder.insert(id, preorder.len());
             let node = &doc.as_ref().tree()[id];
-            work.extend(node.after());
-            work.extend(node.flat_children().iter().rev().copied());
-            work.extend(node.before());
+            let mut children: Vec<_> = node
+                .before()
+                .into_iter()
+                .chain(node.flat_children().iter().copied())
+                .chain(node.after())
+                .collect();
+            if matches!(
+                node.taffy_display(),
+                taffy::Display::Flex | taffy::Display::Grid
+            ) {
+                // Construction already flattens display:contents, includes
+                // pseudos, and excludes out-of-flow boxes from CSS order.
+                if let Some(layout_children) = node.layout_children.borrow().as_ref() {
+                    children = layout_children.to_vec();
+                }
+            }
+            work.extend(children.into_iter().rev());
         }
         for parent in 0..self.groups.len() {
-            let has_inline = self.groups[parent]
-                .children
-                .iter()
-                .any(|entry| match entry {
-                    Entry::Group(id) => match self.groups[*id].key {
-                        Some(Key::Inline(_)) => true,
-                        Some(Key::Context(node)) => doc.as_ref().tree()[node]
-                            .primary_styles()
-                            .is_some_and(|style| {
-                                style.clone_display().is_inline_flow()
-                                    && style.get_effects().opacity < 1.0
-                            }),
-                        _ => false,
-                    },
-                    _ => false,
-                });
-            if !has_inline && !matches!(self.groups[parent].key, Some(Key::Inline(_))) {
-                continue;
-            }
             let mut children = std::mem::take(&mut self.groups[parent].children);
-            children.sort_by_key(|entry| match entry {
+            // The traversal emits a stacking context's own background before
+            // any child. Preserve that prefix ahead of negative-z descendants.
+            let prefix = if matches!(self.groups[parent].key, Some(Key::Inline(_))) {
+                0
+            } else {
+                children
+                    .iter()
+                    .take_while(|entry| matches!(entry, Entry::Draw(_)))
+                    .count()
+            };
+            children[prefix..].sort_by_key(|entry| match entry {
                 Entry::Group(id)
                     if matches!(self.groups[*id].key, Some(Key::Inline(_) | Key::Context(_))) =>
                 {

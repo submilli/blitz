@@ -95,14 +95,23 @@ impl<'a> ScopeIndex<'a> {
             .iter()
             .rposition(|&id| self.is_context(id))
             .unwrap_or(0);
+        // A z-index:auto box participates at its tree position in the enclosing
+        // context. Its positioned descendants participate independently, rather
+        // than being trapped in an atomic group with that auto ancestor.
+        let positioned_owner = ancestry.iter().enumerate().rev().find_map(|(depth, &id)| {
+            (depth >= deepest_context
+                && !self.is_context(id)
+                && self.doc.as_ref().tree()[id]
+                    .primary_styles()
+                    .is_some_and(|styles| styles.clone_position() != Position::Static))
+            .then_some(id)
+        });
         let mut path = Vec::new();
         for (depth, &id) in ancestry.iter().enumerate() {
             let node = &self.doc.as_ref().tree()[id];
             if let Some(styles) = node.primary_styles() {
                 let context = self.is_context(id);
-                if (styles.clone_position() != Position::Static || context)
-                    && (context || depth >= deepest_context)
-                {
+                if context || (depth >= deepest_context && positioned_owner == Some(id)) {
                     path.push(Key::Context(id));
                 }
                 if styles.clone_display().is_inline_flow()
@@ -156,6 +165,12 @@ impl<'a> ScopeIndex<'a> {
                 if key_depth <= depth || inline {
                     insertion = index + 1;
                 }
+            }
+            // Context keys carry ordering, not effects. Put local clips inside
+            // them so escaping positioned boxes can keep their own clip chain
+            // without splitting the enclosing context's paint order.
+            while matches!(path.get(insertion), Some(Key::Context(_))) {
+                insertion += 1;
             }
             path.insert(insertion, Key::Local(scope_id));
         }
