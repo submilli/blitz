@@ -202,6 +202,8 @@ pub struct BaseDocument {
     pub(crate) viewport: Viewport,
     /// CSS media type used to evaluate `@media` rules.
     pub(crate) media_type: MediaType,
+    /// Whether this document has an active scripting environment.
+    pub(crate) scripting_enabled: bool,
     /// Changes to the stylist [`Device`] that have been requested since the
     /// last [`resolve`](Self::resolve), to be applied (coalesced into a single
     /// device rebuild) at the start of the next resolve.
@@ -480,7 +482,7 @@ impl BaseDocument {
 
         let viewport = config.viewport.unwrap_or_default();
         let media_type = config.media_type.unwrap_or_else(MediaType::screen);
-        let device = make_device(&viewport, media_type.clone(), font_ctx.clone());
+        let device = make_device(&viewport, media_type.clone(), font_ctx.clone(), false);
         let stylist = Stylist::new(device, QuirksMode::NoQuirks);
         let snapshots = SnapshotMap::new();
         let nodes = Box::new(NodeTree::new());
@@ -527,6 +529,7 @@ impl BaseDocument {
             nodes_to_id,
             viewport,
             media_type,
+            scripting_enabled: false,
             pending_device_changes: DeviceChanges::empty(),
             style_threading: config.style_threading,
             incremental_layout: config.incremental.unwrap_or(true),
@@ -2244,6 +2247,20 @@ impl BaseDocument {
         self.queue_device_changes(DeviceChanges::MEDIA_TYPE);
     }
 
+    /// Report whether this document has an active scripting environment.
+    pub fn scripting_enabled(&self) -> bool {
+        self.scripting_enabled
+    }
+
+    /// Update scripting media queries and UA noscript visibility at the next restyle.
+    pub fn set_scripting_enabled(&mut self, enabled: bool) {
+        if self.scripting_enabled == enabled {
+            return;
+        }
+        self.scripting_enabled = enabled;
+        self.queue_device_changes(DeviceChanges::SCRIPTING);
+    }
+
     pub fn viewport(&self) -> &Viewport {
         &self.viewport
     }
@@ -2344,6 +2361,7 @@ impl BaseDocument {
             &self.viewport,
             self.media_type.clone(),
             self.font_ctx.clone(),
+            self.scripting_enabled,
         ));
         self.scroll_viewport_by(0.0, 0.0); // Clamp scroll offset
 

@@ -66,3 +66,67 @@ fn media_queries_evaluate_against_the_viewport() {
         "screen and (min-width: 1px)"
     );
 }
+
+#[test]
+fn scripting_media_controls_noscript_visibility_and_survives_device_rebuilds() {
+    let mut doc = parse("<body><noscript id=fallback>JavaScript required</noscript><div>App</div>");
+    let fallback = q(&doc, "#fallback");
+    assert!(!doc.scripting_enabled());
+    assert!(doc.evaluate_media_query("(scripting: none)"));
+    assert!(!doc.evaluate_media_query("(scripting)"));
+    assert!(!doc.evaluate_media_query("(scripting: initial-only)"));
+    doc.resolve(0.0);
+    assert!(
+        !doc.get_node(fallback)
+            .unwrap()
+            .primary_styles()
+            .unwrap()
+            .get_box()
+            .display
+            .is_none()
+    );
+
+    doc.set_scripting_enabled(true);
+    assert!(doc.evaluate_media_query("(scripting)"));
+    assert!(doc.evaluate_media_query("(scripting: enabled)"));
+    assert!(!doc.evaluate_media_query("(scripting: none)"));
+    assert!(!doc.evaluate_media_query("(scripting: initial-only)"));
+    doc.resolve(0.0);
+    assert!(
+        doc.get_node(fallback)
+            .unwrap()
+            .primary_styles()
+            .unwrap()
+            .get_box()
+            .display
+            .is_none()
+    );
+
+    let mut viewport = doc.viewport().clone();
+    viewport.window_size = (1024, 768);
+    doc.set_viewport(viewport);
+    assert!(doc.evaluate_media_query("(scripting)"));
+    doc.resolve(0.0);
+    assert!(
+        doc.get_node(fallback)
+            .unwrap()
+            .primary_styles()
+            .unwrap()
+            .get_box()
+            .display
+            .is_none()
+    );
+
+    doc.set_scripting_enabled(false);
+    assert!(doc.evaluate_media_query("(scripting: none)"));
+    doc.resolve(0.0);
+    assert!(
+        !doc.get_node(fallback)
+            .unwrap()
+            .primary_styles()
+            .unwrap()
+            .get_box()
+            .display
+            .is_none()
+    );
+}

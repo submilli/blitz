@@ -57,6 +57,8 @@ pub trait FontMetricsProvider: Debug + Sync {
 pub(super) struct ExtraDeviceData {
     /// The current media type used by de device.
     media_type: MediaType,
+    /// Whether the embedder runs scripts in this document.
+    scripting_enabled: bool,
     /// The current viewport size, in CSS pixels.
     viewport_size: Size2D<f32, CSSPixel>,
     /// The current screen size, in device pixels.
@@ -114,6 +116,7 @@ impl Device {
             body_text_color: AtomicU32::new(AbsoluteColor::BLACK.to_nscolor()),
             extra: ExtraDeviceData {
                 media_type,
+                scripting_enabled: false,
                 viewport_size,
                 device_size,
                 device_pixel_ratio,
@@ -124,6 +127,16 @@ impl Device {
                 font_metrics_provider,
             },
         }
+    }
+
+    /// Whether scripting is enabled for media feature evaluation.
+    pub fn scripting_enabled(&self) -> bool {
+        self.extra.scripting_enabled
+    }
+
+    /// Set the scripting capability supplied by the embedder.
+    pub fn set_scripting_enabled(&mut self, enabled: bool) {
+        self.extra.scripting_enabled = enabled;
     }
 
     /// Returns the computed line-height for the font in a given computed values instance.
@@ -488,7 +501,7 @@ impl Device {
                     || m == mime::IMAGE_JPEG
                     || m == "image/x-icon"
                     || m == "image/webp"
-            },
+            }
             _ => false,
         }
     }

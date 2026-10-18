@@ -9,6 +9,7 @@ use crate::queries::feature::{AllowsRanges, Evaluator, FeatureFlags, QueryFeatur
 use crate::queries::values::{Orientation, PrefersColorScheme};
 use crate::values::computed::{CSSPixelLength, Context, Ratio, Resolution};
 use std::fmt::Debug;
+use std::sync::LazyLock;
 
 /// https://drafts.csswg.org/mediaqueries-4/#width
 fn eval_width(context: &Context) -> CSSPixelLength {
@@ -67,6 +68,24 @@ fn eval_prefers_color_scheme(context: &Context, query_value: Option<PrefersColor
     match query_value {
         Some(v) => context.device().color_scheme() == v,
         None => true,
+    }
+}
+
+/// https://drafts.csswg.org/mediaqueries-5/#scripting
+#[derive(Clone, Copy, Debug, FromPrimitive, Parse, ToCss)]
+#[repr(u8)]
+enum Scripting {
+    None,
+    InitialOnly,
+    Enabled,
+}
+
+fn eval_scripting(context: &Context, value: Option<Scripting>) -> bool {
+    let enabled = context.device().scripting_enabled();
+    match value {
+        None | Some(Scripting::Enabled) => enabled,
+        Some(Scripting::None) => !enabled,
+        Some(Scripting::InitialOnly) => false,
     }
 }
 
@@ -160,95 +179,103 @@ fn eval_aspect_ratio(context: &Context) -> Ratio {
 }
 
 /// A list with all the media features that Servo supports.
-pub static MEDIA_FEATURES: [QueryFeatureDescription; 15] = [
-    feature!(
-        atom!("width"),
-        AllowsRanges::Yes,
-        Evaluator::Length(eval_width),
-        FeatureFlags::VIEWPORT_DEPENDENT,
-    ),
-    feature!(
-        atom!("height"),
-        AllowsRanges::Yes,
-        Evaluator::Length(eval_height),
-        FeatureFlags::VIEWPORT_DEPENDENT,
-    ),
-    feature!(
-        atom!("orientation"),
-        AllowsRanges::No,
-        keyword_evaluator!(eval_orientation, Orientation),
-        FeatureFlags::VIEWPORT_DEPENDENT,
-    ),
-    feature!(
-        atom!("pointer"),
-        AllowsRanges::No,
-        keyword_evaluator!(eval_pointer, Pointer),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("any-pointer"),
-        AllowsRanges::No,
-        keyword_evaluator!(eval_any_pointer, Pointer),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("hover"),
-        AllowsRanges::No,
-        keyword_evaluator!(eval_hover, Hover),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("any-hover"),
-        AllowsRanges::No,
-        keyword_evaluator!(eval_any_hover, Hover),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("aspect-ratio"),
-        AllowsRanges::Yes,
-        Evaluator::NumberRatio(eval_aspect_ratio),
-        FeatureFlags::VIEWPORT_DEPENDENT,
-    ),
-    feature!(
-        atom!("device-width"),
-        AllowsRanges::Yes,
-        Evaluator::Length(eval_device_width),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("device-height"),
-        AllowsRanges::Yes,
-        Evaluator::Length(eval_device_height),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("scan"),
-        AllowsRanges::No,
-        keyword_evaluator!(eval_scan, Scan),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("resolution"),
-        AllowsRanges::Yes,
-        Evaluator::Resolution(eval_resolution),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("device-pixel-ratio"),
-        AllowsRanges::Yes,
-        Evaluator::Float(eval_device_pixel_ratio),
-        FeatureFlags::WEBKIT_PREFIX,
-    ),
-    feature!(
-        atom!("-moz-device-pixel-ratio"),
-        AllowsRanges::Yes,
-        Evaluator::Float(eval_device_pixel_ratio),
-        FeatureFlags::empty(),
-    ),
-    feature!(
-        atom!("prefers-color-scheme"),
-        AllowsRanges::No,
-        keyword_evaluator!(eval_prefers_color_scheme, PrefersColorScheme),
-        FeatureFlags::empty(),
-    ),
-];
+pub static MEDIA_FEATURES: LazyLock<[QueryFeatureDescription; 16]> = LazyLock::new(|| {
+    [
+        feature!(
+            crate::Atom::from("scripting"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_scripting, Scripting),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("width"),
+            AllowsRanges::Yes,
+            Evaluator::Length(eval_width),
+            FeatureFlags::VIEWPORT_DEPENDENT,
+        ),
+        feature!(
+            atom!("height"),
+            AllowsRanges::Yes,
+            Evaluator::Length(eval_height),
+            FeatureFlags::VIEWPORT_DEPENDENT,
+        ),
+        feature!(
+            atom!("orientation"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_orientation, Orientation),
+            FeatureFlags::VIEWPORT_DEPENDENT,
+        ),
+        feature!(
+            atom!("pointer"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_pointer, Pointer),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("any-pointer"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_any_pointer, Pointer),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("hover"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_hover, Hover),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("any-hover"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_any_hover, Hover),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("aspect-ratio"),
+            AllowsRanges::Yes,
+            Evaluator::NumberRatio(eval_aspect_ratio),
+            FeatureFlags::VIEWPORT_DEPENDENT,
+        ),
+        feature!(
+            atom!("device-width"),
+            AllowsRanges::Yes,
+            Evaluator::Length(eval_device_width),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("device-height"),
+            AllowsRanges::Yes,
+            Evaluator::Length(eval_device_height),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("scan"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_scan, Scan),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("resolution"),
+            AllowsRanges::Yes,
+            Evaluator::Resolution(eval_resolution),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("device-pixel-ratio"),
+            AllowsRanges::Yes,
+            Evaluator::Float(eval_device_pixel_ratio),
+            FeatureFlags::WEBKIT_PREFIX,
+        ),
+        feature!(
+            atom!("-moz-device-pixel-ratio"),
+            AllowsRanges::Yes,
+            Evaluator::Float(eval_device_pixel_ratio),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("prefers-color-scheme"),
+            AllowsRanges::No,
+            keyword_evaluator!(eval_prefers_color_scheme, PrefersColorScheme),
+            FeatureFlags::empty(),
+        ),
+    ]
+});

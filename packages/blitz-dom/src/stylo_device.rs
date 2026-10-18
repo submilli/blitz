@@ -38,6 +38,8 @@ bitflags! {
         const COLOR_SCHEME = 0b0000_0100;
         /// The media type (e.g. screen/print) changed.
         const MEDIA_TYPE = 0b0000_1000;
+        /// The embedder enabled or disabled scripting for the document.
+        const SCRIPTING = 0b0001_0000;
     }
 }
 
@@ -63,13 +65,14 @@ pub(crate) fn make_device(
     viewport: &Viewport,
     media_type: MediaType,
     font_ctx: Arc<Mutex<FontContext>>,
+    scripting_enabled: bool,
 ) -> Device {
     let (width, height) = viewport.logical_size();
     let viewport_size = euclid::Size2D::new(width, height);
     let device_size = euclid::Size2D::new(width, height) * viewport.scale();
     let device_pixel_ratio = euclid::Scale::new(viewport.scale());
 
-    Device::new(
+    let mut device = Device::new(
         media_type,
         QuirksMode::NoQuirks,
         viewport_size,
@@ -83,5 +86,7 @@ pub(crate) fn make_device(
         },
         PointerCapabilities::default(),
         PointerCapabilities::default(),
-    )
+    );
+    device.set_scripting_enabled(scripting_enabled);
+    device
 }
