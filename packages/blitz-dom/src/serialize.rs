@@ -7,7 +7,10 @@
 use markup5ever::{local_name, ns};
 
 use crate::DomString;
+mod output;
 use crate::node::{Node, NodeData};
+pub use output::HtmlOutputLimit;
+use output::{Bounded, Sink, finish};
 
 /// Elements whose start tag is serialized without children or an end tag.
 fn is_void(name: &markup5ever::LocalName) -> bool {
@@ -55,29 +58,33 @@ fn is_raw_text_parent(name: &markup5ever::LocalName) -> bool {
 pub fn inner_html(node: &Node) -> DomString {
     let mut steps = Vec::new();
     push_children(node, &mut steps);
-    write_steps(steps, DomString::new(), &ShadowOptions::default())
+    finish(write_steps(
+        steps,
+        DomString::new(),
+        &ShadowOptions::default(),
+    ))
 }
 
 pub(crate) fn observation_html(node: &Node) -> DomString {
     let mut steps = Vec::new();
     push_children(node, &mut steps);
-    write_steps(
+    finish(write_steps(
         steps,
         DomString::new(),
         &ShadowOptions {
             masked: true,
             ..Default::default()
         },
-    )
+    ))
 }
 
 /// `outerHTML`: serialize `node` itself followed by its descendants.
 pub fn outer_html(node: &Node) -> DomString {
-    write_steps(
+    finish(write_steps(
         vec![Step::Node(node)],
         DomString::new(),
         &ShadowOptions::default(),
-    )
+    ))
 }
 
 /// Serialization work still to do, popped from the end: a node to write,
@@ -85,7 +92,8 @@ pub fn outer_html(node: &Node) -> DomString {
 /// stack, so a deep tree cannot overflow the native stack.
 enum Step<'a> {
     Node(&'a Node),
-    EndTag(String),
+    EndTag(&'a markup5ever::QualName),
+    EndTemplate,
     Shadow(&'a Node),
 }
 
@@ -115,7 +123,7 @@ impl crate::BaseDocument {
         let mut steps = Vec::new();
         push_children(node, &mut steps);
         push_shadow(node, &mut steps, &options);
-        write_steps(steps, DomString::new(), &options)
+        finish(write_steps(steps, DomString::new(), &options))
     }
 }
 
@@ -134,14 +142,14 @@ fn push_shadow<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, options: &ShadowOp
     }
 }
 
-fn write_steps(
+fn write_steps<S: Sink>(
     mut steps: Vec<Step<'_>>,
-    mut out: DomString,
+    mut out: S,
     options: &ShadowOptions<'_>,
-) -> DomString {
+) -> Result<S, S::Error> {
     while let Some(step) = steps.pop() {
         match step {
-            Step::Node(node) => write_node(node, &mut steps, &mut out, options),
+            Step::Node(node) => write_node(node, &mut steps, &mut out, options)?,
             Step::Shadow(root) => {
                 let data = root
                     .shadow_root_data
@@ -151,35 +159,36 @@ fn write_steps(
                     "<template shadowrootmode=\"open\""
                 } else {
                     "<template shadowrootmode=\"closed\""
-                });
+                })?;
                 for (enabled, name) in [
                     (data.delegates_focus, "shadowrootdelegatesfocus"),
                     (data.serializable, "shadowrootserializable"),
                 ] {
                     if enabled {
-                        out.push(' ');
-                        out.push_str(name);
-                        out.push_str("=\"\"");
+                        out.push(' ')?;
+                        out.push_str(name)?;
+                        out.push_str("=\"\"")?;
                     }
                 }
                 if data.manual_slots {
-                    out.push_str(" shadowrootslotassignment=\"manual\"");
+                    out.push_str(" shadowrootslotassignment=\"manual\"")?;
                 }
                 if data.clonable {
-                    out.push_str(" shadowrootclonable=\"\"");
+                    out.push_str(" shadowrootclonable=\"\"")?;
                 }
-                out.push('>');
-                steps.push(Step::EndTag("template".to_string()));
+                out.push('>')?;
+                steps.push(Step::EndTemplate);
                 push_children(root, &mut steps);
             }
             Step::EndTag(tag) => {
-                out.push_str("</");
-                out.push_str(&tag);
-                out.push('>');
+                out.push_str("</")?;
+                write_tag(tag, &mut out)?;
+                out.push('>')?;
             }
+            Step::EndTemplate => out.push_str("</template>")?,
         }
     }
-    out
+    Ok(out)
 }
 
 /// Queue `node`'s children (the template contents for a `<template>`) so
@@ -194,43 +203,43 @@ fn push_children<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>) {
 }
 
 /// Write `node`'s own markup, and queue its children and end tag.
-fn write_node<'a>(
+fn write_node<'a, S: Sink>(
     node: &'a Node,
     steps: &mut Vec<Step<'a>>,
-    out: &mut DomString,
+    out: &mut S,
     options: &ShadowOptions<'_>,
-) {
+) -> Result<(), S::Error> {
     if options.masked && node.masks_observation() {
-        out.push_str("<span>[REDACTED]</span>");
-        return;
+        out.push_str("<span>[REDACTED]</span>")?;
+        return Ok(());
     }
     match &node.data {
         NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
             // AnonymousBlocks are layout artefacts, not part of the DOM.
             if matches!(node.data, NodeData::AnonymousBlock(_)) {
                 push_children(node, steps);
-                return;
+                return Ok(());
             }
-            let tag = qualified_tag_name(&el.name);
-            out.push('<');
-            out.push_str(&tag);
+            let tag = &el.name;
+            out.push('<')?;
+            write_tag(tag, out)?;
             if let Some(is) = &el.custom_element_is
                 && !el.has_attr(markup5ever::LocalName::from("is"))
             {
-                out.push_str(" is=\"");
-                escape_dom(&is.as_str().into(), true, out);
-                out.push('"');
+                out.push_str(" is=\"")?;
+                escape_units(is.encode_utf16(), true, out)?;
+                out.push('"')?;
             }
             for attr in el.attrs() {
-                out.push(' ');
-                write_attribute_name(&attr.name, out);
-                out.push_str("=\"");
-                escape_dom(&attr.value, true, out);
-                out.push('"');
+                out.push(' ')?;
+                write_attribute_name(&attr.name, out)?;
+                out.push_str("=\"")?;
+                escape_dom(&attr.value, true, out)?;
+                out.push('"')?;
             }
-            out.push('>');
+            out.push('>')?;
             if el.name.ns == ns!(html) && is_void(&el.name.local) {
-                return;
+                return Ok(());
             }
             steps.push(Step::EndTag(tag));
             push_children(node, steps);
@@ -242,88 +251,145 @@ fn write_node<'a>(
                 .and_then(|p| node.tree()[p].element_data())
                 .is_some_and(|el| el.name.ns == ns!(html) && is_raw_text_parent(&el.name.local));
             if raw {
-                out.push_dom(&text.content);
+                out.push_dom(&text.content)?;
             } else {
-                escape_text(&text.content, out);
+                escape_text(&text.content, out)?;
             }
         }
         NodeData::Comment { contents } => {
-            out.push_str("<!--");
-            out.push_dom(contents);
-            out.push_str("-->");
+            out.push_str("<!--")?;
+            out.push_dom(contents)?;
+            out.push_str("-->")?;
         }
         NodeData::ProcessingInstruction { target, contents } => {
-            out.push_str("<?");
-            out.push_str(target);
-            out.push(' ');
-            out.push_dom(contents);
-            out.push('>');
+            out.push_str("<?")?;
+            out.push_str(target)?;
+            out.push(' ')?;
+            out.push_dom(contents)?;
+            out.push('>')?;
         }
         NodeData::Doctype { name, .. } => {
-            out.push_str("<!DOCTYPE ");
-            out.push_str(name);
-            out.push('>');
+            out.push_str("<!DOCTYPE ")?;
+            out.push_str(name)?;
+            out.push('>')?;
         }
         NodeData::Document(_) | NodeData::DocumentFragment => push_children(node, steps),
     }
+    Ok(())
 }
 
 /// The tag name as serialized: the local name for HTML, SVG and MathML
 /// elements, otherwise the qualified name.
-fn qualified_tag_name(name: &markup5ever::QualName) -> String {
-    let local = name.local.to_string();
-    if name.ns == ns!(html) || name.ns == ns!(svg) || name.ns == ns!(mathml) {
-        return local;
+fn write_tag<S: Sink>(name: &markup5ever::QualName, out: &mut S) -> Result<(), S::Error> {
+    if name.ns != ns!(html)
+        && name.ns != ns!(svg)
+        && name.ns != ns!(mathml)
+        && let Some(prefix) = &name.prefix
+    {
+        out.push_str(prefix)?;
+        out.push(':')?;
     }
-    match &name.prefix {
-        Some(prefix) => format!("{prefix}:{local}"),
-        None => local,
-    }
+    out.push_str(&name.local)
 }
 
-fn write_attribute_name(name: &markup5ever::QualName, out: &mut DomString) {
+fn write_attribute_name<S: Sink>(
+    name: &markup5ever::QualName,
+    out: &mut S,
+) -> Result<(), S::Error> {
     if name.ns == ns!() {
-        out.push_str(&name.local);
+        out.push_str(&name.local)?;
     } else if name.ns == ns!(xml) {
-        out.push_str("xml:");
-        out.push_str(&name.local);
+        out.push_str("xml:")?;
+        out.push_str(&name.local)?;
     } else if name.ns == ns!(xmlns) {
         if name.local != local_name!("xmlns") {
-            out.push_str("xmlns:");
+            out.push_str("xmlns:")?;
         }
-        out.push_str(&name.local);
+        out.push_str(&name.local)?;
     } else if name.ns == ns!(xlink) {
-        out.push_str("xlink:");
-        out.push_str(&name.local);
+        out.push_str("xlink:")?;
+        out.push_str(&name.local)?;
     } else {
         if let Some(prefix) = &name.prefix {
-            out.push_str(prefix);
-            out.push(':');
+            out.push_str(prefix)?;
+            out.push(':')?;
         }
-        out.push_str(&name.local);
+        out.push_str(&name.local)?;
     }
+    Ok(())
 }
 
-/// Escape markup characters while copying every other UTF-16 code unit verbatim.
-fn escape_text(text: &DomString, out: &mut DomString) {
-    escape_dom(text, false, out);
+/// Copy code units in bounded chunks, retaining lone surrogates exactly.
+fn escape_text<S: Sink>(text: &DomString, out: &mut S) -> Result<(), S::Error> {
+    escape_dom(text, false, out)
 }
 
-fn escape_dom(text: &DomString, attribute_mode: bool, out: &mut DomString) {
-    let units = text.to_utf16();
-    let mut start = 0;
-    for (i, &unit) in units.iter().enumerate() {
+fn escape_dom<S: Sink>(
+    text: &DomString,
+    attribute_mode: bool,
+    out: &mut S,
+) -> Result<(), S::Error> {
+    escape_units(text.utf16_units(), attribute_mode, out)
+}
+
+fn escape_units<S: Sink>(
+    units: impl Iterator<Item = u16>,
+    attribute_mode: bool,
+    out: &mut S,
+) -> Result<(), S::Error> {
+    let mut buffer = [0; 1024];
+    let mut length = 0;
+    for unit in units {
         let escaped = match unit {
-            38 => "&amp;",
-            160 => "&nbsp;",
-            34 if attribute_mode => "&quot;",
-            60 if !attribute_mode => "&lt;",
-            62 if !attribute_mode => "&gt;",
-            _ => continue,
+            38 => Some("&amp;"),
+            160 => Some("&nbsp;"),
+            34 if attribute_mode => Some("&quot;"),
+            60 if !attribute_mode => Some("&lt;"),
+            62 if !attribute_mode => Some("&gt;"),
+            _ => None,
         };
-        out.push_units(&units[start..i]);
-        out.push_str(escaped);
-        start = i + 1;
+        if let Some(escaped) = escaped {
+            out.push_units(&buffer[..length])?;
+            length = 0;
+            out.push_str(escaped)?;
+        } else {
+            buffer[length] = unit;
+            length += 1;
+            if length == buffer.len() {
+                out.push_units(&buffer)?;
+                length = 0;
+            }
+        }
     }
-    out.push_units(&units[start..]);
+    out.push_units(&buffer[..length])
 }
+
+impl crate::BaseDocument {
+    /// Serialize with an exact UTF-16 limit checked before each output growth.
+    pub fn try_inner_html(
+        &self,
+        id: crate::NodeId,
+        max_units: usize,
+    ) -> Result<DomString, HtmlOutputLimit> {
+        let mut steps = Vec::new();
+        if let Some(node) = self.get_node(id) {
+            push_children(node, &mut steps);
+        }
+        write_steps(steps, Bounded::new(max_units), &ShadowOptions::default()).map(Bounded::finish)
+    }
+
+    /// Serialize the node and descendants without an oversized output buffer.
+    pub fn try_outer_html(
+        &self,
+        id: crate::NodeId,
+        max_units: usize,
+    ) -> Result<DomString, HtmlOutputLimit> {
+        let steps = self
+            .get_node(id)
+            .map_or_else(Vec::new, |node| vec![Step::Node(node)]);
+        write_steps(steps, Bounded::new(max_units), &ShadowOptions::default()).map(Bounded::finish)
+    }
+}
+
+#[cfg(test)]
+mod tests;

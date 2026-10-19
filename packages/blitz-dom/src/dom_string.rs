@@ -39,6 +39,27 @@ impl DomString {
         }
     }
 
+    /// Original code units without materializing a UTF-16 projection.
+    pub fn utf16_units(&self) -> impl Iterator<Item = u16> + '_ {
+        enum Units<'a> {
+            Utf8(std::str::EncodeUtf16<'a>),
+            Utf16(std::iter::Copied<std::slice::Iter<'a, u16>>),
+        }
+        impl Iterator for Units<'_> {
+            type Item = u16;
+            fn next(&mut self) -> Option<u16> {
+                match self {
+                    Self::Utf8(units) => units.next(),
+                    Self::Utf16(units) => units.next(),
+                }
+            }
+        }
+        match &self.0 {
+            Repr::Utf8(text) => Units::Utf8(text.encode_utf16()),
+            Repr::Utf16 { units, .. } => Units::Utf16(units.iter().copied()),
+        }
+    }
+
     /// Scalar-value UTF-8 for layout/byte consumers. Lone surrogates become U+FFFD.
     pub fn as_str_lossy(&self) -> &str {
         match &self.0 {

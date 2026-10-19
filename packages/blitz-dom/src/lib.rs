@@ -51,6 +51,7 @@ pub use document_metadata::{DocumentMetadata, DocumentType};
 pub mod css_transitions;
 pub mod dom_api;
 pub mod dom_events;
+mod markup;
 pub mod mutations;
 pub mod ranges;
 pub mod tree_notifications;
@@ -177,6 +178,7 @@ mod scrolling;
 mod selection;
 mod serialize;
 pub use dom_string::DomString;
+pub use serialize::HtmlOutputLimit;
 /// Implementations that interact with servo's style engine
 mod stylo;
 mod stylo_device;
