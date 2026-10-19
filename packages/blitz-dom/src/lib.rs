@@ -45,6 +45,7 @@ mod font_precedence_tests;
 pub mod foreign_import;
 pub mod form_history;
 mod frame_bases;
+mod node_equality;
 mod node_seed;
 pub use document_metadata::{DocumentMetadata, DocumentType};
 pub mod css_transitions;
