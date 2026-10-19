@@ -522,7 +522,11 @@ impl DocumentMutator<'_> {
             self.doc.nodes[node_id].mark_ancestors_dirty();
         }
 
-        if name.ns == markup5ever::ns!() && name.local == local_name!("id") && node_is_in_document {
+        if name.ns == markup5ever::ns!()
+            && name.local == local_name!("id")
+            && node_is_in_document
+            && self.doc.tree_root(node_id) == self.doc.root_node().id
+        {
             if let Some(old_id) = self.doc.nodes[node_id]
                 .element_data()
                 .map(|element| element.id.clone())

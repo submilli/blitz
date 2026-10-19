@@ -40,6 +40,7 @@ mod document;
 mod document_base;
 mod document_metadata;
 mod document_ownership;
+mod document_queries;
 #[cfg(test)]
 mod font_precedence_tests;
 pub mod foreign_import;
@@ -47,7 +48,9 @@ pub mod form_history;
 mod frame_bases;
 mod node_equality;
 mod node_seed;
+mod processing_instruction;
 pub use document_metadata::{DocumentMetadata, DocumentType};
+pub use processing_instruction::is_valid_xml_name;
 pub mod css_transitions;
 pub mod dom_api;
 pub mod dom_events;
