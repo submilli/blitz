@@ -111,24 +111,26 @@ impl DocumentMutator<'_> {
         position: &str,
         html: &str,
     ) -> Result<(), DomError> {
-        let parent = self.doc.nodes[id].parent;
-        let (context, target_parent, anchor) = match position.to_ascii_lowercase().as_str() {
-            "beforebegin" | "afterend" => {
-                let parent = parent.ok_or(DomError::NoModificationAllowed)?;
-                if self.doc.node_type(parent) == node_type::DOCUMENT {
-                    return Err(DomError::NoModificationAllowed);
-                }
-                let anchor = if position.eq_ignore_ascii_case("beforebegin") {
-                    Some(id)
-                } else {
-                    self.next_sibling_id(id)
-                };
-                (parent, parent, anchor)
-            }
-            "afterbegin" => (id, id, self.doc.nodes[id].children.first().copied()),
-            "beforeend" => (id, id, None),
-            _ => return Err(DomError::Syntax),
-        };
+        self.try_insert_adjacent_html_admitted(id, position, html, |_, _| Ok(()))
+    }
+
+    /// Inspect the complete parsed result before inserting it. Rejection drops
+    /// scratch nodes without changing the target or exposing scratch mutations.
+    /// The callback must not execute script or reenter the engine.
+    pub fn try_insert_adjacent_html_admitted<T, E: From<DomError>>(
+        &mut self,
+        id: NodeId,
+        position: &str,
+        html: &str,
+        admit: impl FnOnce(&BaseDocument, Option<NodeId>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let (target_parent, anchor) = self
+            .adjacent_target(id, position)?
+            .ok_or(DomError::NoModificationAllowed)?;
+        if self.doc.node_type(target_parent) == node_type::DOCUMENT {
+            return Err(DomError::NoModificationAllowed.into());
+        }
+        let context = target_parent;
         // Parse into a detached element named like the context element.
         // A context that is not an element, or is the `html` element, parses
         // as a `body` would (HTML § 8.5, insertAdjacentHTML step 2).
@@ -142,10 +144,18 @@ impl DocumentMutator<'_> {
         let scratch = self
             .try_create_element(context_name, Vec::new())
             .map_err(|_| DomError::QuotaExceeded)?;
+        self.set_node_document(scratch, self.doc.node_document(id));
         if self.parse_temporary_fragment(scratch, html).is_err() {
             self.remove_and_drop_node(scratch);
-            return Err(DomError::QuotaExceeded);
+            return Err(DomError::QuotaExceeded.into());
         }
+        let admission = match admit(self.doc, Some(scratch)) {
+            Ok(value) => value,
+            Err(error) => {
+                self.remove_and_drop_node(scratch);
+                return Err(error);
+            }
+        };
         let parsed = self.doc.nodes[scratch].children.to_vec();
         // Moving out of an unobservable parser context must not expose its
         // soon-to-be-freed ID through a removal record.
@@ -157,7 +167,63 @@ impl DocumentMutator<'_> {
             }
         }
         self.remove_and_drop_node(scratch);
-        Ok(())
+        Ok(admission)
+    }
+
+    /// Insert an existing node relative to an element. Return false for an
+    /// outside position with no parent. Pre-insertion validates before moving.
+    /// See DOM: <https://dom.spec.whatwg.org/#insert-adjacent>.
+    pub fn insert_adjacent_node(
+        &mut self,
+        id: NodeId,
+        position: &str,
+        node: NodeId,
+    ) -> Result<bool, DomError> {
+        let Some((parent, anchor)) = self.adjacent_target(id, position)? else {
+            return Ok(false);
+        };
+        self.pre_insert(node, parent, anchor)?;
+        Ok(true)
+    }
+
+    /// Create and insert lossless text, releasing the allocation if hierarchy
+    /// validation fails. An outside position with no parent has no effect.
+    pub fn try_insert_adjacent_text(
+        &mut self,
+        id: NodeId,
+        position: &str,
+        text: crate::DomString,
+    ) -> Result<bool, DomError> {
+        let Some((parent, anchor)) = self.adjacent_target(id, position)? else {
+            return Ok(false);
+        };
+        let node = self
+            .try_create_text_node(text)
+            .map_err(|_| DomError::QuotaExceeded)?;
+        if let Err(error) = self.pre_insert(node, parent, anchor) {
+            self.remove_and_drop_node(node);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    fn adjacent_target(
+        &self,
+        id: NodeId,
+        position: &str,
+    ) -> Result<Option<(NodeId, Option<NodeId>)>, DomError> {
+        let parent = self.doc.nodes[id].parent;
+        if position.eq_ignore_ascii_case("beforebegin") {
+            Ok(parent.map(|parent| (parent, Some(id))))
+        } else if position.eq_ignore_ascii_case("afterend") {
+            Ok(parent.map(|parent| (parent, self.next_sibling_id(id))))
+        } else if position.eq_ignore_ascii_case("afterbegin") {
+            Ok(Some((id, self.doc.nodes[id].children.first().copied())))
+        } else if position.eq_ignore_ascii_case("beforeend") {
+            Ok(Some((id, None)))
+        } else {
+            Err(DomError::Syntax)
+        }
     }
 
     /// Scratch construction is unobservable. Keep only the eventual mutation
