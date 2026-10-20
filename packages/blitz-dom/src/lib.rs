@@ -174,6 +174,7 @@ pub use reclamation::NodeReachability;
 pub use resource_roots::NodeLease;
 pub use validation::{ValidationError, ValidityState};
 mod observation;
+pub use observation::{ObservationBudget, ObservationLimit, ObservationQueryError};
 mod query_selector;
 mod resolve;
 /// Computation of resolved CSS property values (`getComputedStyle()`)

@@ -1,5 +1,7 @@
 //! Observation-only redaction, independent of script-visible DOM getters.
-use crate::{BaseDocument, Node, NodeData, NodeId};
+use crate::{BaseDocument, DomString, Node, NodeData, NodeId};
+mod bounded;
+pub use bounded::{ObservationBudget, ObservationLimit, ObservationQueryError};
 
 impl Node {
     /// Password controls and host-marked credential controls are opaque to observations.
@@ -8,8 +10,8 @@ impl Node {
             el.credential_field
                 || (el.name.local.as_ref() == "input"
                     && el
-                        .attr(markup5ever::local_name!("type"))
-                        .is_some_and(|kind| kind.eq_ignore_ascii_case("password")))
+                        .attr_dom(markup5ever::local_name!("type"))
+                        .is_some_and(password_type))
         })
     }
     /// Text extraction for automation. DOM textContent keeps its normal semantics.
@@ -28,6 +30,17 @@ impl Node {
         out
     }
 }
+// Inspect at most nine original code units. Redaction must not flatten a
+// potentially large UTF-16 attribute just to reject its type as non-password.
+fn password_type(value: &DomString) -> bool {
+    let mut units = value.utf16_units();
+    b"password".iter().all(|expected| {
+        units.next().is_some_and(|unit| {
+            u8::try_from(unit).is_ok_and(|unit| unit.eq_ignore_ascii_case(expected))
+        })
+    }) && units.next().is_none()
+}
+
 impl BaseDocument {
     /// Mark before injection. The mark follows adoption and native cloning.
     pub fn mark_credential_field(&mut self, id: NodeId) -> bool {
