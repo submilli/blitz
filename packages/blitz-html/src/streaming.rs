@@ -24,7 +24,7 @@ use html5ever::{LocalName, TokenizerResult};
 
 use crate::bounded_parser::BoundedHtml;
 use crate::custom_element_pause::DefinitionLookup;
-use crate::html_sink::{HtmlSink, SharedDocument};
+use crate::html_sink::{DocAccess, HtmlSink, SharedDocument};
 
 pub enum ParseStep {
     /// A parser-inserted `<script>` just ended: run it, then call `run` again.
@@ -43,8 +43,8 @@ pub enum ParseStep {
     Done,
 }
 
-pub struct StreamingParser {
-    tokenizer: Option<Tokenizer<BoundedHtml<SharedDocument>>>,
+pub struct StreamingParser<A: DocAccess = SharedDocument> {
+    tokenizer: Option<Tokenizer<BoundedHtml<A>>>,
     input: BufferQueue,
     /// Characters from `document.write` before the insertion point, parsed
     /// before the rest of the input.
@@ -55,7 +55,7 @@ pub struct StreamingParser {
     end_of_input: bool,
 }
 
-impl StreamingParser {
+impl StreamingParser<SharedDocument> {
     pub fn new(doc: Rc<RefCell<BaseDocument>>) -> Self {
         Self::with_target(doc, None)
     }
@@ -67,7 +67,16 @@ impl StreamingParser {
     }
 
     fn with_target(doc: Rc<RefCell<BaseDocument>>, document: Option<NodeId>) -> Self {
-        let mut sink = HtmlSink::with_access(SharedDocument(doc));
+        Self::with_access(SharedDocument(doc), document)
+    }
+}
+
+impl<A: DocAccess> StreamingParser<A> {
+    /// Parse through an embedder's document owner, borrowing only during tree
+    /// operations. No document borrow survives a returned script/custom-element
+    /// pause. `document` selects an inert detached target when provided.
+    pub fn with_access(access: A, document: Option<NodeId>) -> Self {
+        let mut sink = HtmlSink::with_access(access);
         sink.document_node = document;
         sink.fragment = document.is_some();
         let tree_builder = TreeBuilder::new(
@@ -214,10 +223,7 @@ impl StreamingParser {
     /// Feed `queue` until it is exhausted, a script ends or a custom element
     /// is about to be created. Encoding hints (`<meta charset>`) are ignored:
     /// input is already decoded.
-    fn feed_until_pause(
-        tokenizer: &Tokenizer<BoundedHtml<SharedDocument>>,
-        queue: &BufferQueue,
-    ) -> ParseStep {
+    fn feed_until_pause(tokenizer: &Tokenizer<BoundedHtml<A>>, queue: &BufferQueue) -> ParseStep {
         loop {
             if tokenizer.sink.exhausted() {
                 return ParseStep::Done;
