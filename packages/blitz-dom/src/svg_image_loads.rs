@@ -38,6 +38,17 @@ pub(crate) struct SvgImageLoads {
     /// `loaded` in insertion order, to forget the oldest.
     order: VecDeque<BodyDigest>,
     queued: Vec<SvgImageLoad>,
+    /// Identity changes on cancellation; retained tasks prevent address reuse.
+    generation: Arc<()>,
+}
+
+impl SvgImageLoads {
+    fn queue(&mut self, kind: Load) {
+        self.queued.push(SvgImageLoad {
+            kind,
+            generation: Arc::clone(&self.generation),
+        });
+    }
 }
 
 /// What a deferred fetch completes with.
@@ -50,7 +61,10 @@ pub(crate) enum Deferred {
 
 /// A completion for the embedder to run as a task.
 #[derive(Debug, Clone)]
-pub struct SvgImageLoad(Load);
+pub struct SvgImageLoad {
+    kind: Load,
+    generation: Arc<()>,
+}
 
 #[derive(Debug, Clone)]
 enum Load {
@@ -71,13 +85,34 @@ impl BaseDocument {
     /// fetch completes (nothing happens when every waiter has since gone), or
     /// an SVG image shown at once has loaded its `<image>` images.
     pub fn complete_svg_image_load(&mut self, load: SvgImageLoad) {
-        match load.0 {
+        if !Arc::ptr_eq(&load.generation, &self.svg_image_loads.generation) {
+            return;
+        }
+        match load.kind {
             Load::Fetch { key, request_id } => self.complete_fetch(key, request_id),
             Load::Bodies(bodies) => {
                 for body in bodies {
                     self.note_loaded_body(body);
                 }
             }
+        }
+    }
+
+    /// Cancel deferred SVG responses when their embedder tasks are discarded.
+    /// This also cancels completions already transferred to the embedder; running
+    /// one afterward is harmless. Requests still awaiting a response and the
+    /// cache of bodies already loaded are unchanged. No author code is invoked.
+    pub fn cancel_svg_image_loads(&mut self) {
+        self.svg_image_loads.generation = Arc::new(());
+        self.svg_image_loads.queued.clear();
+        let canceled: Vec<_> = self
+            .pending_images
+            .iter()
+            .filter(|(_, pending)| pending.deferred.is_some())
+            .map(|(key, pending)| (key.url.clone(), pending.request_id))
+            .collect();
+        for (url, request_id) in canceled {
+            self.fail_image_request(&url, request_id);
         }
     }
 
@@ -139,9 +174,7 @@ impl BaseDocument {
             return false;
         };
         pending.deferred = Some(Deferred::Image(image.clone(), retention));
-        self.svg_image_loads
-            .queued
-            .push(SvgImageLoad(Load::Fetch { key, request_id }));
+        self.svg_image_loads.queue(Load::Fetch { key, request_id });
         true
     }
 
@@ -153,9 +186,7 @@ impl BaseDocument {
         let mut pending = PendingImage::new(request_id, waiter.0, waiter.1);
         pending.deferred = Some(Deferred::DataUrl);
         self.pending_images.insert(key.clone(), pending);
-        self.svg_image_loads
-            .queued
-            .push(SvgImageLoad(Load::Fetch { key, request_id }));
+        self.svg_image_loads.queue(Load::Fetch { key, request_id });
     }
 
     /// `image` loaded from `url`: remember its body when it is a `data:` URL,
@@ -188,7 +219,7 @@ impl BaseDocument {
             .collect();
         if !unloaded.is_empty() {
             let bodies = Load::Bodies(unloaded);
-            self.svg_image_loads.queued.push(SvgImageLoad(bodies));
+            self.svg_image_loads.queue(bodies);
         }
     }
 

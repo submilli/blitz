@@ -337,3 +337,99 @@ fn loaded_bodies_forget_the_oldest_past_their_bound() {
     assert!(!loads.loaded.contains(&body(0)));
     assert!(loads.loaded.contains(&body(MAX_LOADED_BODIES)));
 }
+
+#[test]
+fn canceled_svg_completions_release_waiters_and_ignore_late_tasks() {
+    for transferred in [false, true] {
+        let provider = Arc::new(Provider::default());
+        let (mut doc, html) = document(provider.clone());
+        let body = nesting(&png(203));
+        let node = img(&mut doc, html, &data_svg(&body));
+        provider.answer(&mut doc, body.into_bytes());
+        let live = img(&mut doc, html, "https://page.test/pending.png");
+        assert_eq!(doc.pending_images.len(), 2);
+        assert!(!doc.image_status(node).unwrap().complete(true));
+        let tasks = if transferred {
+            doc.take_svg_image_loads()
+        } else {
+            vec![]
+        };
+        assert_eq!(tasks.len(), usize::from(transferred));
+        doc.cancel_svg_image_loads();
+        assert!(doc.take_svg_image_loads().is_empty());
+        assert_eq!(
+            doc.pending_images.len(),
+            1,
+            "live host request is independent"
+        );
+        assert_eq!(state(&doc, node), ImageRequestState::Broken);
+        assert!(!doc.current_image_requests.contains_key(&node));
+        let events = doc.take_image_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, ImageEventKind::Error);
+        for task in tasks {
+            doc.complete_svg_image_load(task);
+        }
+        assert_eq!(state(&doc, node), ImageRequestState::Broken);
+        assert!(
+            doc.take_image_events().is_empty(),
+            "late completion cannot resurrect"
+        );
+        let data = png(204);
+        let (body, _) = data_url::DataUrl::process(&data)
+            .unwrap()
+            .decode_to_vec()
+            .unwrap();
+        provider.answer(&mut doc, body);
+        assert_eq!(state(&doc, live), ImageRequestState::CompletelyAvailable);
+        assert!(doc.pending_images.is_empty());
+        doc.mutate().remove_node(node);
+        doc.reclaim_detached_nodes(&[]);
+        assert!(
+            doc.get_node(node).is_none(),
+            "canceled image no longer roots its node"
+        );
+    }
+}
+
+#[test]
+fn canceled_fetched_svg_response_does_not_complete_or_remember_its_bodies() {
+    let provider = Arc::new(Provider::default());
+    let (mut doc, html) = document(provider.clone());
+    let nested = png(205);
+    let body = nesting(&nested);
+    let node = img(&mut doc, html, "https://page.test/nested.svg");
+    provider.answer(&mut doc, body.into_bytes());
+    let tasks = doc.take_svg_image_loads();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(doc.pending_images.len(), 1);
+    doc.cancel_svg_image_loads();
+    assert!(doc.pending_images.is_empty());
+    for task in tasks {
+        doc.complete_svg_image_load(task);
+    }
+    assert_eq!(state(&doc, node), ImageRequestState::Broken);
+    let next = fe_image(&mut doc, html, &data_svg(&nesting(&nested)));
+    assert_eq!(shown_images(&doc, next), Some(0));
+    doc.cancel_svg_image_loads();
+    assert!(doc.take_svg_image_loads().is_empty());
+    assert_eq!(shown_images(&doc, next), Some(0));
+}
+
+#[test]
+fn cancellation_invalidates_transferred_body_tasks_but_accepts_new_tasks() {
+    let (mut doc, html) = document(Arc::default());
+    let body = nesting(&png(207));
+    let node = fe_image(&mut doc, html, &data_svg(&body));
+    let tasks = doc.take_svg_image_loads();
+    assert_eq!(tasks.len(), 1);
+    doc.cancel_svg_image_loads();
+    for task in tasks {
+        doc.complete_svg_image_load(task);
+    }
+    assert_eq!(shown_images(&doc, node), Some(0));
+    let next = fe_image(&mut doc, html, &data_svg(&body));
+    assert_eq!(shown_images(&doc, next), Some(0));
+    assert_eq!(complete_loads(&mut doc), 1);
+    assert_eq!(shown_images(&doc, next), Some(1));
+}
