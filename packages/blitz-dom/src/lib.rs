@@ -135,6 +135,7 @@ mod image_budget;
 mod image_cache;
 mod image_decode;
 mod image_input;
+mod image_load_delay;
 mod image_request;
 pub mod image_state;
 mod inner_text;
