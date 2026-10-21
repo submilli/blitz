@@ -24,6 +24,18 @@ impl BaseDocument {
 
     /// Option text excludes script descendants and collapses only HTML space.
     pub fn option_text(&self, option: NodeId) -> crate::DomString {
+        self.option_text_with_limit(option, usize::MAX)
+            .expect("unlimited option text cannot exceed the addressable code-unit length")
+    }
+
+    /// Lossless option text, rejecting before the normalized output exceeds
+    /// `max_units`. Whitespace collapse and script exclusion happen before
+    /// admission; even a large ignored or all-space subtree can fit zero units.
+    pub fn option_text_with_limit(
+        &self,
+        option: NodeId,
+        max_units: usize,
+    ) -> Option<crate::DomString> {
         let mut pending = self.nodes[option]
             .children
             .iter()
@@ -33,14 +45,26 @@ impl BaseDocument {
         let mut units = Vec::new();
         let mut space = false;
         while let Some(id) = pending.pop() {
-            if self.option_tag(id) == Some("script") {
+            let ignored = self
+                .get_node(id)
+                .and_then(|node| node.element_data())
+                .is_some_and(|element| {
+                    (element.name.ns == ns!(html)
+                        && matches!(element.name.local.as_ref(), "script" | "img"))
+                        || (element.name.ns == ns!(svg) && element.name.local.as_ref() == "script")
+                });
+            if ignored {
                 continue;
             }
             if let Some(text) = self.nodes[id].text_data() {
-                for unit in text.content.to_utf16().iter().copied() {
+                for unit in text.content.utf16_units() {
                     if matches!(unit, 9 | 10 | 12 | 13 | 32) {
                         space = !units.is_empty();
                     } else {
+                        let additional = 1 + usize::from(space);
+                        if additional > max_units.saturating_sub(units.len()) {
+                            return None;
+                        }
                         if space {
                             units.push(32);
                         }
@@ -51,7 +75,7 @@ impl BaseDocument {
             }
             pending.extend(self.nodes[id].children.iter().rev().copied());
         }
-        crate::DomString::from_utf16(units)
+        Some(crate::DomString::from_utf16(units))
     }
 
     /// Owning select, excluding options nested inside other options/datalists.
@@ -357,3 +381,6 @@ impl DocumentMutator<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
