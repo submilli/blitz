@@ -41,6 +41,7 @@ mod document;
 mod document_base;
 mod document_factories;
 mod document_metadata;
+mod document_parsing;
 mod document_title;
 pub use document_title::DocumentTitleEdit;
 mod document_ownership;

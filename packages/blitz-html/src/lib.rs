@@ -4,6 +4,7 @@ mod bounded_parser;
 mod custom_element_pause;
 mod encoding;
 mod handler_elements;
+mod inert_allocations;
 pub use encoding::{detect_xml_encoding, prescan_html_encoding};
 mod html_document;
 mod html_sink;

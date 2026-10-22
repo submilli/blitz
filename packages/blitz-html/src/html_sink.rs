@@ -428,6 +428,12 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
             let result = crate::bounded_parser::parse_xml(sink, markup);
             if result.is_err() {
                 discard_allocations(mutr, &allocations.borrow());
+            } else {
+                crate::inert_allocations::discard_detached_allocations(
+                    mutr,
+                    document,
+                    &allocations.borrow(),
+                );
             }
             return result;
         }
@@ -444,6 +450,12 @@ impl<'m, 'doc> HtmlSink<BorrowedMutator<'m, 'doc>> {
         let result = crate::bounded_parser::parse_html(sink, opts, markup, None);
         if result.is_err() {
             discard_allocations(mutr, &allocations.borrow());
+        } else {
+            crate::inert_allocations::discard_detached_allocations(
+                mutr,
+                document,
+                &allocations.borrow(),
+            );
         }
         result
     }

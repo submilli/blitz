@@ -1346,7 +1346,14 @@ impl<'doc> DocumentMutator<'doc> {
 
         // Add/Update inline stylesheets (<style> elements)
         for id in self.style_nodes.drain() {
-            if self.doc.nodes.contains_key(id) {
+            // Detached and inert trees have no associated stylesheet. Insertion
+            // or activation queues them again after their document flags change.
+            if self
+                .doc
+                .nodes
+                .get(id)
+                .is_some_and(|node| node.flags.is_in_document())
+            {
                 self.doc.process_style_element(id);
             }
         }
