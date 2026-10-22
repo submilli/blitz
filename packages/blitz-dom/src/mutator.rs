@@ -720,7 +720,8 @@ impl DocumentMutator<'_> {
                 });
         }
         if let Some(attribute) = &removed_attr {
-            self.doc.detach_attribute_record(node_id, &attribute.name, &attribute.value);
+            self.doc
+                .detach_attribute_record(node_id, &attribute.name, &attribute.value);
         }
         let node = &mut self.doc.nodes[node_id];
         let Some(element) = node.element_data_mut() else {
@@ -1333,7 +1334,12 @@ impl<'doc> DocumentMutator<'doc> {
 
         // A rollback or replacement can drop queued scratch nodes before
         // this mutator is flushed. Only live identities still have work.
-        if let Some(node) = self.title_node.take().and_then(|id| self.doc.nodes.get(id)) {
+        if let Some(node) = self
+            .title_node
+            .take()
+            .filter(|&id| is_window_title(self.doc, id))
+            .and_then(|id| self.doc.nodes.get(id))
+        {
             let title = node.text_content();
             self.doc.shell_provider.set_window_title(title);
         }
@@ -1415,6 +1421,7 @@ impl<'doc> DocumentMutator<'doc> {
                     doc.add_to_id_map(&id_attr, node_id);
                 }
 
+                let window_title = is_window_title(doc, node_id);
                 let node = &mut doc.nodes[node_id];
                 let NodeData::Element(ref mut element) = node.data else {
                     return;
@@ -1423,7 +1430,7 @@ impl<'doc> DocumentMutator<'doc> {
                 // Custom post-processing by element tag name
                 let tag = element.name.local.as_ref();
                 match tag {
-                    "title" => self.title_node = Some(node_id),
+                    "title" if window_title => self.title_node = Some(node_id),
                     "link" => self.eager_op_queue.push(SpecialOp::LoadStylesheet(node_id)),
                     "input" if element.is_image_input() => {
                         self.eager_op_queue.push(SpecialOp::LoadImageInput(node_id));
@@ -1579,7 +1586,7 @@ impl<'doc> DocumentMutator<'doc> {
         };
 
         match tag_name.as_ref() {
-            "title" => self.title_node = Some(node_id),
+            "title" if is_window_title(self.doc, node_id) => self.title_node = Some(node_id),
             "style" => {
                 self.style_nodes.insert(node_id);
             }
@@ -2344,4 +2351,15 @@ mod test {
             assert_eq!(after_remove.read_with(&guard).declarations().len(), 1);
         }
     }
+}
+
+/// Inert, detached and embedded-document titles cannot change the host window.
+fn is_window_title(doc: &BaseDocument, id: NodeId) -> bool {
+    doc.get_node(id).is_some_and(|node| {
+        node.owner_document == doc.root_node_id
+            && node.flags.is_in_document()
+            && node.element_data().is_some_and(|element| {
+                element.name.ns == markup5ever::ns!(html) && element.name.local.as_ref() == "title"
+            })
+    })
 }

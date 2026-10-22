@@ -31,6 +31,7 @@
 pub const DEFAULT_CSS: &str = include_str!("../assets/default.css");
 pub const BULLET_FONT: &[u8] = include_bytes!("../assets/moz-bullet-font.otf");
 
+mod attribute_nodes;
 pub mod custom_elements;
 pub mod custom_internals;
 /// The DOM implementation.
@@ -38,10 +39,10 @@ pub mod custom_internals;
 /// This is the primary entry point for this crate.
 mod document;
 mod document_base;
+mod document_factories;
 mod document_metadata;
 mod document_ownership;
 mod document_queries;
-mod attribute_nodes;
 pub use attribute_nodes::{AttributeId, AttributeNode, AttributeNodeError, NodeIdentity};
 mod document_scripts;
 mod element_filter;
