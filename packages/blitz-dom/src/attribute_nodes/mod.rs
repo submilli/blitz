@@ -1,5 +1,6 @@
 //! Attribute identities are distinct from tree-node identities.
 //! https://dom.spec.whatwg.org/#interface-attr
+mod comparison;
 mod mutation;
 mod projection;
 mod store;
@@ -10,6 +11,13 @@ pub(crate) use store::Store;
 slotmap::new_key_type! {
     /// Versioned identity of an attribute object, never a tree node ID.
     pub struct AttributeId;
+}
+
+/// A DOM node identity in one document arena, including attributes outside its tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NodeIdentity {
+    Tree(NodeId),
+    Attribute(AttributeId),
 }
 
 /// The native data of an Attr facade. Attached values remain on the element.
@@ -50,3 +58,6 @@ pub enum AttributeNodeError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod comparison_tests;

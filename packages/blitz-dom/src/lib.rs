@@ -42,7 +42,7 @@ mod document_metadata;
 mod document_ownership;
 mod document_queries;
 mod attribute_nodes;
-pub use attribute_nodes::{AttributeId, AttributeNode, AttributeNodeError};
+pub use attribute_nodes::{AttributeId, AttributeNode, AttributeNodeError, NodeIdentity};
 mod document_scripts;
 mod element_filter;
 pub use element_filter::{DocumentCollection, ElementFilter};
