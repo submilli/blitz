@@ -276,3 +276,115 @@ fn output_limits_admit_exact_matches_and_keep_inert_trees_separate() {
         .is_empty()
     );
 }
+
+#[test]
+fn document_collections_match_only_exact_html_element_types() {
+    let mut doc = BaseDocument::new(Default::default());
+    let root = doc.root_node().id;
+    let scope = element(&mut doc, ns!(html), "div");
+    doc.mutate().append_children(root, &[scope]);
+    for (kind, local) in [
+        (DocumentCollection::Scripts, "script"),
+        (DocumentCollection::Images, "img"),
+        (DocumentCollection::Forms, "form"),
+        (DocumentCollection::Embeds, "embed"),
+    ] {
+        let html = element(&mut doc, ns!(html), local);
+        let svg = element(&mut doc, ns!(svg), local);
+        let null = element(&mut doc, ns!(), local);
+        let uppercase = element(&mut doc, ns!(html), &local.to_ascii_uppercase());
+        doc.mutate()
+            .append_children(scope, &[html, svg, null, uppercase]);
+        assert_eq!(
+            query(&doc, root, ElementFilter::document_collection(kind)),
+            [html]
+        );
+    }
+}
+
+#[test]
+fn links_and_anchors_use_null_namespace_attribute_presence() {
+    let mut doc = BaseDocument::new(Default::default());
+    let root = doc.root_node().id;
+    let scope = element(&mut doc, ns!(html), "div");
+    doc.mutate().append_children(root, &[scope]);
+    let a = element(&mut doc, ns!(html), "a");
+    let area = element(&mut doc, ns!(html), "area");
+    let other = element(&mut doc, ns!(html), "link");
+    let foreign = element(&mut doc, ns!(svg), "a");
+    for id in [a, area, other, foreign] {
+        attribute(&mut doc, id, "href", "".into());
+        attribute(&mut doc, id, "name", "".into());
+    }
+    doc.mutate()
+        .append_children(scope, &[a, area, other, foreign]);
+    assert_eq!(
+        query(
+            &doc,
+            root,
+            ElementFilter::document_collection(DocumentCollection::Links)
+        ),
+        [a, area]
+    );
+    assert_eq!(
+        query(
+            &doc,
+            root,
+            ElementFilter::document_collection(DocumentCollection::Anchors)
+        ),
+        [a]
+    );
+    let namespaced = element(&mut doc, ns!(html), "a");
+    for name in ["href", "name"] {
+        doc.mutate().set_attribute(
+            namespaced,
+            QualName::new(Some("x".into()), "urn:x".into(), name.into()),
+            "x",
+        );
+    }
+    doc.mutate().append_children(scope, &[namespaced]);
+    assert_eq!(
+        query(
+            &doc,
+            root,
+            ElementFilter::document_collection(DocumentCollection::Links)
+        ),
+        [a, area]
+    );
+    assert_eq!(
+        query(
+            &doc,
+            root,
+            ElementFilter::document_collection(DocumentCollection::Anchors)
+        ),
+        [a]
+    );
+}
+
+#[test]
+fn document_collection_queries_follow_attribute_and_topology_changes() {
+    let mut doc = BaseDocument::new(Default::default());
+    let root = doc.root_node().id;
+    let scope = element(&mut doc, ns!(html), "div");
+    doc.mutate().append_children(root, &[scope]);
+    let first = element(&mut doc, ns!(html), "a");
+    let second = element(&mut doc, ns!(html), "area");
+    doc.mutate().append_children(scope, &[first, second]);
+    let filter = ElementFilter::document_collection(DocumentCollection::Links);
+    assert!(
+        doc.filtered_descendant_elements(root, &filter, 8)
+            .unwrap()
+            .is_empty()
+    );
+    attribute(&mut doc, second, "href", "x".into());
+    attribute(&mut doc, first, "href", "".into());
+    assert_eq!(
+        doc.filtered_descendant_elements(root, &filter, 8).unwrap(),
+        [first, second]
+    );
+    doc.mutate().pre_insert(second, scope, Some(first)).unwrap();
+    assert_eq!(
+        doc.filtered_descendant_elements(root, &filter, 8).unwrap(),
+        [second, first]
+    );
+}

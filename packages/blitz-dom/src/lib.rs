@@ -42,7 +42,7 @@ mod document_metadata;
 mod document_ownership;
 mod document_queries;
 mod element_filter;
-pub use element_filter::ElementFilter;
+pub use element_filter::{DocumentCollection, ElementFilter};
 #[cfg(test)]
 mod font_precedence_tests;
 pub mod foreign_import;

@@ -13,6 +13,18 @@ enum Kind {
     QualifiedName(DomString),
     Classes(Classes),
     Name(DomString),
+    DocumentCollection(DocumentCollection),
+}
+
+/// The six live HTML element collections exposed by a Document.
+#[derive(Clone, Copy)]
+pub enum DocumentCollection {
+    Scripts,
+    Images,
+    Forms,
+    Embeds,
+    Links,
+    Anchors,
 }
 
 impl ElementFilter {
@@ -27,6 +39,10 @@ impl ElementFilter {
     /// HTML elements with this exact null-namespace name attribute.
     pub fn name(value: DomString) -> Self {
         Self(Kind::Name(value))
+    }
+
+    pub fn document_collection(collection: DocumentCollection) -> Self {
+        Self(Kind::DocumentCollection(collection))
     }
 
     fn accepts(&self, document: &BaseDocument, id: NodeId, html: bool, quirks: bool) -> bool {
@@ -61,6 +77,27 @@ impl ElementFilter {
             Kind::Classes(classes) => element
                 .attr_dom(crate::local_name!("class"))
                 .is_some_and(|value| classes.matches(value, quirks)),
+            Kind::DocumentCollection(collection) => {
+                if element.name.ns != ns!(html) {
+                    return false;
+                }
+                match collection {
+                    DocumentCollection::Scripts => {
+                        element.name.local == crate::local_name!("script")
+                    }
+                    DocumentCollection::Images => element.name.local == crate::local_name!("img"),
+                    DocumentCollection::Forms => element.name.local == crate::local_name!("form"),
+                    DocumentCollection::Embeds => element.name.local == crate::local_name!("embed"),
+                    DocumentCollection::Links => {
+                        matches!(element.name.local.as_ref(), "a" | "area")
+                            && element.has_attr(crate::local_name!("href"))
+                    }
+                    DocumentCollection::Anchors => {
+                        element.name.local == crate::local_name!("a")
+                            && element.has_attr(crate::local_name!("name"))
+                    }
+                }
+            }
             Kind::Name(name) => {
                 element.name.ns == ns!(html)
                     && element
