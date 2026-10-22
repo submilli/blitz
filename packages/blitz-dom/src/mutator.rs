@@ -1140,6 +1140,18 @@ impl DocumentMutator<'_> {
             } else if child_was_in_doc {
                 self.rescope_stylesheets(child_id);
             }
+            if !new_parent_is_in_document && self.doc.is_connected(child_id) {
+                let styles = &mut self.style_nodes;
+                self.doc
+                    .iter_shadow_including_subtree_mut(child_id, |id, doc| {
+                        if doc.nodes[id]
+                            .data
+                            .is_element_with_tag_name(&local_name!("style"))
+                        {
+                            styles.insert(id);
+                        }
+                    });
+            }
             if new_parent_is_in_document
                 && child_was_in_doc
                 && self.doc.is_recording_custom_element_reactions()
@@ -1346,15 +1358,13 @@ impl<'doc> DocumentMutator<'doc> {
 
         // Add/Update inline stylesheets (<style> elements)
         for id in self.style_nodes.drain() {
-            // Detached and inert trees have no associated stylesheet. Insertion
-            // or activation queues them again after their document flags change.
-            if self
-                .doc
-                .nodes
-                .get(id)
-                .is_some_and(|node| node.flags.is_in_document())
-            {
+            let Some(node) = self.doc.nodes.get(id) else {
+                continue;
+            };
+            if node.flags.is_in_document() {
                 self.doc.process_style_element(id);
+            } else if self.doc.is_connected(id) {
+                self.doc.process_inert_style_element(id);
             }
         }
 

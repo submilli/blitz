@@ -48,6 +48,12 @@ impl BaseDocument {
         index: usize,
         attached: bool,
     ) -> Result<usize, CssomError> {
+        // Association preserves CSSOM identity in inert documents, but only an
+        // active owner can authorize import/font loads from inserted rules.
+        let attached = attached
+            && self
+                .get_node(handle.owner)
+                .is_some_and(|node| node.flags.is_in_document());
         if !crate::css_limits::allowed_with_ancestors(rule, ancestors.len()) {
             return Err(CssomError::Syntax);
         }

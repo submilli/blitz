@@ -33,6 +33,7 @@ use blitz_traits::node_id::NodeId;
 use crate::BaseDocument;
 use crate::net::StylesheetLoader;
 
+mod inert;
 mod metadata;
 mod mutations;
 mod order;
@@ -223,7 +224,7 @@ impl BaseDocument {
         Some(CssomSheet {
             document: self.id(),
             owner,
-            sheet: self.active_stylesheet(owner)?.clone(),
+            sheet: self.associated_stylesheet(owner)?.clone(),
             constructed: false,
             origin_clean: self
                 .get_node(owner)?
@@ -232,24 +233,33 @@ impl BaseDocument {
         })
     }
 
-    /// Whether this exact sheet is still the owner's active stylesheet.
+    /// Whether this exact sheet is still associated with its owner, including inert documents.
     pub fn stylesheet_is_current(&self, handle: &CssomSheet) -> bool {
         handle.document == self.id()
             && self
-                .active_stylesheet(handle.owner)
+                .associated_stylesheet(handle.owner)
                 .is_some_and(|sheet| ServoArc::ptr_eq(&sheet.0, &handle.sheet.0))
     }
 
-    fn active_stylesheet(&self, owner: NodeId) -> Option<&DocumentStyleSheet> {
-        if let Some(root) = self.containing_shadow_root(owner) {
-            return self
-                .get_node(root)?
-                .shadow_styles
-                .as_ref()?
-                .sheets
-                .get(&owner);
+    fn associated_stylesheet(&self, owner: NodeId) -> Option<&DocumentStyleSheet> {
+        if let Some(sheet) = self
+            .containing_shadow_root(owner)
+            .and_then(|root| self.get_node(root))
+            .and_then(|node| node.shadow_styles.as_ref())
+            .and_then(|styles| styles.sheets.get(&owner))
+        {
+            return Some(sheet);
         }
-        self.nodes_to_stylesheet.get(&owner)
+        self.nodes_to_stylesheet.get(&owner).or_else(|| {
+            let node = self.get_node(owner)?;
+            if node.flags.is_in_document() || !self.is_connected(owner) {
+                return None;
+            }
+            match &node.element_data()?.special_data {
+                crate::node::SpecialElementData::Stylesheet(sheet) => Some(sheet),
+                _ => None,
+            }
+        })
     }
 
     fn retained_sheet<'a>(&self, handle: &'a CssomSheet) -> Option<&'a DocumentStyleSheet> {
