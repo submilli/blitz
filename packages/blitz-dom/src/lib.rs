@@ -41,6 +41,7 @@ mod document_base;
 mod document_metadata;
 mod document_ownership;
 mod document_queries;
+mod document_scripts;
 mod element_filter;
 pub use element_filter::{DocumentCollection, ElementFilter};
 #[cfg(test)]
