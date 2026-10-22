@@ -25,6 +25,7 @@ impl BaseDocument {
         }
         super::caches::prune(self, &live);
         self.prune_reclaimed_indexes(&live);
+        self.prune_attribute_records_for_tree(&live);
         for &id in &dead {
             self.parser_forms.remove(id);
             self.event_listeners.remove_target(EventTargetId::Node(id));

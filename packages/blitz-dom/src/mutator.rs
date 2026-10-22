@@ -719,6 +719,9 @@ impl DocumentMutator<'_> {
                     new_value: None,
                 });
         }
+        if let Some(attribute) = &removed_attr {
+            self.doc.detach_attribute_record(node_id, &attribute.name, &attribute.value);
+        }
         let node = &mut self.doc.nodes[node_id];
         let Some(element) = node.element_data_mut() else {
             return;

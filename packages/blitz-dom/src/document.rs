@@ -338,6 +338,7 @@ pub struct BaseDocument {
     pub(crate) dom_generation: u64,
     pub(crate) dirty_base_documents: HashSet<NodeId>,
     pub(crate) initial_frame_bases: HashMap<NodeId, Rc<Url>>,
+    pub(crate) attribute_nodes: crate::attribute_nodes::Store,
     /// `<script>` elements that became connected outside the parser and have
     /// not been prepared yet; the embedder drains and runs them.
     pub(crate) connected_scripts: Vec<NodeId>,
@@ -581,6 +582,7 @@ impl BaseDocument {
             dirty_base_documents: HashSet::new(),
             initial_frame_bases: HashMap::new(),
             event_listeners: Default::default(),
+            attribute_nodes: Default::default(),
             connected_scripts: Vec::new(),
             shadow_hosts: HashSet::new(),
             slot_changes: Vec::new(),
