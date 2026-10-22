@@ -41,6 +41,8 @@ mod document;
 mod document_base;
 mod document_factories;
 mod document_metadata;
+mod document_title;
+pub use document_title::DocumentTitleEdit;
 mod document_ownership;
 mod document_queries;
 pub use attribute_nodes::{AttributeId, AttributeNode, AttributeNodeError, NodeIdentity};

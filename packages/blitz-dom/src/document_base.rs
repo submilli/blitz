@@ -30,6 +30,25 @@ impl BaseDocument {
             })
     }
 
+    /// Borrow the exposed document URL only after admitting serialized bytes.
+    /// Unlike the base URL, this does not consult base elements or inherited bases.
+    pub fn document_url_str_with_limit(&self, node: NodeId, max_bytes: usize) -> Option<&str> {
+        let document = self.node_document(node);
+        let value = self
+            .document_metadata(document)
+            .url
+            .as_ref()
+            .map(url::Url::as_str)
+            .unwrap_or_else(|| {
+                if document == self.root_node_id {
+                    self.url().as_str()
+                } else {
+                    "about:blank"
+                }
+            });
+        (value.len() <= max_bytes).then_some(value)
+    }
+
     pub(crate) fn style_base_url(&self, node: NodeId) -> style::stylesheets::UrlExtraData {
         style::stylesheets::UrlExtraData(style::servo_arc::Arc::new(self.document_base_url(node)))
     }
