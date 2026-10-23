@@ -127,3 +127,62 @@ fn html_aware_text_excludes_svg_scripts_and_image_descendants() {
     assert_eq!(doc.option_text(option).as_str_lossy(), "ab");
     assert!(doc.option_text_with_limit(option, 1).is_none());
 }
+
+fn select_with_values(doc: &mut BaseDocument, values: &[DomString]) -> (NodeId, Vec<NodeId>) {
+    let select = element(doc, "select");
+    let mut options = Vec::new();
+    for value in values {
+        let option = element(doc, "option");
+        doc.mutate()
+            .set_attribute(option, QualName::new(None, ns!(), "value".into()), value);
+        doc.mutate()
+            .pre_insert(option, select, None)
+            .expect("test option placement");
+        options.push(option);
+    }
+    (select, options)
+}
+
+#[test]
+fn scalar_select_values_do_not_alias_isolated_surrogates() {
+    let mut doc = BaseDocument::new(Default::default());
+    let (select, options) = select_with_values(
+        &mut doc,
+        &[
+            DomString::from_utf16(vec![0xd800]),
+            DomString::from("\u{fffd}"),
+        ],
+    );
+    doc.mutate().set_select_value(select, "\u{fffd}");
+    assert_eq!(doc.selected_option(select), Some(options[1]));
+    assert!(!doc.option_selectedness(options[0]));
+}
+
+#[test]
+fn dom_select_values_match_exact_utf16_and_only_the_first_option() {
+    let mut doc = BaseDocument::new(Default::default());
+    let high = DomString::from_utf16(vec![0xd800]);
+    let low = DomString::from_utf16(vec![0xdc00]);
+    let (select, options) = select_with_values(
+        &mut doc,
+        &[
+            high.clone(),
+            low.clone(),
+            high.clone(),
+            DomString::from("\u{fffd}"),
+        ],
+    );
+    doc.mutate().set_attribute(
+        select,
+        QualName::new(None, ns!(), "multiple".into()),
+        &DomString::from(""),
+    );
+    doc.mutate().set_select_value_dom(select, &low);
+    assert_eq!(doc.selected_options(select), vec![options[1]]);
+    doc.mutate().set_select_value_dom(select, &high);
+    assert_eq!(doc.selected_options(select), vec![options[0]]);
+    assert_eq!(doc.form_value_dom(select).as_ref(), Some(&high));
+    doc.mutate()
+        .set_select_value_dom(select, &DomString::from_utf16(vec![0xd801]));
+    assert!(doc.selected_options(select).is_empty());
+}

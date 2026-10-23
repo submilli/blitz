@@ -210,14 +210,20 @@ impl DocumentMutator<'_> {
         self.select_only(&options, wanted);
     }
 
-    /// Select only the first matching value, even in a multiple select.
-    /// No match clears selectedness; only a matching option becomes dirty.
+    /// Select only the first matching scalar value, even in a multiple select.
+    /// Scalar U+FFFD must not alias an option containing a lone surrogate.
     pub fn set_select_value(&mut self, select: NodeId, value: &str) {
+        self.set_select_value_dom(select, &value.into());
+    }
+
+    /// Match the complete DOMString without replacing isolated UTF-16 units.
+    /// No match clears selectedness; only a matching option becomes dirty.
+    pub fn set_select_value_dom(&mut self, select: NodeId, value: &crate::DomString) {
         let options = self.doc.select_options(select);
         let wanted = options
             .iter()
             .copied()
-            .find(|&id| self.doc.form_value(id).as_deref() == Some(value));
+            .find(|&id| self.doc.form_value_dom(id).as_ref() == Some(value));
         self.select_only(&options, wanted);
     }
 
