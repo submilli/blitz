@@ -646,8 +646,11 @@ pub(crate) fn handle_click(
                         t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio")
                     }) =>
                 {
-                    // The event driver owns pre-activation, rollback and completion.
-                    queue_focus(doc, Some(node_id), dispatch_event);
+                    // Script/keyboard activation does not perform pointer focus.
+                    // The driver owns pre-activation, rollback and completion.
+                    if pointer_activation {
+                        queue_focus(doc, Some(node_id), dispatch_event);
+                    }
                     break 'matched true;
                 }
                 // Activating the first <summary> of a <details> element toggles
@@ -666,7 +669,9 @@ pub(crate) fn handle_click(
 
                         if is_first_summary {
                             doc.toggle_details_open(parent_id);
-                            queue_focus(doc, Some(node_id), dispatch_event);
+                            if pointer_activation {
+                                queue_focus(doc, Some(node_id), dispatch_event);
+                            }
                             break 'matched true;
                         }
                     }
@@ -705,6 +710,9 @@ pub(crate) fn handle_click(
                             });
                         if suppress {
                             break 'matched true;
+                        }
+                        if pointer_activation {
+                            queue_focus(doc, Some(target_node_id), dispatch_event);
                         }
                         let target_node = doc.get_node_mut(target_node_id).unwrap();
                         let syn_event = target_node.synthetic_click_event_data(event.mods);
@@ -810,14 +818,14 @@ pub(crate) fn handle_click(
         false
     };
 
-    // If nothing is matched then clear focus
-    if !matched {
+    // Only a physical pointer click changes focus when no target matched.
+    if !matched && pointer_activation {
         queue_focus(doc, None, dispatch_event);
     }
 
     // Dispatch double-click event if this is the second click in quick succession
     // (click_count was already computed in handle_mousedown)
-    if doc.click_count == 2 {
+    if pointer_activation && doc.click_count == 2 {
         dispatch_event(
             (DomEvent::new(target, DomEventData::DoubleClick(double_click_event))).into(),
         );

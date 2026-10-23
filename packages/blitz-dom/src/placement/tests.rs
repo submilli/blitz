@@ -273,7 +273,10 @@ fn the_driver_completes_a_moved_checkbox_click_in_its_new_document() {
         moved: moved.clone(),
         handed_off: handed_off.clone(),
     };
-    EventDriver::new(&mut document, handler).handle_dom_event(DomEvent::new(target, click));
+    let mut click = DomEvent::new(target, click);
+    // This scenario models a physical click, including its focus default.
+    click.pointer_activation = true;
+    EventDriver::new(&mut document, handler).handle_dom_event(click);
     let moved = moved.get().unwrap();
     let event = handed_off.borrow_mut().take().unwrap();
     assert_eq!(event.target(), target);

@@ -148,3 +148,116 @@ fn fragment_navigation_reaches_embedder_and_honors_click_cancellation() {
         .handle_dom_event(DomEvent::new(target, DomEventData::Click(pointer)));
     assert_eq!(navigation.0.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn programmatic_checkable_click_preserves_existing_focus() {
+    let (mut doc, target) = document("input");
+    doc.mutate().set_attribute(
+        target,
+        QualName::new(None, ns!(), "type".into()),
+        "checkbox",
+    );
+    let body = doc.nodes[target].parent.unwrap();
+    let previous = element(&mut doc, body, "input");
+    doc.resolve(0.0);
+    let log = Log::default();
+    EventDriver::new(&mut doc, Recorder(log.clone())).focus(Some(previous));
+    assert_eq!(doc.get_focussed_node_id(), Some(previous));
+    let click = doc.nodes[target].synthetic_click_event(keyboard_types::Modifiers::empty());
+    EventDriver::new(&mut doc, Recorder(log.clone()))
+        .handle_dom_event(DomEvent::new(target, click));
+    assert!(doc.checkedness(target));
+    assert_eq!(doc.get_focussed_node_id(), Some(previous));
+    assert_eq!(
+        log.borrow()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["click"]
+    );
+}
+
+#[test]
+fn programmatic_plain_click_preserves_focus_after_physical_double_click() {
+    let (mut doc, previous) = document("input");
+    let body = doc.nodes[previous].parent.unwrap();
+    let target = element(&mut doc, body, "div");
+    let log = Log::default();
+    EventDriver::new(&mut doc, Recorder(log.clone())).focus(Some(previous));
+    doc.click_count = 2;
+    let click = doc.nodes[target].synthetic_click_event(keyboard_types::Modifiers::empty());
+    EventDriver::new(&mut doc, Recorder(log.clone()))
+        .handle_dom_event(DomEvent::new(target, click));
+    assert_eq!(doc.get_focussed_node_id(), Some(previous));
+    assert_eq!(
+        log.borrow()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["click"]
+    );
+}
+
+#[test]
+fn programmatic_summary_click_toggles_without_moving_focus() {
+    let (mut doc, details) = document("details");
+    let target = element(&mut doc, details, "summary");
+    let body = doc.nodes[details].parent.unwrap();
+    let previous = element(&mut doc, body, "input");
+    doc.resolve(0.0);
+    let log = Log::default();
+    EventDriver::new(&mut doc, Recorder(log.clone())).focus(Some(previous));
+    let click = doc.nodes[target].synthetic_click_event(keyboard_types::Modifiers::empty());
+    EventDriver::new(&mut doc, Recorder(log)).handle_dom_event(DomEvent::new(target, click));
+    assert!(
+        doc.nodes[details]
+            .element_data()
+            .unwrap()
+            .attr(crate::local_name!("open"))
+            .is_some()
+    );
+    assert_eq!(doc.get_focussed_node_id(), Some(previous));
+}
+
+#[test]
+fn physical_label_click_focuses_its_associated_checkable_control() {
+    let (mut doc, label) = document("label");
+    let body = doc.nodes[label].parent.unwrap();
+    let target = element(&mut doc, body, "input");
+    for (node, name, value) in [
+        (label, "for", "choice"),
+        (target, "id", "choice"),
+        (target, "type", "checkbox"),
+    ] {
+        doc.mutate()
+            .set_attribute(node, QualName::new(None, ns!(), name.into()), value);
+    }
+    doc.resolve(0.0);
+    let log = Log::default();
+    click(&mut doc, label, 1, &log);
+    assert!(doc.checkedness(target));
+    assert_eq!(doc.get_focussed_node_id(), Some(target));
+}
+
+#[test]
+fn physical_disabled_label_does_not_focus_an_ancestor_of_the_control() {
+    let (mut doc, label) = document("label");
+    let body = doc.nodes[label].parent.unwrap();
+    let ancestor = element(&mut doc, body, "div");
+    let target = element(&mut doc, ancestor, "input");
+    for (node, name, value) in [
+        (label, "for", "choice"),
+        (ancestor, "tabindex", "0"),
+        (target, "id", "choice"),
+        (target, "type", "checkbox"),
+        (target, "disabled", ""),
+    ] {
+        doc.mutate()
+            .set_attribute(node, QualName::new(None, ns!(), name.into()), value);
+    }
+    doc.resolve(0.0);
+    click(&mut doc, label, 1, &Log::default());
+    assert!(!doc.checkedness(target));
+    assert_ne!(doc.get_focussed_node_id(), Some(ancestor));
+    assert_ne!(doc.get_focussed_node_id(), Some(target));
+}
