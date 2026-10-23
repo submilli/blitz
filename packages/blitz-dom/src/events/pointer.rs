@@ -382,24 +382,26 @@ pub(crate) fn handle_pointermove<F: FnMut(super::GeneratedEvent)>(
 
 pub(crate) fn handle_pointerdown(
     doc: &mut BaseDocument,
-    _target: NodeId,
     x: f32,
     y: f32,
     button: MouseEventButton,
     mods: Modifiers,
+    click_count: Option<std::num::NonZeroU16>,
     dispatch_event: &mut dyn FnMut(super::GeneratedEvent),
 ) {
     // Compute click count using the previous mousedown position (before updating)
     // This handles both double-click detection and text input word/line selection
     // TODO: For text inputs, only increment click count if click maps to the same/similar caret position
-    doc.click_count = if doc
+    doc.click_count = if let Some(count) = click_count {
+        count.get()
+    } else if doc
         .last_mousedown_time
         .map(|t| doc.elapsed_since(t) < Duration::from_millis(500))
         .unwrap_or(false)
         && (doc.mousedown_position.x - x).abs() <= 2.0
         && (doc.mousedown_position.y - y).abs() <= 2.0
     {
-        doc.click_count + 1
+        doc.click_count.saturating_add(1)
     } else {
         1
     };
@@ -720,7 +722,12 @@ pub(crate) fn handle_click(
                             // perform in-page fragment navigation (scrolling) instead of a
                             // full navigation.
                             if url.fragment().is_some() && doc.url.is_same_document(&url) {
-                                doc.scroll_to_fragment(url.fragment().unwrap_or_default());
+                                if !doc
+                                    .navigation_provider
+                                    .navigate_fragment(url.clone(), doc.id())
+                                {
+                                    doc.scroll_to_fragment(url.fragment().unwrap_or_default());
+                                }
                             } else {
                                 doc.navigation_provider.navigate_to(NavigationOptions::new(
                                     url,

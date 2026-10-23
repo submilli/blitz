@@ -9,6 +9,12 @@ use crate::net::{Body, Request};
 /// or submitting a form.
 pub trait NavigationProvider: Send + Sync + 'static {
     fn navigate_to(&self, options: NavigationOptions);
+    /// Let an embedder own same-document fragment navigation, including URL and
+    /// history updates. Return true when handled; false retains native scrolling.
+    fn navigate_fragment(&self, _url: Url, _source_document: usize) -> bool {
+        false
+    }
+
     /// A rejected submission must not be replaced with a partial request.
     fn submission_failed(&self, _error: crate::net::FormDataLimit) {}
 }

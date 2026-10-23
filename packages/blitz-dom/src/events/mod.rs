@@ -123,6 +123,7 @@ fn map_dom_event_to_ui_event(
 pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
     doc: &mut BaseDocument,
     event: &mut DomEvent,
+    click_count: Option<std::num::NonZeroU16>,
     mut dispatch_event: F,
 ) -> Option<FormAction> {
     let pointer_activation = event.pointer_activation;
@@ -202,11 +203,11 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
         DomEventData::PointerDown(event) => {
             handle_pointerdown(
                 doc,
-                target_node_id,
                 event.page_x(),
                 event.page_y(),
                 event.button,
                 event.mods,
+                click_count,
                 &mut dispatch_event,
             );
         }
@@ -214,6 +215,9 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
             // Do nothing (handled in PointerDown)
         }
         DomEventData::PointerUp(event) => {
+            if let Some(count) = click_count {
+                doc.click_count = count.get();
+            }
             handle_pointerup(doc, target_node_id, event, dispatch_event);
         }
         DomEventData::MouseUp(_) => {
@@ -333,3 +337,6 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
     }
     form_action
 }
+
+#[cfg(test)]
+mod input_controller_tests;

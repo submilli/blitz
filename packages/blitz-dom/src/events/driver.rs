@@ -88,6 +88,7 @@ pub struct EventDriver<'doc, Handler: EventHandler> {
     pub(super) handler: Handler,
     queue: VecDeque<(super::GeneratedEvent, Vec<NodeLease>)>,
     logical_backspace: Option<&'static str>,
+    click_count: Option<std::num::NonZeroU16>,
 }
 
 impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
@@ -97,7 +98,16 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             handler,
             queue: VecDeque::with_capacity(4),
             logical_backspace: None,
+            click_count: None,
         }
+    }
+
+    /// Use the host input controller's count for this pointer sequence. Desktop
+    /// drivers that omit it retain time/position-based counting. The value also
+    /// governs native word selection and double-click default generation.
+    pub fn with_click_count(mut self, count: std::num::NonZeroU16) -> Self {
+        self.click_count = Some(count);
+        self
     }
 
     pub fn handle_pointer_move(&mut self, event: &BlitzPointerEvent) -> Option<NodeId> {
@@ -643,7 +653,7 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
                 _ => None,
             }
         } else {
-            doc.handle_dom_event(event, |new_evt| generated.push(new_evt))
+            super::handle_dom_event(&mut doc, event, self.click_count, |new_evt| generated.push(new_evt))
         };
         let _retained: Vec<_> = action
             .into_iter()
