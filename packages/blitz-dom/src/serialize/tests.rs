@@ -121,3 +121,69 @@ fn large_depth_remains_iterative_when_output_is_bounded() {
     );
     assert_eq!(doc.try_outer_html(root, 70_006), Err(HtmlOutputLimit));
 }
+
+#[test]
+fn bounded_shadow_output_matches_explicit_and_serializable_roots() {
+    use crate::shadow::ShadowRootInit;
+    let mut doc = BaseDocument::new(Default::default());
+    let host = element(&mut doc, "div");
+    let root = doc
+        .mutate()
+        .attach_shadow(
+            host,
+            ShadowRootInit {
+                open: false,
+                serializable: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let text = doc
+        .mutate()
+        .try_create_text_node(DomString::from_utf16(vec![38, 0xd800, 60]))
+        .unwrap();
+    doc.mutate().append_children(root, &[text]);
+    for (serializable, roots) in [(true, vec![]), (false, vec![root])] {
+        let expected = doc.get_html(host, serializable, &roots);
+        let units = expected.utf16_units().count();
+        assert!(units > 0);
+        assert_eq!(
+            doc.try_get_html(host, serializable, &roots, units),
+            Ok(expected)
+        );
+        assert_eq!(
+            doc.try_get_html(host, serializable, &roots, units - 1),
+            Err(HtmlOutputLimit)
+        );
+    }
+    assert_eq!(doc.try_get_html(host, false, &[], 0), Ok(DomString::new()));
+}
+
+#[test]
+fn bounded_shadow_output_rejects_escaping_amplification_before_allocation() {
+    use crate::shadow::ShadowRootInit;
+    let mut doc = BaseDocument::new(Default::default());
+    let host = element(&mut doc, "div");
+    let root = doc
+        .mutate()
+        .attach_shadow(
+            host,
+            ShadowRootInit {
+                serializable: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let text = doc
+        .mutate()
+        .try_create_text_node("&".repeat(1_000_000))
+        .unwrap();
+    doc.mutate().append_children(root, &[text]);
+    let peak = crate::test_allocator::peak_held(|| {
+        assert_eq!(doc.try_get_html(host, true, &[], 128), Err(HtmlOutputLimit));
+    });
+    assert!(
+        peak < 64 * 1024,
+        "refused shadow output allocated {peak} bytes"
+    );
+}

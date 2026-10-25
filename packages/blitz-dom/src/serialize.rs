@@ -365,6 +365,27 @@ fn escape_units<S: Sink>(
 }
 
 impl crate::BaseDocument {
+    /// Shadow-aware getHTML with admission before each output growth.
+    pub fn try_get_html(
+        &self,
+        id: crate::NodeId,
+        serializable: bool,
+        roots: &[crate::NodeId],
+        max_units: usize,
+    ) -> Result<DomString, HtmlOutputLimit> {
+        let options = ShadowOptions {
+            serializable,
+            masked: false,
+            roots,
+        };
+        let mut steps = Vec::new();
+        if let Some(node) = self.get_node(id) {
+            push_children(node, &mut steps);
+            push_shadow(node, &mut steps, &options);
+        }
+        write_steps(steps, Bounded::new(max_units), &options).map(Bounded::finish)
+    }
+
     /// Serialize with an exact UTF-16 limit checked before each output growth.
     pub fn try_inner_html(
         &self,
