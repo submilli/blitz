@@ -128,7 +128,8 @@ fn frame_load_and_scroll_animation_release_their_native_roots() {
     assert!(retained.contains(&frame));
     assert!(retained.contains(&scroller));
     doc.iframe_loads.clear();
-    doc.scroll_animation = ScrollAnimationState::None;
+    doc.cancel_scroll_animation();
+    assert!(!doc.has_scroll_animation());
     assert_eq!(
         doc.node_reachability().retained_nodes(&[]),
         HashSet::from([doc.root_node_id, doc.template_document(doc.root_node_id)])

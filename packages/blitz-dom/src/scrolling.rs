@@ -150,6 +150,12 @@ impl BaseDocument {
         self.scroll_animation != ScrollAnimationState::None
     }
 
+    /// Cancel frame-driven scrolling without changing offsets or queuing events.
+    /// Embedders use this when a document stops rendering permanently.
+    pub fn cancel_scroll_animation(&mut self) {
+        self.scroll_animation = ScrollAnimationState::None;
+    }
+
     /// Apply a scroll to the document, returning whether anything moved.
     ///
     /// This is the single scrolling primitive: user-initiated scrolls
