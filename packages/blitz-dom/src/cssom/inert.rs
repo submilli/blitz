@@ -6,6 +6,10 @@ impl BaseDocument {
     /// Preserve readable CSSOM rules without imports, fonts or cascade attachment.
     /// Active insertion reparses through normal stylesheet processing.
     pub(crate) fn process_inert_style_element(&mut self, owner: NodeId) {
+        if !self.style_element_accepts_css(owner) {
+            self.clear_owner_stylesheet(owner);
+            return;
+        }
         let css = self.nodes[owner].text_content();
         let css = html_escape::decode_html_entities(&css);
         let url = self.style_base_url(owner);

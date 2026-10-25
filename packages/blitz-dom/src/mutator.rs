@@ -16,7 +16,6 @@ use crate::qual_name;
 use blitz_traits::shell::Viewport;
 use style::Atom;
 use style::invalidation::element::restyle_hints::RestyleHint;
-use style::stylesheets::OriginSet;
 use thin_vec::ThinVec;
 
 macro_rules! tag_and_attr {
@@ -581,6 +580,11 @@ impl DocumentMutator<'_> {
         let tag = &element.name.local;
         let attr = &name.local;
 
+        if *attr == local_name!("type") && *tag == local_name!("style") {
+            self.style_nodes.insert(node_id);
+            return;
+        }
+
         if *attr == local_name!("media")
             && (*tag == local_name!("style") || *tag == local_name!("link"))
         {
@@ -761,6 +765,11 @@ impl DocumentMutator<'_> {
 
         let tag = &element.name.local;
         let attr = &name.local;
+
+        if *attr == local_name!("type") && *tag == local_name!("style") {
+            self.style_nodes.insert(node_id);
+            return;
+        }
 
         if *attr == local_name!("media")
             && (*tag == local_name!("style") || *tag == local_name!("link"))
@@ -1684,26 +1693,7 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     fn unload_stylesheet(&mut self, node_id: NodeId) {
-        let node = &mut self.doc.nodes[node_id];
-        let Some(element) = node.element_data_mut() else {
-            unreachable!();
-        };
-        let SpecialElementData::Stylesheet(_) = element.special_data.take() else {
-            unreachable!();
-        };
-
-        // Remove the sheet the stylist holds for the node (the element's own
-        // may since have been replaced by one for a shadow tree).
-        self.doc.remove_shadow_stylesheet(node_id);
-        let Some(stylesheet) = self.doc.nodes_to_stylesheet.remove(&node_id) else {
-            return;
-        };
-        let guard = self.doc.guard.read();
-        self.doc.stylist.remove_stylesheet(stylesheet, &guard);
-        self.doc
-            .stylist
-            .force_stylesheet_origins_dirty(OriginSet::all());
-        self.doc.stylesheet_generation += 1;
+        self.doc.clear_owner_stylesheet(node_id);
     }
 
     /// Load an image button's source, from the cache when it has it.

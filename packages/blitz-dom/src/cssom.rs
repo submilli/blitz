@@ -37,6 +37,7 @@ mod inert;
 mod metadata;
 mod mutations;
 mod order;
+mod owners;
 use metadata::{css_rule_interface, rule_attributes};
 mod retained;
 #[cfg(test)]
@@ -485,3 +486,7 @@ impl BaseDocument {
         self.retained_rule_style_set_css_text(&handle, css)
     }
 }
+
+#[cfg(test)]
+#[path = "cssom/owner_tests.rs"]
+mod owner_tests;

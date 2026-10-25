@@ -1322,6 +1322,10 @@ impl BaseDocument {
     }
 
     pub fn process_style_element(&mut self, target_id: NodeId) {
+        if !self.style_element_accepts_css(target_id) {
+            self.clear_owner_stylesheet(target_id);
+            return;
+        }
         if let Some(element) = self.nodes[target_id].element_data_mut() {
             element.stylesheet_origin_clean = true;
         }
@@ -1393,6 +1397,10 @@ impl BaseDocument {
     }
 
     pub fn upsert_stylesheet_for_node(&mut self, node_id: NodeId) {
+        if !self.style_element_accepts_css(node_id) {
+            self.clear_owner_stylesheet(node_id);
+            return;
+        }
         let raw_styles = self.nodes[node_id].text_content();
         let sheet = self.make_stylesheet_for_node(raw_styles, Origin::Author, node_id);
         self.add_stylesheet_for_node(sheet, node_id);
