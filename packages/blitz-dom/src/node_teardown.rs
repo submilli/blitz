@@ -24,6 +24,12 @@ impl BaseDocument {
             on_drop(id);
             self.shadow_hosts.remove(&id);
             self.slot_changes.retain(|&slot| slot != id);
+            // Explicit teardown also destroys temporary parser nodes. Their
+            // reactions and enqueue observations cannot outlive that identity.
+            drop(self.discard_custom_element_reactions(id));
+            if let Some(enqueued) = &mut self.custom_element_enqueued {
+                enqueued.retain(|&target| target != id);
+            }
             pending.extend(node.anonymous_blocks.iter().map(|&id| (id, false)));
             if owns_children {
                 pending.extend(

@@ -43,6 +43,18 @@ impl DocumentMutator<'_> {
         self.try_replace_html(id, html, false, admit)
     }
 
+    /// Admit declarative fragment payloads before replacement, including their
+    /// shadow subtrees. Rejection releases all scratch identities and leaves
+    /// the existing children untouched, as for ordinary innerHTML admission.
+    pub fn try_set_html_unsafe_admitted<T, E: From<NodeBudgetExceeded>>(
+        &mut self,
+        id: NodeId,
+        html: &str,
+        admit: impl FnOnce(&BaseDocument, Option<NodeId>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.try_replace_html(id, html, true, admit)
+    }
+
     fn try_replace_html<T, E: From<NodeBudgetExceeded>>(
         &mut self,
         id: NodeId,

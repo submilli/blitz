@@ -108,3 +108,56 @@ fn reactions_for_connection_and_attribute_changes() {
         ]
     );
 }
+
+#[test]
+fn admitted_shadow_markup_never_notifies_about_destroyed_scratch_nodes() {
+    let mut doc = parse("<body><x-card id=card></x-card>");
+    doc.set_custom_element_reactions(true);
+    doc.observe_custom_element_enqueues();
+    let host = q(&doc, "#card");
+    let root = doc
+        .mutate()
+        .attach_shadow(
+            host,
+            blitz_dom::shadow::ShadowRootInit {
+                open: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    doc.mutate()
+        .try_set_inner_html_admitted(
+            root,
+            "<h2><slot name=title>Untitled</slot></h2><slot></slot>",
+            |_: &blitz_dom::BaseDocument, _| Ok::<_, blitz_dom::NodeBudgetExceeded>(()),
+        )
+        .unwrap();
+    let targets = doc.take_enqueued_custom_element_targets();
+    assert!(
+        targets.iter().all(|&node| doc.get_node(node).is_some()),
+        "dead custom targets: {targets:?}"
+    );
+    assert!(doc.take_custom_element_reactions().iter().all(|reaction| {
+        reaction
+            .referenced_nodes()
+            .all(|node| doc.get_node(node).is_some())
+    }));
+}
+
+#[test]
+fn rejected_declarative_admission_preserves_children_and_discards_scratch_work() {
+    let mut doc = parse("<body><x-card id=card><b id=old>old</b></x-card>");
+    doc.set_custom_element_reactions(true);
+    doc.observe_custom_element_enqueues();
+    let host = q(&doc, "#card");
+    let old = q(&doc, "#old");
+    let result = doc.mutate().try_set_html_unsafe_admitted(
+        host,
+        "<x-nested><template shadowrootmode=open><slot></slot></template></x-nested>",
+        |_: &blitz_dom::BaseDocument, _| Err::<(), _>(blitz_dom::NodeBudgetExceeded),
+    );
+    assert!(result.is_err());
+    assert_eq!(doc.get_node(host).unwrap().children.as_slice(), &[old]);
+    assert!(doc.take_enqueued_custom_element_targets().is_empty());
+    assert!(doc.take_custom_element_reactions().is_empty());
+}

@@ -462,6 +462,22 @@ mod bounds_tests {
     use super::*;
 
     #[test]
+    fn destroying_a_target_releases_its_reactions_and_enqueue_observations() {
+        let mut doc = BaseDocument::new(Default::default());
+        doc.set_custom_element_reactions(true);
+        doc.observe_custom_element_enqueues();
+        let node = doc.mutate().create_element(
+            markup5ever::QualName::new(None, markup5ever::ns!(html), "x-gone".into()),
+            vec![],
+        );
+        doc.enqueue_custom_element_reactions(vec![CustomElementReaction::Connected(node)]);
+        doc.mutate().remove_and_drop_node(node);
+        assert!(doc.take_enqueued_custom_element_targets().is_empty());
+        assert!(doc.take_custom_element_reactions().is_empty());
+        assert_eq!(doc.custom_element_reaction_bytes, 0);
+    }
+
+    #[test]
     fn reactions_are_taken_oldest_first_and_release_their_bytes() {
         let mut doc = BaseDocument::new(crate::DocumentConfig::default());
         doc.set_custom_element_reactions(true);
