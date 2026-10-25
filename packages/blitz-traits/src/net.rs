@@ -19,11 +19,11 @@ pub use url::Url;
 pub trait NetProvider: Send + Sync + 'static {
     fn fetch(&self, doc_id: usize, request: Request, handler: Box<dyn NetHandler>);
 
-    /// Whether this provider is a no-op (e.g. `DummyNetProvider`) that will never
-    /// deliver resources. When true, callers must NOT register resources as
-    /// "pending critical" — doing so blocks painting forever, since the
-    /// completion callback never fires. Used by integrations that feed a
-    /// pre-rendered DOM and perform no sub-fetches (e.g. aginxbrowser).
+    /// Whether this provider never delivers successful resources (for example,
+    /// `DummyNetProvider`). Pending-critical registration is unnecessary for
+    /// these providers. Integrations that feed a pre-rendered DOM and perform
+    /// no sub-fetches can use this to avoid blocking painting on unavailable
+    /// resources.
     fn is_noop(&self) -> bool {
         false
     }
@@ -258,7 +258,11 @@ impl From<PathBuf> for EntryValue {
 #[derive(Default)]
 pub struct DummyNetProvider;
 impl NetProvider for DummyNetProvider {
-    fn fetch(&self, _doc_id: usize, _request: Request, _handler: Box<dyn NetHandler>) {}
+    fn fetch(&self, _doc_id: usize, _request: Request, handler: Box<dyn NetHandler>) {
+        // No transport will complete this request. Notify the owner so its
+        // pending state and retained native topology can be released.
+        handler.failed();
+    }
     fn is_noop(&self) -> bool {
         true
     }

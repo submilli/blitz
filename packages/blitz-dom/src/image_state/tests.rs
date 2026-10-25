@@ -533,3 +533,21 @@ fn a_later_step_applies_a_held_answer_when_joining_its_request() {
     drop(updates);
     assert!(doc.rx.as_ref().unwrap().try_recv().is_err());
 }
+
+#[test]
+fn noop_provider_does_not_leave_a_permanent_image_request() {
+    let mut doc = BaseDocument::new(DocumentConfig {
+        base_url: Some("https://page.test/".into()),
+        ..Default::default()
+    });
+    doc.embedder_updates_images = true;
+    let img = image(&mut doc);
+    set_src(&mut doc, img, "unavailable.png");
+    stable(&mut doc);
+    doc.handle_messages();
+    assert!(doc.image_status(img).unwrap().complete(true));
+    assert_eq!(events(&mut doc), vec![(img, ImageEventKind::Error)]);
+    assert!(doc.current_image_requests.is_empty());
+    assert!(doc.pending_images.is_empty());
+    assert!(!doc.node_reachability().roots.contains(&img));
+}
