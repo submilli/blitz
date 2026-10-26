@@ -1644,9 +1644,18 @@ impl Node {
         let mut y = y - self.final_layout().location.y + self.scroll_offset().y as f32;
 
         if let Some(t) = self.transform().as_deref() {
+            // CSS Transforms: a non-invertible transform does not render the
+            // element or its descendants, so neither can receive a hit.
+            let determinant = t.determinant();
+            if !determinant.is_finite() || determinant == 0.0 {
+                return None;
+            }
             let p = t.inverse() * kurbo::Point::new(x as f64 * scale, y as f64 * scale);
             x = (p.x / scale) as f32;
             y = (p.y / scale) as f32;
+            if !x.is_finite() || !y.is_finite() {
+                return None;
+            }
         }
 
         let size = self.final_layout().size;

@@ -495,3 +495,48 @@ fn overflow_clip_preserves_border_box_hit_ownership() {
     assert_eq!(doc.element_from_point(5.0, 5.0), Some(target));
     assert_eq!(doc.element_from_point(135.0, 135.0), Some(target));
 }
+
+#[test]
+fn singular_transforms_do_not_capture_unrelated_pointer_hits() {
+    let (mut doc, body) = document();
+    let mut viewport = doc.viewport().clone();
+    viewport.window_size = (800, 600);
+    doc.set_viewport(viewport);
+    let underlying = element(
+        &mut doc,
+        body,
+        "button",
+        "position:absolute;left:0;top:0;width:80px;height:30px",
+    );
+    let transformed = element(
+        &mut doc,
+        body,
+        "div",
+        "position:absolute;left:100px;top:100px;width:100px;height:100px;transform-origin:0 0",
+    );
+    element(&mut doc, transformed, "button", "width:80px;height:30px");
+    for transform in ["scale(0)", "scaleX(0)", "scaleY(0)", "matrix(1,1,1,1,0,0)"] {
+        doc.set_style_property(transformed, "transform", transform);
+        doc.resolve(0.0);
+        assert_eq!(
+            doc.element_from_point(10.0, 10.0),
+            Some(underlying),
+            "{transform}"
+        );
+        assert!(
+            doc.get_node(transformed)
+                .unwrap()
+                .hit(120.0, 120.0, 1.0)
+                .is_none(),
+            "{transform}"
+        );
+    }
+    doc.set_style_property(transformed, "transform", "scale(2)");
+    doc.resolve(0.0);
+    assert!(
+        doc.get_node(transformed)
+            .unwrap()
+            .hit(250.0, 250.0, 1.0)
+            .is_some()
+    );
+}
