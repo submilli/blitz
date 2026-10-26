@@ -123,6 +123,23 @@ impl<'doc, Handler: EventHandler> EventDriver<'doc, Handler> {
             return prev_hover_node_id;
         }
 
+        self.transition_hover(prev_hover_node_id, hover_node_id, event)
+    }
+
+    /// The pointer left this document's viewport or an embedding clip. Clear
+    /// native hover before callbacks so layout cannot restore the old hit.
+    pub fn handle_pointer_leave(&mut self, event: &BlitzPointerEvent) {
+        let previous = self.doc.inner().hover_node_id;
+        self.doc.inner_mut().clear_hover();
+        self.transition_hover(previous, None, event);
+    }
+
+    fn transition_hover(
+        &mut self,
+        prev_hover_node_id: Option<NodeId>,
+        hover_node_id: Option<NodeId>,
+        event: &BlitzPointerEvent,
+    ) -> Option<NodeId> {
         let doc = self.doc.inner();
         let mut old_chain = prev_hover_node_id
             .map(|id| doc.node_chain(id))

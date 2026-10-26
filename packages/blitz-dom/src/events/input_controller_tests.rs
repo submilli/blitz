@@ -261,3 +261,80 @@ fn physical_disabled_label_does_not_focus_an_ancestor_of_the_control() {
     assert_ne!(doc.get_focussed_node_id(), Some(ancestor));
     assert_ne!(doc.get_focussed_node_id(), Some(target));
 }
+
+#[test]
+fn document_pointer_leave_clears_hover_and_dispatches_boundaries_once() {
+    struct Boundaries {
+        target: NodeId,
+        log: Rc<RefCell<Vec<&'static str>>>,
+    }
+    impl EventHandler for Boundaries {
+        fn handle_event(
+            &mut self,
+            _: &[NodeId],
+            event: &mut DomEvent,
+            _: &mut dyn Document,
+            _: &mut EventState,
+        ) {
+            if event.target == self.target
+                && matches!(
+                    event.data,
+                    DomEventData::PointerOut(_)
+                        | DomEventData::MouseOut(_)
+                        | DomEventData::PointerLeave(_)
+                        | DomEventData::MouseLeave(_)
+                        | DomEventData::PointerOver(_)
+                        | DomEventData::MouseOver(_)
+                )
+            {
+                self.log.borrow_mut().push(event.data.name());
+            }
+        }
+    }
+    let (mut doc, target) = document("button");
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let pointer = doc.nodes[target].synthetic_click_event_data(keyboard_types::Modifiers::empty());
+    EventDriver::new(
+        &mut doc,
+        Boundaries {
+            target,
+            log: log.clone(),
+        },
+    )
+    .handle_pointer_move(&pointer);
+    assert_eq!(doc.get_hover_node_id(), Some(target));
+    log.borrow_mut().clear();
+    EventDriver::new(
+        &mut doc,
+        Boundaries {
+            target,
+            log: log.clone(),
+        },
+    )
+    .handle_pointer_leave(&pointer);
+    assert_eq!(
+        *log.borrow(),
+        ["pointerout", "mouseout", "pointerleave", "mouseleave"]
+    );
+    assert_eq!(doc.get_hover_node_id(), None);
+    assert!(!doc.refresh_hover());
+    EventDriver::new(
+        &mut doc,
+        Boundaries {
+            target,
+            log: log.clone(),
+        },
+    )
+    .handle_pointer_leave(&pointer);
+    assert_eq!(log.borrow().len(), 4);
+    EventDriver::new(
+        &mut doc,
+        Boundaries {
+            target,
+            log: log.clone(),
+        },
+    )
+    .handle_pointer_move(&pointer);
+    assert_eq!(doc.get_hover_node_id(), Some(target));
+    assert_eq!(&log.borrow()[4..], ["pointerover", "mouseover"]);
+}
