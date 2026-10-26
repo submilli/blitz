@@ -1,5 +1,6 @@
 mod driver;
 mod focus;
+mod frame_input;
 pub use focus::FocusTransition;
 mod form;
 pub use form::{FormAction, ImplicitSubmission};
@@ -128,6 +129,7 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
 ) -> Option<FormAction> {
     let pointer_activation = event.pointer_activation;
     let target_node_id = event.target;
+    let frame_input = frame_input::FrameInput::locate(doc, event);
     let node = &mut doc.nodes[target_node_id];
     let pos = node.absolute_position(0.0, 0.0);
 
@@ -145,7 +147,9 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
     };
 
     // Handle event forwarding for sub-document
-    if let Some(sub_doc) = node.subdoc_mut() {
+    if !matches!(frame_input, frame_input::FrameInput::Outside)
+        && let Some(sub_doc) = node.subdoc_mut()
+    {
         let viewport_scroll = sub_doc.inner().viewport_scroll();
 
         let set_focus = matches!(
@@ -154,7 +158,8 @@ pub(crate) fn handle_dom_event<F: FnMut(GeneratedEvent)>(
         );
         let ui_event = map_dom_event_to_ui_event(event, pos, viewport_scroll);
 
-        if let Some(ui_event) = ui_event {
+        if let Some(mut ui_event) = ui_event {
+            frame_input.project(&mut ui_event, viewport_scroll);
             sub_doc.handle_ui_event(ui_event);
         }
 

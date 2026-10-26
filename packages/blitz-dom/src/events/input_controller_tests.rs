@@ -338,3 +338,99 @@ fn document_pointer_leave_clears_hover_and_dispatches_boundaries_once() {
     assert_eq!(doc.get_hover_node_id(), Some(target));
     assert_eq!(&log.borrow()[4..], ["pointerover", "mouseover"]);
 }
+
+struct FrameRecorder {
+    doc: BaseDocument,
+    events: Rc<RefCell<Vec<UiEvent>>>,
+}
+impl Document for FrameRecorder {
+    fn inner(&self) -> crate::DocGuard<'_> {
+        crate::DocGuard::Ref(&self.doc)
+    }
+    fn inner_mut(&mut self) -> crate::DocGuardMut<'_> {
+        crate::DocGuardMut::Ref(&mut self.doc)
+    }
+    fn handle_ui_event(&mut self, event: UiEvent) {
+        self.events.borrow_mut().push(event);
+    }
+}
+fn bordered_frame() -> (BaseDocument, NodeId, Rc<RefCell<Vec<UiEvent>>>) {
+    let (mut doc, host) = document("iframe");
+    doc.embedder_loads_iframes = true;
+    doc.mutate().set_attribute(host,QualName::new(None,ns!(),"style".into()),"display:block;width:100px;height:100px;border:10px solid black;padding:5px;transform:scale(2);transform-origin:0 0");
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let (child, _) = document("button");
+    doc.set_sub_document(
+        host,
+        Box::new(FrameRecorder {
+            doc: child,
+            events: events.clone(),
+        }),
+    );
+    doc.resolve(0.0);
+    (doc, host, events)
+}
+fn frame_point(
+    doc: &BaseDocument,
+    host: NodeId,
+    offset: f32,
+) -> blitz_traits::events::BlitzPointerEvent {
+    let bounds = doc.get_client_bounding_rect(host).unwrap();
+    let mut pointer =
+        doc.nodes[host].synthetic_click_event_data(keyboard_types::Modifiers::empty());
+    pointer.coords.client_x = bounds.x as f32 + offset * 2.0;
+    pointer.coords.client_y = bounds.y as f32 + offset * 2.0;
+    pointer.coords.page_x = pointer.coords.client_x;
+    pointer.coords.page_y = pointer.coords.client_y;
+    pointer
+}
+#[test]
+fn frame_edges_keep_border_and_padding_clicks_in_parent() {
+    for offset in [1.0, 12.0] {
+        let (mut doc, host, child_events) = bordered_frame();
+        let pointer = frame_point(&doc, host, offset);
+        let log = Log::default();
+        for event in [
+            UiEvent::PointerMove(pointer.clone()),
+            UiEvent::PointerDown(pointer.clone()),
+            UiEvent::PointerUp(pointer),
+        ] {
+            EventDriver::new(&mut doc, Recorder(log.clone()))
+                .with_click_count(NonZeroU16::new(1).unwrap())
+                .handle_ui_event(event);
+        }
+        assert!(
+            child_events.borrow().is_empty(),
+            "offset={offset}: border/padding forwarded into child"
+        );
+        assert_eq!(
+            *log.borrow(),
+            [("click", 1)],
+            "offset={offset}: parent click swallowed"
+        );
+    }
+}
+#[test]
+fn frame_edges_project_transformed_content_into_child_coordinates() {
+    let (mut doc, host, child_events) = bordered_frame();
+    let pointer = frame_point(&doc, host, 20.0);
+    EventDriver::new(&mut doc, Recorder(Log::default()))
+        .handle_ui_event(UiEvent::PointerMove(pointer));
+    let events = child_events.borrow();
+    assert_eq!(events.len(), 1);
+    let UiEvent::PointerMove(pointer) = &events[0] else {
+        panic!("forwarded pointer move")
+    };
+    assert!(
+        (pointer.coords.client_x - 5.0).abs() < 0.01,
+        "{}",
+        pointer.coords.client_x
+    );
+    assert!(
+        (pointer.coords.client_y - 5.0).abs() < 0.01,
+        "{}",
+        pointer.coords.client_y
+    );
+    assert!((pointer.coords.page_x - 5.0).abs() < 0.01);
+    assert!((pointer.coords.page_y - 5.0).abs() < 0.01);
+}
