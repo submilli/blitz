@@ -20,6 +20,38 @@ impl DocAccess for Access {
 }
 
 #[test]
+fn active_document_noscript_parsing_uses_captured_scripting_mode() {
+    for scripting in [false, true] {
+        let owner = Rc::new(RefCell::new(Owner {
+            document: BaseDocument::new(DocumentConfig::default()),
+            mutations: 0,
+        }));
+        let mut parser =
+            StreamingParser::with_scripting(Access(Rc::downgrade(&owner)), None, scripting);
+        parser.feed("<head><noscript><meta name=disabled></noscript></head><body><noscript><p id=fallback>fallback</p></noscript>");
+        parser.end_of_input();
+        assert!(matches!(parser.run(), ParseStep::Done));
+        let owner = owner.borrow();
+        assert_eq!(
+            owner
+                .document
+                .query_selector("meta[name=disabled]")
+                .unwrap()
+                .is_some(),
+            !scripting
+        );
+        assert_eq!(
+            owner
+                .document
+                .query_selector("#fallback")
+                .unwrap()
+                .is_some(),
+            !scripting
+        );
+    }
+}
+
+#[test]
 fn projected_access_releases_borrows_at_scripts_and_resumes_the_same_document() {
     let owner = Rc::new(RefCell::new(Owner {
         document: BaseDocument::new(DocumentConfig::default()),

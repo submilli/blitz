@@ -76,6 +76,14 @@ impl<A: DocAccess> StreamingParser<A> {
     /// operations. No document borrow survives a returned script/custom-element
     /// pause. `document` selects an inert detached target when provided.
     pub fn with_access(access: A, document: Option<NodeId>) -> Self {
+        Self::with_scripting(access, document, true)
+    }
+
+    /// Parse with the active document's scripting flag. Disabled scripting makes
+    /// `noscript` contents markup rather than raw text. Detached targets remain
+    /// inert regardless of this flag. Script pauses still require the embedder
+    /// to enforce its execution policy.
+    pub fn with_scripting(access: A, document: Option<NodeId>, scripting_enabled: bool) -> Self {
         let mut sink = HtmlSink::with_access(access);
         sink.document_node = document;
         sink.fragment = document.is_some();
@@ -83,8 +91,7 @@ impl<A: DocAccess> StreamingParser<A> {
             sink,
             TreeBuilderOpts {
                 exact_errors: false,
-                // Only the active document runs scripts and treats noscript as raw text.
-                scripting_enabled: document.is_none(),
+                scripting_enabled: document.is_none() && scripting_enabled,
                 iframe_srcdoc: false,
                 drop_doctype: false,
                 quirks_mode: QuirksMode::NoQuirks,
