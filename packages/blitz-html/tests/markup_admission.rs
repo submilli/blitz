@@ -128,3 +128,67 @@ fn node_quota_failure_cleans_up_before_admission_callback() {
     assert_eq!(doc.node_count(), before);
     assert_eq!(doc.get_node(a).unwrap().inner_html(), "old");
 }
+
+#[test]
+fn separately_adopted_template_contents_relink_on_return() {
+    use blitz_dom::foreign_import::ImportMode;
+    let mut source = parse("<template id=t>original</template>");
+    let mut other = parse("<body></body>");
+    let host = q(&source, "#t");
+    let contents = source.mutate().template_contents(host);
+    let owner = other.root_node().id;
+    let moved = other
+        .mutate()
+        .try_import_foreign(&source, contents, owner, ImportMode::Transfer)
+        .unwrap()
+        .root();
+    assert_eq!(
+        source.mutate().unlink_template_contents(contents),
+        Some(host)
+    );
+    assert_eq!(source.host_including_parent(contents), None);
+    let child = other.get_node(moved).unwrap().children[0];
+    other
+        .mutate()
+        .try_set_adopted_template_html(moved, "<b>changed</b>", false, |_, _| {
+            Ok::<(), NodeBudgetExceeded>(())
+        })
+        .unwrap();
+    assert_eq!(
+        other.get_node(moved).unwrap().inner_html(),
+        "<b>changed</b>"
+    );
+    assert!(other.get_node(child).unwrap().parent.is_none());
+    assert_eq!(
+        other
+            .mutate()
+            .try_set_adopted_template_html(moved, "", false, |_, _| Err::<(), _>(
+                NodeBudgetExceeded
+            )),
+        Err(NodeBudgetExceeded)
+    );
+    assert_eq!(
+        other.get_node(moved).unwrap().inner_html(),
+        "<b>changed</b>"
+    );
+
+    let owner = source.root_node().id;
+    let returned = source
+        .mutate()
+        .try_import_foreign(&other, moved, owner, ImportMode::Transfer)
+        .unwrap()
+        .root();
+    source
+        .mutate()
+        .relink_template_contents(host, returned)
+        .unwrap();
+    assert_eq!(source.node_document(returned), owner);
+    assert_eq!(source.host_including_parent(returned), Some(host));
+    assert_eq!(
+        source.get_node(host).unwrap().inner_html(),
+        "<b>changed</b>"
+    );
+    source.reclaim_detached_nodes(&[host]);
+    assert!(source.get_node(contents).is_none());
+    assert!(source.get_node(returned).is_some());
+}

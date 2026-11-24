@@ -18,6 +18,61 @@ impl BaseDocument {
 }
 
 impl DocumentMutator<'_> {
+    /// Unlink the arena-local ends when a template's contents move separately
+    /// from their host. The embedder retains their association across arenas.
+    /// A refused or staged transfer must leave both links intact.
+    pub fn unlink_template_contents(&mut self, contents: NodeId) -> Option<NodeId> {
+        let host = self.doc.get_node(contents)?.template_host?;
+        let element = self.doc.get_node_mut(host)?.element_data_mut()?;
+        if element.template_contents != Some(contents) {
+            return None;
+        }
+        element.template_contents = None;
+        self.doc.nodes[contents].template_host = None;
+        Some(host)
+    }
+
+    /// Restore both local links when a separately adopted contents fragment
+    /// and its host meet again. The fragment keeps its adopted node document.
+    pub fn relink_template_contents(
+        &mut self,
+        host: NodeId,
+        contents: NodeId,
+    ) -> Result<(), crate::dom_api::DomError> {
+        use crate::dom_api::DomError::HierarchyRequest;
+        let element = self
+            .doc
+            .get_node(host)
+            .and_then(|node| node.element_data())
+            .ok_or(HierarchyRequest)?;
+        if element.name.ns != crate::ns!(html)
+            || element.name.local != crate::local_name!("template")
+            || element.template_contents.is_some()
+        {
+            return Err(HierarchyRequest);
+        }
+        let fragment = self.doc.get_node(contents).ok_or(HierarchyRequest)?;
+        if !matches!(fragment.data, crate::NodeData::DocumentFragment)
+            || fragment.shadow_root_data.is_some()
+            || fragment.parent.is_some()
+            || fragment.template_host.is_some()
+        {
+            return Err(HierarchyRequest);
+        }
+        if self
+            .doc
+            .is_host_including_inclusive_ancestor(contents, host)
+        {
+            return Err(HierarchyRequest);
+        }
+        self.doc.nodes[host]
+            .element_data_mut()
+            .expect("validated template")
+            .template_contents = Some(contents);
+        self.doc.nodes[contents].template_host = Some(host);
+        Ok(())
+    }
+
     /// Update the inclusive subtree's document without changing its topology.
     /// Includes shadow roots and template contents, which are not DOM children.
     /// Callers pass a live Document from this arena. No script runs here.

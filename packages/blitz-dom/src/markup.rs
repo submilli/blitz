@@ -69,10 +69,49 @@ impl DocumentMutator<'_> {
         let name = element.name.clone();
         let is_template =
             name.ns == ns!(html) && name.local == markup5ever::local_name!("template");
+        self.replace_context_markup(id, name, is_template, html, declarative, admit)
+    }
+
+    /// Parse in an HTML template context when the template host is in another
+    /// arena. Allocate and admit the result in the contents fragment's document.
+    pub fn try_set_adopted_template_html<T, E: From<NodeBudgetExceeded>>(
+        &mut self,
+        contents: NodeId,
+        html: &str,
+        declarative: bool,
+        admit: impl FnOnce(&BaseDocument, Option<NodeId>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let Some(node) = self.doc.get_node(contents) else {
+            return admit(self.doc, None);
+        };
+        if !matches!(node.data, crate::NodeData::DocumentFragment)
+            || node.shadow_root_data.is_some()
+        {
+            return admit(self.doc, None);
+        }
+        self.replace_context_markup(
+            contents,
+            QualName::new(None, ns!(html), markup5ever::local_name!("template")),
+            false,
+            html,
+            declarative,
+            admit,
+        )
+    }
+
+    fn replace_context_markup<T, E: From<NodeBudgetExceeded>>(
+        &mut self,
+        id: NodeId,
+        context_name: QualName,
+        resolve_contents: bool,
+        html: &str,
+        declarative: bool,
+        admit: impl FnOnce(&BaseDocument, Option<NodeId>) -> Result<T, E>,
+    ) -> Result<T, E> {
         if html.is_empty() {
             let admission = admit(self.doc, None)?;
-            let target = if is_template {
-                element.template_contents
+            let target = if resolve_contents {
+                self.try_template_contents(id)
             } else {
                 Some(id)
             };
@@ -81,7 +120,7 @@ impl DocumentMutator<'_> {
             }
             return Ok(admission);
         }
-        let scratch = self.try_create_element(name, Vec::new())?;
+        let scratch = self.try_create_element(context_name, Vec::new())?;
         self.set_node_document(scratch, self.doc.node_document(id));
         let result = self.parse_temporary_fragment_mode(scratch, html, declarative);
         if let Err(error) = result {
@@ -95,7 +134,7 @@ impl DocumentMutator<'_> {
                 return Err(error);
             }
         };
-        let target = if is_template {
+        let target = if resolve_contents {
             match self.try_ensure_template_contents(id) {
                 Ok(contents) => contents,
                 Err(error) => {
