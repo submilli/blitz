@@ -194,7 +194,7 @@ mod scrolling;
 mod selection;
 mod serialize;
 pub use dom_string::DomString;
-pub use serialize::HtmlOutputLimit;
+pub use serialize::{HtmlOutputLimit, HtmlProjection, TemplateContents};
 /// Implementations that interact with servo's style engine
 mod stylo;
 mod stylo_device;

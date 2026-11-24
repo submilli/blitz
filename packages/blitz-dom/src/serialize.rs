@@ -57,7 +57,7 @@ fn is_raw_text_parent(name: &markup5ever::LocalName) -> bool {
 /// a `<template>` element).
 pub fn inner_html(node: &Node) -> DomString {
     let mut steps = Vec::new();
-    push_children(node, &mut steps);
+    push_children(node, &mut steps, None);
     finish(write_steps(
         steps,
         DomString::new(),
@@ -67,7 +67,7 @@ pub fn inner_html(node: &Node) -> DomString {
 
 pub(crate) fn observation_html(node: &Node) -> DomString {
     let mut steps = Vec::new();
-    push_children(node, &mut steps);
+    push_children(node, &mut steps, None);
     finish(write_steps(
         steps,
         DomString::new(),
@@ -99,9 +99,45 @@ enum Step<'a> {
 
 #[derive(Default)]
 struct ShadowOptions<'a> {
+    linked_contents: Option<&'a TemplateContents<'a>>,
     serializable: bool,
     masked: bool,
-    roots: &'a [crate::NodeId],
+    roots: &'a [&'a Node],
+}
+
+/// Serialize either the receiver itself or its children with selected shadow trees.
+pub enum HtmlProjection<'a> {
+    Outer,
+    Children {
+        serializable: bool,
+        /// Selection is by node identity across all traversed arenas.
+        roots: &'a [&'a Node],
+    },
+}
+
+/// Read-only associations for templates whose content fragments live in another tree.
+/// Node references keep both trees immutably borrowed for the serialization.
+#[derive(Default)]
+pub struct TemplateContents<'a> {
+    fragments: std::collections::HashMap<*const Node, &'a Node>,
+}
+
+impl<'a> TemplateContents<'a> {
+    /// Record a live association from the caller's acyclic host-including tree.
+    /// Returns false when either endpoint has the wrong node kind.
+    pub fn insert(&mut self, template: &'a Node, fragment: &'a Node) -> bool {
+        if !template
+            .element_data()
+            .is_some_and(|el| el.name.ns == ns!(html) && el.name.local == local_name!("template"))
+            || !matches!(fragment.data, NodeData::DocumentFragment)
+            || fragment.is_shadow_root()
+        {
+            return false;
+        }
+        self.fragments
+            .insert(std::ptr::from_ref(template), fragment);
+        true
+    }
 }
 
 impl crate::BaseDocument {
@@ -117,11 +153,14 @@ impl crate::BaseDocument {
         };
         let options = ShadowOptions {
             serializable,
-            masked: false,
-            roots,
+            roots: &roots
+                .iter()
+                .filter_map(|id| self.get_node(*id))
+                .collect::<Vec<_>>(),
+            ..Default::default()
         };
         let mut steps = Vec::new();
-        push_children(node, &mut steps);
+        push_children(node, &mut steps, options.linked_contents);
         push_shadow(node, &mut steps, &options);
         finish(write_steps(steps, DomString::new(), &options))
     }
@@ -136,16 +175,19 @@ fn push_shadow<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>, options: &ShadowOp
         .shadow_root_data
         .as_ref()
         .is_some_and(|data| options.serializable && data.serializable)
-        || options.roots.contains(&root.id)
+        || options
+            .roots
+            .iter()
+            .any(|selected| std::ptr::eq(*selected, root))
     {
         steps.push(Step::Shadow(root));
     }
 }
 
-fn write_steps<S: Sink>(
-    mut steps: Vec<Step<'_>>,
+fn write_steps<'a, S: Sink>(
+    mut steps: Vec<Step<'a>>,
     mut out: S,
-    options: &ShadowOptions<'_>,
+    options: &ShadowOptions<'a>,
 ) -> Result<S, S::Error> {
     while let Some(step) = steps.pop() {
         match step {
@@ -178,7 +220,7 @@ fn write_steps<S: Sink>(
                 }
                 out.push('>')?;
                 steps.push(Step::EndTemplate);
-                push_children(root, &mut steps);
+                push_children(root, &mut steps, options.linked_contents);
             }
             Step::EndTag(tag) => {
                 out.push_str("</")?;
@@ -193,7 +235,15 @@ fn write_steps<S: Sink>(
 
 /// Queue `node`'s children (the template contents for a `<template>`) so
 /// they are written in order.
-fn push_children<'a>(node: &'a Node, steps: &mut Vec<Step<'a>>) {
+fn push_children<'a>(
+    node: &'a Node,
+    steps: &mut Vec<Step<'a>>,
+    linked: Option<&TemplateContents<'a>>,
+) {
+    let node = linked
+        .and_then(|links| links.fragments.get(&std::ptr::from_ref(node)))
+        .copied()
+        .unwrap_or(node);
     let tree = node.tree();
     let children = match node.element_data().and_then(|el| el.template_contents) {
         Some(contents) => &tree[contents].children,
@@ -207,7 +257,7 @@ fn write_node<'a, S: Sink>(
     node: &'a Node,
     steps: &mut Vec<Step<'a>>,
     out: &mut S,
-    options: &ShadowOptions<'_>,
+    options: &ShadowOptions<'a>,
 ) -> Result<(), S::Error> {
     if options.masked && node.masks_observation() {
         out.push_str("<span>[REDACTED]</span>")?;
@@ -217,7 +267,7 @@ fn write_node<'a, S: Sink>(
         NodeData::Element(el) | NodeData::AnonymousBlock(el) => {
             // AnonymousBlocks are layout artefacts, not part of the DOM.
             if matches!(node.data, NodeData::AnonymousBlock(_)) {
-                push_children(node, steps);
+                push_children(node, steps, options.linked_contents);
                 return Ok(());
             }
             let tag = &el.name;
@@ -242,7 +292,7 @@ fn write_node<'a, S: Sink>(
                 return Ok(());
             }
             steps.push(Step::EndTag(tag));
-            push_children(node, steps);
+            push_children(node, steps, options.linked_contents);
             push_shadow(node, steps, options);
         }
         NodeData::Text(text) => {
@@ -273,7 +323,9 @@ fn write_node<'a, S: Sink>(
             out.push_str(name)?;
             out.push('>')?;
         }
-        NodeData::Document(_) | NodeData::DocumentFragment => push_children(node, steps),
+        NodeData::Document(_) | NodeData::DocumentFragment => {
+            push_children(node, steps, options.linked_contents)
+        }
     }
     Ok(())
 }
@@ -373,15 +425,47 @@ impl crate::BaseDocument {
         roots: &[crate::NodeId],
         max_units: usize,
     ) -> Result<DomString, HtmlOutputLimit> {
-        let options = ShadowOptions {
-            serializable,
-            masked: false,
-            roots,
+        self.try_linked_html(
+            id,
+            HtmlProjection::Children {
+                serializable,
+                roots: &roots
+                    .iter()
+                    .filter_map(|id| self.get_node(*id))
+                    .collect::<Vec<_>>(),
+            },
+            &TemplateContents::default(),
+            max_units,
+        )
+    }
+
+    /// Serialize nodes across the supplied live template associations with one output budget.
+    pub fn try_linked_html<'a>(
+        &'a self,
+        id: crate::NodeId,
+        projection: HtmlProjection<'a>,
+        links: &'a TemplateContents<'a>,
+        max_units: usize,
+    ) -> Result<DomString, HtmlOutputLimit> {
+        let Some(node) = self.get_node(id) else {
+            return Ok(DomString::new());
+        };
+        let mut options = ShadowOptions {
+            linked_contents: Some(links),
+            ..Default::default()
         };
         let mut steps = Vec::new();
-        if let Some(node) = self.get_node(id) {
-            push_children(node, &mut steps);
-            push_shadow(node, &mut steps, &options);
+        match projection {
+            HtmlProjection::Outer => steps.push(Step::Node(node)),
+            HtmlProjection::Children {
+                serializable,
+                roots,
+            } => {
+                options.serializable = serializable;
+                options.roots = roots;
+                push_children(node, &mut steps, options.linked_contents);
+                push_shadow(node, &mut steps, &options);
+            }
         }
         write_steps(steps, Bounded::new(max_units), &options).map(Bounded::finish)
     }
@@ -394,7 +478,7 @@ impl crate::BaseDocument {
     ) -> Result<DomString, HtmlOutputLimit> {
         let mut steps = Vec::new();
         if let Some(node) = self.get_node(id) {
-            push_children(node, &mut steps);
+            push_children(node, &mut steps, None);
         }
         write_steps(steps, Bounded::new(max_units), &ShadowOptions::default()).map(Bounded::finish)
     }

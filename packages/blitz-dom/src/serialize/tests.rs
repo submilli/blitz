@@ -187,3 +187,96 @@ fn bounded_shadow_output_rejects_escaping_amplification_before_allocation() {
         "refused shadow output allocated {peak} bytes"
     );
 }
+
+#[test]
+fn linked_template_serializes_foreign_children_with_one_output_budget() {
+    use crate::{HtmlProjection, TemplateContents};
+
+    let mut source = BaseDocument::new(Default::default());
+    let box_node = element(&mut source, "div");
+    let template = element(&mut source, "template");
+    source.mutate().append_children(box_node, &[template]);
+    let mut destination = BaseDocument::new(Default::default());
+    let fragment = destination.mutate().try_create_document_fragment().unwrap();
+    let text = destination.mutate().try_create_text_node("😀&").unwrap();
+    destination.mutate().append_children(fragment, &[text]);
+    let mut links = TemplateContents::default();
+    links.insert(
+        source.get_node(template).unwrap(),
+        destination.get_node(fragment).unwrap(),
+    );
+    let expected = "<div><template>😀&amp;</template></div>";
+    let limit = expected.encode_utf16().count();
+    assert_eq!(
+        source
+            .try_linked_html(box_node, HtmlProjection::Outer, &links, limit)
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        source.try_linked_html(box_node, HtmlProjection::Outer, &links, limit - 1),
+        Err(HtmlOutputLimit)
+    );
+}
+
+#[test]
+fn explicit_shadow_root_id_never_selects_a_foreign_arena_root() {
+    use crate::{HtmlProjection, TemplateContents, shadow::ShadowRootInit};
+
+    let mut source = BaseDocument::new(Default::default());
+    let container = element(&mut source, "div");
+    let template = element(&mut source, "template");
+    source.mutate().append_children(container, &[template]);
+    let selected = source
+        .mutate()
+        .attach_shadow(container, ShadowRootInit::default())
+        .unwrap();
+
+    let mut foreign = BaseDocument::new(Default::default());
+    let host = element(&mut foreign, "div");
+    let fragment = foreign.mutate().try_create_document_fragment().unwrap();
+    let closed = foreign
+        .mutate()
+        .attach_shadow(host, ShadowRootInit::default())
+        .unwrap();
+    assert_eq!(selected, closed);
+    let text = foreign.mutate().try_create_text_node("hidden").unwrap();
+    foreign.mutate().append_children(closed, &[text]);
+    foreign.mutate().append_children(fragment, &[host]);
+
+    let mut links = TemplateContents::default();
+    links.insert(
+        source.get_node(template).unwrap(),
+        foreign.get_node(fragment).unwrap(),
+    );
+    let markup = source
+        .try_linked_html(
+            container,
+            HtmlProjection::Children {
+                serializable: false,
+                roots: &[source.get_node(selected).unwrap()],
+            },
+            &links,
+            200,
+        )
+        .unwrap();
+    assert_eq!(
+        markup,
+        "<template shadowrootmode=\"closed\"></template><template><div></div></template>"
+    );
+    let markup = source
+        .try_linked_html(
+            container,
+            HtmlProjection::Children {
+                serializable: false,
+                roots: &[foreign.get_node(closed).unwrap()],
+            },
+            &links,
+            200,
+        )
+        .unwrap();
+    assert_eq!(
+        markup,
+        "<template><div><template shadowrootmode=\"closed\">hidden</template></div></template>"
+    );
+}
