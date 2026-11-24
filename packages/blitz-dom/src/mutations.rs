@@ -112,6 +112,10 @@ impl BaseDocument {
 
     pub(crate) fn record_mutation(&mut self, record: MutationRecord) {
         self.update_slots_after_mutation(&record);
+        self.log_mutation(record);
+    }
+
+    pub(crate) fn log_mutation(&mut self, record: MutationRecord) {
         if self.mutation_log.is_none() || self.mutation_log_overflowed {
             return;
         }

@@ -794,6 +794,46 @@ impl DocumentMutator<'_> {
         Ok(child)
     }
 
+    /// Announce a fragment drain before the embedder runs removal focus steps.
+    /// This queues the original child list and leaves the tree intact at callback entry.
+    pub fn announce_fragment_drain(&mut self, fragment: NodeId) -> Result<(), DomError> {
+        let record = self.fragment_removal_record(fragment)?;
+        if let Some(record) = record {
+            self.doc.log_mutation(record);
+        }
+        Ok(())
+    }
+
+    /// After callbacks, re-resolve the fragment in its current document and
+    /// detach its current children without another observer record. Slot
+    /// assignment follows the actual children, including edits made during blur.
+    pub fn finish_fragment_drain(&mut self, fragment: NodeId) -> Result<(), DomError> {
+        if let Some(record) = self.fragment_removal_record(fragment)? {
+            self.detach_children(fragment);
+            self.doc.update_slots_after_mutation(&record);
+        }
+        Ok(())
+    }
+
+    fn fragment_removal_record(
+        &self,
+        fragment: NodeId,
+    ) -> Result<Option<crate::mutations::MutationRecord>, DomError> {
+        let node = self.doc.get_node(fragment).ok_or(DomError::NotFound)?;
+        if !matches!(node.data, NodeData::DocumentFragment) {
+            return Err(DomError::HierarchyRequest);
+        }
+        Ok(
+            (!node.children.is_empty()).then(|| crate::mutations::MutationRecord::ChildList {
+                target: fragment,
+                added: Vec::new(),
+                removed: node.children.to_vec(),
+                previous_sibling: None,
+                next_sibling: None,
+            }),
+        )
+    }
+
     /// Replace all children of `parent` with `node` (or nothing), as used by
     /// the `textContent` and `innerHTML` setters.
     pub fn replace_all(&mut self, parent: NodeId, node: Option<NodeId>) {

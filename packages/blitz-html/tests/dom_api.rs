@@ -553,3 +553,44 @@ fn on_small_stack<T: Send + 'static>(test: impl FnOnce() -> T + Send + 'static) 
         .join()
         .unwrap()
 }
+
+#[test]
+fn fragment_drain_announces_original_children_before_reentrant_edits() {
+    use blitz_dom::mutations::MutationRecord;
+    let mut doc = parse("<div id=a><b></b><b slot=n></b></div><slot></slot><slot name=n></slot>");
+    let host = q(&doc, "#a");
+    let root = doc
+        .mutate()
+        .attach_shadow(host, Default::default())
+        .unwrap();
+    let original = q(&doc, "slot:not([name])");
+    let extra = q(&doc, "slot[name]");
+    doc.mutate().remove_node(extra);
+    doc.mutate().pre_insert(original, root, None).unwrap();
+    assert_eq!(doc.take_slot_changes(), vec![original]);
+    doc.set_mutation_recording(true);
+    doc.mutate().announce_fragment_drain(root).unwrap();
+    assert!(doc.take_slot_changes().is_empty());
+    assert_eq!(doc.get_node(original).unwrap().parent, Some(root));
+    assert_eq!(
+        doc.take_mutation_records(),
+        vec![MutationRecord::ChildList {
+            target: root,
+            added: vec![],
+            removed: vec![original],
+            previous_sibling: None,
+            next_sibling: None,
+        }]
+    );
+    doc.mutate().pre_insert(extra, root, None).unwrap();
+    assert_eq!(doc.take_slot_changes(), vec![extra]);
+    doc.mutate().finish_fragment_drain(root).unwrap();
+    let changes = doc.take_slot_changes();
+    assert_eq!(changes.len(), 2);
+    assert!(changes.contains(&extra) && changes.contains(&original));
+    assert!(doc.get_node(root).unwrap().children.is_empty());
+    assert_eq!(doc.get_node(extra).unwrap().parent, None);
+    assert_eq!(doc.get_node(original).unwrap().parent, None);
+    assert!(matches!(doc.take_mutation_records().as_slice(),
+        [MutationRecord::ChildList { added, removed, .. }] if added == &[extra] && removed.is_empty()));
+}
