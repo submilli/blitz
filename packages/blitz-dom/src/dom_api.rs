@@ -777,10 +777,6 @@ impl DocumentMutator<'_> {
             self.remove_node(child);
             return Ok(child);
         }
-        let previous = self
-            .doc
-            .position_in_parent(child)
-            .and_then(|(_, prev, _)| prev);
         if self.doc.nodes[node].parent.is_some() {
             self.remove_node(node);
         }
@@ -790,7 +786,6 @@ impl DocumentMutator<'_> {
             self.remove_without_record(child);
             let replacement = crate::mutator::Replacement {
                 removed: child,
-                previous,
                 fragment: (self.doc.node_type(node) == node_type::DOCUMENT_FRAGMENT)
                     .then_some(node),
             };

@@ -46,7 +46,6 @@ enum SpecialOp {
 
 pub(crate) struct Replacement {
     pub removed: NodeId,
-    pub previous: Option<NodeId>,
     pub fragment: Option<NodeId>,
 }
 
@@ -177,7 +176,7 @@ impl DocumentMutator<'_> {
             return;
         }
         self.doc.notify_removing(document);
-        self.process_removed_subtree(document);
+        self.process_removed_subtree(document, self.doc.is_recording_custom_element_reactions());
     }
 
     pub fn create_document_fragment(&mut self) -> NodeId {
@@ -864,7 +863,8 @@ impl DocumentMutator<'_> {
     }
 
     pub(crate) fn remove_without_record(&mut self, node_id: NodeId) {
-        let Some(parent_id) = self.unlink(node_id) else {
+        let notify_disconnect = self.observes_disconnect(node_id);
+        let Some(parent_id) = self.unlink(node_id, notify_disconnect) else {
             return;
         };
         self.doc.nodes[parent_id].children.remove_id(node_id);
@@ -874,14 +874,14 @@ impl DocumentMutator<'_> {
     /// Process `node_id`'s subtree as removed and clear its parent link,
     /// leaving the parent's child list to the caller. Returns the old
     /// parent.
-    fn unlink(&mut self, node_id: NodeId) -> Option<NodeId> {
+    fn unlink(&mut self, node_id: NodeId, notify_disconnect: bool) -> Option<NodeId> {
         self.doc.notify_removing(node_id);
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         // Process the subtree *before* severing the parent link so that
         // interaction state referencing removed nodes can retarget to the
         // nearest surviving ancestor.
         self.reset_parser_forms_in_subtree(node_id);
-        self.process_removed_subtree(node_id);
+        self.process_removed_subtree(node_id, notify_disconnect);
         let node = &mut self.doc.nodes[node_id];
         node.flat_parent.set(crate::node::FlatParent::Dom);
         let parent_id = node.parent.take()?;
@@ -911,8 +911,9 @@ impl DocumentMutator<'_> {
         if children.is_empty() {
             return;
         }
+        let notify_disconnect = self.observes_disconnect(parent_id);
         for child_id in children {
-            self.unlink(child_id);
+            self.unlink(child_id, notify_disconnect);
             self.doc.nodes[parent_id].children.remove_id(child_id);
         }
         self.doc.nodes[parent_id].children.clear();
@@ -933,7 +934,7 @@ impl DocumentMutator<'_> {
         self.doc.notify_removing(node_id);
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         self.reset_parser_forms_in_subtree(node_id);
-        self.process_removed_subtree(node_id);
+        self.process_removed_subtree(node_id, self.observes_disconnect(node_id));
 
         let node = self.doc.drop_node_ignoring_parent_with(node_id, on_drop);
         self.mutations_occurred |= node_is_in_document;
@@ -983,9 +984,10 @@ impl DocumentMutator<'_> {
 
         let children = parent.children.to_vec();
         self.mutations_occurred |= parent_is_in_doc && !children.is_empty();
+        let notify_disconnect = self.observes_disconnect(node_id);
         for child_id in children {
             self.doc.notify_removing(child_id);
-            self.process_removed_subtree(child_id);
+            self.process_removed_subtree(child_id, notify_disconnect);
             self.doc.nodes[node_id].children.remove_id(child_id);
             let _ = self.doc.drop_node_ignoring_parent(child_id);
         }
@@ -1023,7 +1025,7 @@ impl DocumentMutator<'_> {
         self.insert_children_at(parent_id, new_node_ids, Some(anchor_node_id), None);
     }
 
-    /// A replacement carries the outgoing child and its original previous sibling.
+    /// A replacement combines destination removal and insertion in one record.
     pub(crate) fn insert_children_at(
         &mut self,
         parent_id: NodeId,
@@ -1167,7 +1169,10 @@ impl DocumentMutator<'_> {
             if new_parent_is_in_document && !child_was_in_doc {
                 self.process_added_subtree(child_id);
             } else if !new_parent_is_in_document && child_was_in_doc {
-                self.process_removed_subtree(child_id);
+                self.process_removed_subtree(
+                    child_id,
+                    self.doc.is_recording_custom_element_reactions(),
+                );
             } else if child_was_in_doc {
                 self.rescope_stylesheets(child_id);
             }
@@ -1206,10 +1211,7 @@ impl DocumentMutator<'_> {
         if self.doc.observes_dom_changes() && !child_ids.is_empty() {
             let siblings = &self.doc.nodes[parent_id].children;
             if let Some(first) = siblings.position(child_ids[0]) {
-                let previous_sibling = replacement.as_ref().map_or_else(
-                    || first.checked_sub(1).map(|i| siblings[i]),
-                    |record| record.previous,
-                );
+                let previous_sibling = first.checked_sub(1).map(|i| siblings[i]);
                 let next_sibling = siblings.get(first + child_ids.len()).copied();
                 self.doc.record_mutation(MutationRecord::ChildList {
                     target: parent_id,
@@ -1544,15 +1546,17 @@ impl<'doc> DocumentMutator<'doc> {
         nodes
     }
 
-    fn process_removed_subtree(&mut self, node_id: NodeId) {
-        // The move path has already installed the new parent. The subtree still
-        // carries its old connection flags until removal processing clears them.
-        let connected = self.doc.is_recording_custom_element_reactions()
-            && self.doc.nodes[node_id].flags.is_in_document();
+    /// Inert documents have DOM connectivity without active-document flags.
+    fn observes_disconnect(&self, node_id: NodeId) -> bool {
+        self.doc.is_recording_custom_element_reactions()
+            && (self.doc.nodes[node_id].flags.is_in_document() || self.doc.is_connected(node_id))
+    }
+
+    fn process_removed_subtree(&mut self, node_id: NodeId, notify_disconnect: bool) {
         self.doc.reset_subtree_scroll_state(node_id);
         self.doc
             .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
-                if connected
+                if notify_disconnect
                     && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
                 {
                     doc.record_custom_element_reaction(CustomElementReaction::Disconnected(

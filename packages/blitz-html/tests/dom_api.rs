@@ -240,6 +240,40 @@ fn replacing_with_a_sibling_or_itself_records_adoption_first() {
 }
 
 #[test]
+fn replacing_with_previous_sibling_records_the_remaining_neighbors() {
+    use blitz_dom::mutations::MutationRecord::ChildList;
+    let mut doc = parse("<body><i></i><b></b><p></p><a></a></body>");
+    let parent = q(&doc, "body");
+    let before = q(&doc, "i");
+    let incoming = q(&doc, "b");
+    let outgoing = q(&doc, "p");
+    let after = q(&doc, "a");
+    doc.set_mutation_recording(true);
+    doc.mutate()
+        .replace_child(parent, incoming, outgoing)
+        .unwrap();
+    assert_eq!(
+        doc.take_mutation_records(),
+        vec![
+            ChildList {
+                target: parent,
+                removed: vec![incoming],
+                added: vec![],
+                previous_sibling: Some(before),
+                next_sibling: Some(outgoing)
+            },
+            ChildList {
+                target: parent,
+                removed: vec![outgoing],
+                added: vec![incoming],
+                previous_sibling: Some(before),
+                next_sibling: Some(after)
+            },
+        ]
+    );
+}
+
+#[test]
 fn clone_node_shallow_and_deep_including_template_contents() {
     let mut doc = parse("<div id=a title=t><b>x</b></div><template id=t><i>in</i></template>");
     let (a, t) = (q(&doc, "#a"), q(&doc, "#t"));

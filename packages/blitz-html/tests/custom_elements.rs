@@ -190,3 +190,20 @@ fn replacing_with_detached_custom_elements_only_connects_them() {
         vec![CustomElementReaction::Connected(incoming)]
     );
 }
+
+#[test]
+fn replacement_disconnects_custom_children_of_an_inert_document() {
+    let mut doc = parse("<body><x-in></x-in></body>");
+    let child = q(&doc, "x-in");
+    let inert = doc.mutate().create_document_node();
+    doc.mutate().pre_insert(child, inert, None).unwrap();
+    assert!(doc.is_connected(child));
+    doc.set_custom_element_state(child, CustomElementState::Custom);
+    doc.set_custom_element_reactions(true);
+    let comment = doc.mutate().create_comment_node("replacement");
+    doc.mutate().replace_child(inert, comment, child).unwrap();
+    assert_eq!(
+        doc.take_custom_element_reactions(),
+        vec![CustomElementReaction::Disconnected(child)]
+    );
+}
