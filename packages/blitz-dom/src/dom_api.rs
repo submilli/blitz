@@ -850,13 +850,14 @@ impl DocumentMutator<'_> {
     /// Run `f`, which replaces `parent`'s children, recording it as a single
     /// childList record (removed: the old children, added: the new ones).
     pub(crate) fn with_one_child_list_record(&mut self, parent: NodeId, f: impl FnOnce(&mut Self)) {
-        let Some(log) = self.doc.mutation_log.take() else {
+        if !self.doc.observes_dom_changes() {
             return f(self);
-        };
+        }
+        let log = self.doc.mutation_log.take();
         let removed: Vec<NodeId> = self.doc.nodes[parent].children.to_vec();
         f(self);
         let added: Vec<NodeId> = self.doc.nodes[parent].children.to_vec();
-        self.doc.mutation_log = Some(log);
+        self.doc.mutation_log = log;
         if !removed.is_empty() || !added.is_empty() {
             self.doc
                 .record_mutation(crate::mutations::MutationRecord::ChildList {

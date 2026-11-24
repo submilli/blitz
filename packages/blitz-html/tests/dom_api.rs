@@ -594,3 +594,20 @@ fn fragment_drain_announces_original_children_before_reentrant_edits() {
     assert!(matches!(doc.take_mutation_records().as_slice(),
         [MutationRecord::ChildList { added, removed, .. }] if added == &[extra] && removed.is_empty()));
 }
+
+#[test]
+fn replacing_shadow_children_signals_slot_removal_without_an_observer() {
+    let mut doc = parse("<div id=host>assigned</div><slot></slot>");
+    let host = q(&doc, "#host");
+    let slot = q(&doc, "slot");
+    let root = doc
+        .mutate()
+        .attach_shadow(host, Default::default())
+        .unwrap();
+    doc.mutate().pre_insert(slot, root, None).unwrap();
+    assert_eq!(doc.take_slot_changes(), vec![slot]);
+    assert!(!doc.is_recording_mutations());
+    doc.mutate().replace_all(root, None);
+    assert_eq!(doc.take_slot_changes(), vec![slot]);
+    assert!(doc.take_mutation_records().is_empty());
+}
