@@ -252,6 +252,29 @@ impl BaseDocument {
         parent: NodeId,
         child: Option<NodeId>,
     ) -> Result<(), DomError> {
+        self.check_insertion_from(self, node, parent, child, None)
+    }
+
+    /// Validate a node in its original document before transferring it into this one.
+    /// Source and destination node IDs are meaningful only in their respective arenas.
+    pub fn check_pre_insert_from(
+        &self,
+        source: &BaseDocument,
+        node: NodeId,
+        parent: NodeId,
+        child: Option<NodeId>,
+    ) -> Result<(), DomError> {
+        self.check_insertion_from(source, node, parent, child, None)
+    }
+
+    fn check_insertion_from(
+        &self,
+        source: &BaseDocument,
+        node: NodeId,
+        parent: NodeId,
+        child: Option<NodeId>,
+        replacing: Option<NodeId>,
+    ) -> Result<(), DomError> {
         let parent_kind = self.node_type(parent);
         if !matches!(
             parent_kind,
@@ -259,7 +282,7 @@ impl BaseDocument {
         ) {
             return Err(DomError::HierarchyRequest);
         }
-        if self.is_host_including_inclusive_ancestor(node, parent) {
+        if std::ptr::eq(self, source) && self.is_host_including_inclusive_ancestor(node, parent) {
             return Err(DomError::HierarchyRequest);
         }
         if let Some(child) = child {
@@ -267,7 +290,7 @@ impl BaseDocument {
                 return Err(DomError::NotFound);
             }
         }
-        let node_kind = self.node_type(node);
+        let node_kind = source.node_type(node);
         if matches!(node_kind, node_type::DOCUMENT) {
             return Err(DomError::HierarchyRequest);
         }
@@ -277,7 +300,7 @@ impl BaseDocument {
             return Err(DomError::HierarchyRequest);
         }
         if parent_kind == node_type::DOCUMENT {
-            self.check_document_child_constraints(node, parent, child, None)?;
+            self.check_document_child_constraints(source, node, parent, child, replacing)?;
         }
         Ok(())
     }
@@ -290,36 +313,14 @@ impl BaseDocument {
         node: NodeId,
         child: NodeId,
     ) -> Result<(), DomError> {
-        let parent_kind = self.node_type(parent);
-        if !matches!(
-            parent_kind,
-            node_type::DOCUMENT | node_type::DOCUMENT_FRAGMENT | node_type::ELEMENT
-        ) {
-            return Err(DomError::HierarchyRequest);
-        }
-        if self.is_host_including_inclusive_ancestor(node, parent) {
-            return Err(DomError::HierarchyRequest);
-        }
-        if self.nodes[child].parent != Some(parent) {
-            return Err(DomError::NotFound);
-        }
-        let node_kind = self.node_type(node);
-        if node_kind == node_type::DOCUMENT
-            || (node_kind == node_type::TEXT && parent_kind == node_type::DOCUMENT)
-            || (node_kind == node_type::DOCUMENT_TYPE && parent_kind != node_type::DOCUMENT)
-        {
-            return Err(DomError::HierarchyRequest);
-        }
-        if parent_kind == node_type::DOCUMENT {
-            self.check_document_child_constraints(node, parent, Some(child), Some(child))?;
-        }
-        Ok(())
+        self.check_insertion_from(self, node, parent, Some(child), Some(child))
     }
 
     /// The document-specific rules of pre-insertion (and replacement, where
     /// `replacing` is the child being replaced).
     fn check_document_child_constraints(
         &self,
+        source: &BaseDocument,
         node: NodeId,
         document: NodeId,
         child: Option<NodeId>,
@@ -334,11 +335,11 @@ impl BaseDocument {
         };
         let has_element_child = others().any(|c| self.is_element(c));
         let has_doctype_child = others().any(|c| self.node_type(c) == node_type::DOCUMENT_TYPE);
-        let doctype_after_child = |child: NodeId| {
+        let doctype_at_or_after_child = |child: NodeId| {
             children
                 .iter()
                 .skip_while(|&&c| c != child)
-                .skip(1)
+                .filter(|&&id| Some(id) != replacing)
                 .any(|&c| self.node_type(c) == node_type::DOCUMENT_TYPE)
         };
         let element_before_child = |child: NodeId| {
@@ -347,28 +348,28 @@ impl BaseDocument {
                 .take_while(|&&c| c != child)
                 .any(|&c| Some(c) != replacing && self.is_element(c))
         };
-        match self.node_type(node) {
+        match source.node_type(node) {
             node_type::DOCUMENT_FRAGMENT => {
-                let frag_children = &self.nodes[node].children;
+                let frag_children = &source.nodes[node].children;
                 let elements = frag_children
                     .iter()
-                    .filter(|&&c| self.is_element(c))
+                    .filter(|&&c| source.is_element(c))
                     .count();
                 if frag_children
                     .iter()
-                    .any(|&c| self.node_type(c) == node_type::TEXT)
+                    .any(|&c| source.node_type(c) == node_type::TEXT)
                 {
                     return Err(DomError::HierarchyRequest);
                 }
                 if elements > 1
                     || (elements == 1
-                        && (has_element_child || child.is_some_and(doctype_after_child)))
+                        && (has_element_child || child.is_some_and(doctype_at_or_after_child)))
                 {
                     return Err(DomError::HierarchyRequest);
                 }
             }
             node_type::ELEMENT => {
-                if has_element_child || child.is_some_and(doctype_after_child) {
+                if has_element_child || child.is_some_and(doctype_at_or_after_child) {
                     return Err(DomError::HierarchyRequest);
                 }
             }

@@ -68,6 +68,52 @@ fn pre_insert_enforces_hierarchy_rules() {
 }
 
 #[test]
+fn inserting_an_element_before_the_doctype_preserves_document_order() {
+    let mut doc = parse(PAGE);
+    let root = doc.root_node().id;
+    let doctype = doc.root_node().children[0];
+    let element = q(&doc, "html");
+    let mut m = doc.mutate();
+    m.remove_child(root, element).unwrap();
+    assert_eq!(
+        m.pre_insert(element, root, Some(doctype)),
+        Err(DomError::HierarchyRequest)
+    );
+    let fragment = m.create_document_fragment();
+    m.pre_insert(element, fragment, None).unwrap();
+    assert_eq!(
+        m.pre_insert(fragment, root, Some(doctype)),
+        Err(DomError::HierarchyRequest)
+    );
+    // Replacement excludes the doctype that will be removed.
+    assert_eq!(m.replace_child(root, fragment, doctype), Ok(doctype));
+}
+
+#[test]
+fn foreign_fragment_validity_uses_source_children_and_destination_order() {
+    let mut source = parse(PAGE);
+    let mut target = parse(PAGE);
+    let root = target.root_node().id;
+    let doctype = target.root_node().children[0];
+    let target_element = q(&target, "html");
+    target.mutate().remove_child(root, target_element).unwrap();
+    let element = q(&source, "#a");
+    let mut m = source.mutate();
+    let fragment = m.create_document_fragment();
+    m.pre_insert(element, fragment, None).unwrap();
+    drop(m);
+    assert_eq!(
+        target.check_pre_insert_from(&source, fragment, root, Some(doctype)),
+        Err(DomError::HierarchyRequest)
+    );
+    assert_eq!(
+        target.check_pre_insert_from(&source, fragment, root, None),
+        Ok(())
+    );
+    assert_eq!(source.get_node(element).unwrap().parent, Some(fragment));
+}
+
+#[test]
 fn fragments_insert_their_children() {
     let mut doc = parse(PAGE);
     let a = q(&doc, "#a");
