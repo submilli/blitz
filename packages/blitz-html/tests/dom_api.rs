@@ -114,6 +114,32 @@ fn foreign_fragment_validity_uses_source_children_and_destination_order() {
 }
 
 #[test]
+fn foreign_replacement_excludes_the_outgoing_document_element() {
+    let mut source = parse(PAGE);
+    let target = parse(PAGE);
+    let root = target.root_node().id;
+    let outgoing = q(&target, "html");
+    let incoming = q(&source, "#a");
+    let fragment = source.mutate().create_document_fragment();
+    source.mutate().append_children(fragment, &[incoming]);
+    assert_eq!(
+        target.check_replace_child_from(&source, root, fragment, outgoing),
+        Ok(())
+    );
+    let text = source.mutate().create_text_node("invalid");
+    source.mutate().append_children(fragment, &[text]);
+    assert_eq!(
+        target.check_replace_child_from(&source, root, fragment, outgoing),
+        Err(DomError::HierarchyRequest)
+    );
+    assert_eq!(
+        source.get_node(fragment).unwrap().children.to_vec(),
+        vec![incoming, text]
+    );
+    assert_eq!(target.get_node(outgoing).unwrap().parent, Some(root));
+}
+
+#[test]
 fn fragments_insert_their_children() {
     let mut doc = parse(PAGE);
     let a = q(&doc, "#a");
@@ -142,6 +168,75 @@ fn replace_and_remove_child() {
     assert_eq!(m.remove_child(a, p2), Ok(p2));
     drop(m);
     assert_eq!(doc.text_content_of(a).as_deref(), Some("new"));
+}
+
+#[test]
+fn fragment_replacement_records_both_parents_once() {
+    use blitz_dom::mutations::MutationRecord::ChildList;
+    let mut doc = parse(PAGE);
+    let parent = q(&doc, "#a");
+    let old = q(&doc, "#p1");
+    let next = q(&doc, "#p2");
+    let mut m = doc.mutate();
+    let fragment = m.create_document_fragment();
+    let x = m.create_text_node("x");
+    let y = m.create_text_node("y");
+    m.append_children(fragment, &[x, y]);
+    drop(m);
+    doc.set_mutation_recording(true);
+    assert_eq!(doc.mutate().replace_child(parent, fragment, old), Ok(old));
+    assert_eq!(
+        doc.take_mutation_records(),
+        vec![
+            ChildList {
+                target: fragment,
+                removed: vec![x, y],
+                added: vec![],
+                previous_sibling: None,
+                next_sibling: None
+            },
+            ChildList {
+                target: parent,
+                removed: vec![old],
+                added: vec![x, y],
+                previous_sibling: None,
+                next_sibling: Some(next)
+            },
+        ]
+    );
+}
+
+#[test]
+fn replacing_with_a_sibling_or_itself_records_adoption_first() {
+    use blitz_dom::mutations::MutationRecord::ChildList;
+    let mut doc = parse(PAGE);
+    let parent = q(&doc, "#a");
+    let old = q(&doc, "#p1");
+    let next = q(&doc, "#p2");
+    doc.set_mutation_recording(true);
+    let record = |removed, added, previous_sibling| ChildList {
+        target: parent,
+        removed,
+        added,
+        previous_sibling,
+        next_sibling: None,
+    };
+    doc.mutate().replace_child(parent, next, old).unwrap();
+    assert_eq!(
+        doc.take_mutation_records(),
+        vec![
+            record(vec![next], vec![], Some(old)),
+            record(vec![old], vec![next], None)
+        ]
+    );
+    doc.mutate().replace_child(parent, next, next).unwrap();
+    assert_eq!(
+        doc.take_mutation_records(),
+        vec![
+            record(vec![next], vec![], None),
+            record(vec![], vec![next], None)
+        ]
+    );
 }
 
 #[test]

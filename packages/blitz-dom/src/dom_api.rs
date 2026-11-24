@@ -313,7 +313,18 @@ impl BaseDocument {
         node: NodeId,
         child: NodeId,
     ) -> Result<(), DomError> {
-        self.check_insertion_from(self, node, parent, Some(child), Some(child))
+        self.check_replace_child_from(self, parent, node, child)
+    }
+
+    /// Validate replacing child of parent in this document with node from source.
+    pub fn check_replace_child_from(
+        &self,
+        source: &BaseDocument,
+        parent: NodeId,
+        node: NodeId,
+        child: NodeId,
+    ) -> Result<(), DomError> {
+        self.check_insertion_from(source, node, parent, Some(child), Some(child))
     }
 
     /// The document-specific rules of pre-insertion (and replacement, where
@@ -757,15 +768,34 @@ impl DocumentMutator<'_> {
         child: NodeId,
     ) -> Result<NodeId, DomError> {
         self.doc.check_replace_child(parent, node, child)?;
-        if child == node {
-            return Ok(child);
-        }
         let mut reference = self.next_sibling_id(child);
         if reference == Some(node) {
             reference = self.next_sibling_id(node);
         }
-        self.remove_node(child);
-        self.insert(node, parent, reference);
+        let nodes = self.insertion_nodes(node);
+        if nodes.is_empty() {
+            self.remove_node(child);
+            return Ok(child);
+        }
+        let previous = self
+            .doc
+            .position_in_parent(child)
+            .and_then(|(_, prev, _)| prev);
+        if self.doc.nodes[node].parent.is_some() {
+            self.remove_node(node);
+        }
+        if node == child {
+            self.insert_children_at(parent, &nodes, reference, None);
+        } else {
+            self.remove_without_record(child);
+            let replacement = crate::mutator::Replacement {
+                removed: child,
+                previous,
+                fragment: (self.doc.node_type(node) == node_type::DOCUMENT_FRAGMENT)
+                    .then_some(node),
+            };
+            self.insert_children_at(parent, &nodes, reference, Some(replacement));
+        }
         Ok(child)
     }
 

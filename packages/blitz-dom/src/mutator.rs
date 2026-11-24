@@ -44,6 +44,12 @@ enum SpecialOp {
     UnloadCustomWidget(NodeId),
 }
 
+pub(crate) struct Replacement {
+    pub removed: NodeId,
+    pub previous: Option<NodeId>,
+    pub fragment: Option<NodeId>,
+}
+
 pub struct DocumentMutator<'doc> {
     /// Document is public as an escape hatch, but users of this API should ideally avoid using it
     /// and prefer exposing additional functionality in DocumentMutator.
@@ -854,6 +860,10 @@ impl DocumentMutator<'_> {
                 });
             }
         }
+        self.remove_without_record(node_id);
+    }
+
+    pub(crate) fn remove_without_record(&mut self, node_id: NodeId) {
         let Some(parent_id) = self.unlink(node_id) else {
             return;
         };
@@ -1005,24 +1015,21 @@ impl DocumentMutator<'_> {
 
     /// Remove all of the children from old_parent_id and append them to new_parent_id
     pub fn append_children(&mut self, parent_id: NodeId, child_ids: &[NodeId]) {
-        self.add_children_to_parent(parent_id, child_ids, &|parent, child_ids| {
-            parent.children.extend_from_slice(child_ids);
-        });
+        self.insert_children_at(parent_id, child_ids, None, None);
     }
 
     pub fn insert_nodes_before(&mut self, anchor_node_id: NodeId, new_node_ids: &[NodeId]) {
         let parent_id = self.doc.nodes[anchor_node_id].parent.unwrap();
-        self.add_children_to_parent(parent_id, new_node_ids, &|parent, child_ids| {
-            let node_child_idx = parent.index_of_child(anchor_node_id).unwrap();
-            parent.children.insert_slice(node_child_idx, child_ids);
-        });
+        self.insert_children_at(parent_id, new_node_ids, Some(anchor_node_id), None);
     }
 
-    fn add_children_to_parent(
+    /// A replacement carries the outgoing child and its original previous sibling.
+    pub(crate) fn insert_children_at(
         &mut self,
         parent_id: NodeId,
         child_ids: &[NodeId],
-        insert_children_fn: &dyn Fn(&mut Node, &[NodeId]),
+        anchor: Option<NodeId>,
+        replacement: Option<Replacement>,
     ) {
         let old_parents: HashSet<_> = child_ids
             .iter()
@@ -1037,11 +1044,21 @@ impl DocumentMutator<'_> {
         // parent's child list, and anchor indices would be computed against a
         // child list that still contains the moved nodes.
         let recording = self.doc.observes_dom_changes();
+        let fragment = replacement.as_ref().and_then(|record| record.fragment);
+        if recording && let Some(fragment) = fragment {
+            self.doc.record_mutation(MutationRecord::ChildList {
+                target: fragment,
+                added: Vec::new(),
+                removed: child_ids.to_vec(),
+                previous_sibling: None,
+                next_sibling: None,
+            });
+        }
         let mut detached: HashMap<NodeId, HashSet<NodeId>> = HashMap::new();
         for child_id in child_ids.iter().copied() {
             self.reset_parser_forms_in_subtree(child_id);
             self.doc.notify_removing(child_id);
-            let removal = recording
+            let removal = (recording && fragment.is_none())
                 .then(|| self.doc.position_in_parent(child_id))
                 .flatten();
             if let Some((old_parent, previous_sibling, next_sibling)) = removal {
@@ -1088,7 +1105,7 @@ impl DocumentMutator<'_> {
                 old_parent.mark_ancestors_dirty();
             }
 
-            if recording || self.doc.tree_observer.is_some() {
+            if (recording && fragment.is_none()) || self.doc.tree_observer.is_some() {
                 // Each record names the siblings as they are at its removal.
                 old_parent.children.remove_id(child_id);
             } else {
@@ -1120,7 +1137,12 @@ impl DocumentMutator<'_> {
             new_parent.mark_ancestors_dirty();
         }
 
-        insert_children_fn(new_parent, child_ids);
+        if let Some(anchor) = anchor {
+            let index = new_parent.index_of_child(anchor).unwrap();
+            new_parent.children.insert_slice(index, child_ids);
+        } else {
+            new_parent.children.extend_from_slice(child_ids);
+        }
 
         if let Some(&first) = child_ids.first()
             && let Some(index) = self.doc.nodes[parent_id].children.position(first)
@@ -1184,12 +1206,15 @@ impl DocumentMutator<'_> {
         if self.doc.observes_dom_changes() && !child_ids.is_empty() {
             let siblings = &self.doc.nodes[parent_id].children;
             if let Some(first) = siblings.position(child_ids[0]) {
-                let previous_sibling = first.checked_sub(1).map(|i| siblings[i]);
+                let previous_sibling = replacement.as_ref().map_or_else(
+                    || first.checked_sub(1).map(|i| siblings[i]),
+                    |record| record.previous,
+                );
                 let next_sibling = siblings.get(first + child_ids.len()).copied();
                 self.doc.record_mutation(MutationRecord::ChildList {
                     target: parent_id,
                     added: child_ids.to_vec(),
-                    removed: Vec::new(),
+                    removed: replacement.iter().map(|record| record.removed).collect(),
                     previous_sibling,
                     next_sibling,
                 });
@@ -1520,10 +1545,14 @@ impl<'doc> DocumentMutator<'doc> {
     }
 
     fn process_removed_subtree(&mut self, node_id: NodeId) {
+        // The move path has already installed the new parent. The subtree still
+        // carries its old connection flags until removal processing clears them.
+        let connected = self.doc.is_recording_custom_element_reactions()
+            && self.doc.nodes[node_id].flags.is_in_document();
         self.doc.reset_subtree_scroll_state(node_id);
         self.doc
             .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
-                if doc.is_recording_custom_element_reactions()
+                if connected
                     && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
                 {
                     doc.record_custom_element_reaction(CustomElementReaction::Disconnected(

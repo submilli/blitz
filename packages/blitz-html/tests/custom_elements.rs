@@ -161,3 +161,32 @@ fn rejected_declarative_admission_preserves_children_and_discards_scratch_work()
     assert!(doc.take_enqueued_custom_element_targets().is_empty());
     assert!(doc.take_custom_element_reactions().is_empty());
 }
+
+#[test]
+fn replacing_with_detached_custom_elements_only_connects_them() {
+    let mut doc = parse("<body><div id=box><x-in></x-in></div><i id=old></i></body>");
+    let body = q(&doc, "body");
+    let container = q(&doc, "#box");
+    let incoming = q(&doc, "x-in");
+    let old = q(&doc, "#old");
+    doc.mutate().remove_child(body, container).unwrap();
+    doc.set_custom_element_state(incoming, CustomElementState::Custom);
+    doc.set_custom_element_reactions(true);
+    doc.mutate().replace_child(body, incoming, old).unwrap();
+    assert_eq!(
+        doc.take_custom_element_reactions(),
+        vec![CustomElementReaction::Connected(incoming)]
+    );
+    let fragment = doc.mutate().create_document_fragment();
+    doc.mutate().pre_insert(incoming, fragment, None).unwrap();
+    assert_eq!(
+        doc.take_custom_element_reactions(),
+        vec![CustomElementReaction::Disconnected(incoming)]
+    );
+    doc.mutate().append_children(body, &[old]);
+    doc.mutate().replace_child(body, fragment, old).unwrap();
+    assert_eq!(
+        doc.take_custom_element_reactions(),
+        vec![CustomElementReaction::Connected(incoming)]
+    );
+}
