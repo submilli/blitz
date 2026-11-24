@@ -101,6 +101,14 @@ fn adjacent_node_moves_and_hierarchy_errors_are_transactional() {
     let a = q(&doc, "#a");
     let first = q(&doc, "#first");
     let last = q(&doc, "#last");
+    assert_eq!(
+        doc.adjacent_target(first, "afterend"),
+        Ok(Some((a, Some(last))))
+    );
+    assert_eq!(
+        doc.adjacent_target(a, "afterbegin"),
+        Ok(Some((a, Some(first))))
+    );
     assert!(
         doc.mutate()
             .insert_adjacent_node(first, "beforebegin", last)

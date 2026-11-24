@@ -137,6 +137,7 @@ impl DocumentMutator<'_> {
         admit: impl FnOnce(&BaseDocument, Option<NodeId>) -> Result<T, E>,
     ) -> Result<T, E> {
         let (target_parent, anchor) = self
+            .doc
             .adjacent_target(id, position)?
             .ok_or(DomError::NoModificationAllowed)?;
         if self.doc.node_type(target_parent) == node_type::DOCUMENT {
@@ -191,7 +192,7 @@ impl DocumentMutator<'_> {
         position: &str,
         node: NodeId,
     ) -> Result<bool, DomError> {
-        let Some((parent, anchor)) = self.adjacent_target(id, position)? else {
+        let Some((parent, anchor)) = self.doc.adjacent_target(id, position)? else {
             return Ok(false);
         };
         self.pre_insert(node, parent, anchor)?;
@@ -206,7 +207,7 @@ impl DocumentMutator<'_> {
         position: &str,
         text: crate::DomString,
     ) -> Result<bool, DomError> {
-        let Some((parent, anchor)) = self.adjacent_target(id, position)? else {
+        let Some((parent, anchor)) = self.doc.adjacent_target(id, position)? else {
             return Ok(false);
         };
         let node = self
@@ -217,25 +218,6 @@ impl DocumentMutator<'_> {
             return Err(error);
         }
         Ok(true)
-    }
-
-    fn adjacent_target(
-        &self,
-        id: NodeId,
-        position: &str,
-    ) -> Result<Option<(NodeId, Option<NodeId>)>, DomError> {
-        let parent = self.doc.nodes[id].parent;
-        if position.eq_ignore_ascii_case("beforebegin") {
-            Ok(parent.map(|parent| (parent, Some(id))))
-        } else if position.eq_ignore_ascii_case("afterend") {
-            Ok(parent.map(|parent| (parent, self.next_sibling_id(id))))
-        } else if position.eq_ignore_ascii_case("afterbegin") {
-            Ok(Some((id, self.doc.nodes[id].children.first().copied())))
-        } else if position.eq_ignore_ascii_case("beforeend") {
-            Ok(Some((id, None)))
-        } else {
-            Err(DomError::Syntax)
-        }
     }
 
     /// Scratch construction is unobservable. Keep only the eventual mutation
@@ -265,5 +247,28 @@ impl DocumentMutator<'_> {
         self.doc.mutation_log = log;
         self.selection_scratch = selection_scratch;
         result
+    }
+}
+
+impl BaseDocument {
+    /// Resolve the native parent and insertion anchor without creating script wrappers.
+    pub fn adjacent_target(
+        &self,
+        id: NodeId,
+        position: &str,
+    ) -> Result<Option<(NodeId, Option<NodeId>)>, DomError> {
+        let node = self.get_node(id).ok_or(DomError::NotFound)?;
+        let parent = node.parent;
+        if position.eq_ignore_ascii_case("beforebegin") {
+            Ok(parent.map(|parent| (parent, Some(id))))
+        } else if position.eq_ignore_ascii_case("afterend") {
+            Ok(parent.map(|parent| (parent, node.forward(1).map(|next| next.id))))
+        } else if position.eq_ignore_ascii_case("afterbegin") {
+            Ok(Some((id, node.children.first().copied())))
+        } else if position.eq_ignore_ascii_case("beforeend") {
+            Ok(Some((id, None)))
+        } else {
+            Err(DomError::Syntax)
+        }
     }
 }
