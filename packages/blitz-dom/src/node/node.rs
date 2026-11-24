@@ -193,6 +193,8 @@ pub struct Node {
     /// For a shadow root (a fragment attached to a host element): its host
     /// and options. `None` for every other node.
     pub shadow_root_data: Option<Box<ShadowRootData>>,
+    /// The template associated with this inert contents fragment.
+    pub(crate) template_host: Option<NodeId>,
     /// Weak manual slot references; generation IDs cannot alias reclaimed nodes.
     pub(crate) manual_slot: Option<NodeId>,
     pub(crate) manual_slottables: Vec<NodeId>,
@@ -509,6 +511,7 @@ impl Node {
             flags: NodeFlags::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
             shadow_root_data: None,
+            template_host: None,
             manual_slot: None,
             manual_slottables: Vec::new(),
             slot_assignment: Vec::new(),

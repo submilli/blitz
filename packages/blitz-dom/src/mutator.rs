@@ -250,6 +250,11 @@ impl DocumentMutator<'_> {
             return contents_id;
         }
         let contents_id = self.create_document_fragment();
+        self.bind_template_contents(template_id, contents_id);
+        contents_id
+    }
+
+    pub(crate) fn bind_template_contents(&mut self, template_id: NodeId, contents_id: NodeId) {
         self.set_node_document(contents_id, self.doc.template_document(template_id));
         if let Some(element) = self
             .doc
@@ -257,8 +262,8 @@ impl DocumentMutator<'_> {
             .and_then(|node| node.element_data_mut())
         {
             element.template_contents = Some(contents_id);
+            self.doc.nodes[contents_id].template_host = Some(template_id);
         }
-        contents_id
     }
 
     /// The "template contents" fragment node of a `<template>` element (if any)

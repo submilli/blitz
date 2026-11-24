@@ -148,6 +148,18 @@ mod tests {
             assert_eq!(m.doc.node_document(id), inert);
         }
         assert_eq!(m.doc.template_document(inert), inert);
+        assert_eq!(m.doc.tree_root(text), contents);
+        assert_eq!(m.doc.host_including_parent(contents), Some(template));
+        assert!(m.doc.is_host_including_inclusive_ancestor(host, text));
+        assert!(!m.doc.is_inclusive_ancestor(host, text));
+        assert_eq!(m.doc.shadow_host_of(contents), None);
+
+        let copy = m.deep_clone_node(template);
+        let copied_contents = m.try_template_contents(copy).unwrap();
+        assert_ne!(copied_contents, contents);
+        assert_eq!(m.doc.host_including_parent(copied_contents), Some(copy));
+        assert_eq!(m.doc.nodes[copied_contents].children.len(), 1);
+        assert_ne!(m.doc.nodes[copied_contents].children[0], text);
     }
 
     #[test]

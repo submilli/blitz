@@ -208,14 +208,23 @@ impl BaseDocument {
         false
     }
 
-    /// DOM host-including ancestry prevents insertion cycles across shadow roots.
+    /// The next ancestor for DOM hierarchy validation. Template contents and
+    /// shadow roots have a host while remaining separate node trees.
+    pub fn host_including_parent(&self, id: NodeId) -> Option<NodeId> {
+        let node = self.get_node(id)?;
+        node.parent
+            .or(node.template_host)
+            .or_else(|| self.shadow_host_of(id))
+    }
+
+    /// Whether `ancestor` is a host-including inclusive ancestor of `node`.
     pub fn is_host_including_inclusive_ancestor(&self, ancestor: NodeId, node: NodeId) -> bool {
         let mut current = Some(node);
         while let Some(id) = current {
             if id == ancestor {
                 return true;
             }
-            current = self.nodes[id].parent.or_else(|| self.shadow_host_of(id));
+            current = self.host_including_parent(id);
         }
         false
     }

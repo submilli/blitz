@@ -1204,9 +1204,18 @@ impl BaseDocument {
         }
 
         let children = node.children.clone();
+        let contents = node
+            .element_data()
+            .and_then(|element| element.template_contents);
 
         // Create new node
         let new_node_id = self.create_node(data);
+
+        if let Some(contents) = contents {
+            let mut mutator = self.mutate();
+            let copy = mutator.clone_node(contents, true);
+            mutator.bind_template_contents(new_node_id, copy);
+        }
 
         // Recursively clone children
         let new_children: ThinVec<NodeId> = children

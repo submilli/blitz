@@ -382,7 +382,8 @@ impl Clone for ElementData {
             list_item_data: self.list_item_data.clone(),
             // A clone's content is laid out when its box is constructed.
             select_layout: None,
-            template_contents: self.template_contents,
+            // Deep cloning creates a separate contents fragment for its new host.
+            template_contents: None,
             // A clone gets no shadow root (it is not cloned with the element).
             shadow_root: None,
 
