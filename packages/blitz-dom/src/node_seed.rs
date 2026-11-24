@@ -44,6 +44,8 @@ impl DocumentMutator<'_> {
                 .element_data_mut()
                 .expect("element seeds plant elements");
             element.custom_element_is = seed.is;
+            element.custom_element_upgrading = seed.upgrading;
+            element.custom_element_callbacks = seed.callbacks;
             element.form_state = seed.form;
             element.custom_internals = seed.internals;
             element.custom_states = seed.custom_states;
@@ -99,6 +101,8 @@ enum SeedData {
 struct ElementSeed {
     is: Option<String>,
     custom: CustomElementState,
+    upgrading: bool,
+    callbacks: Option<std::sync::Arc<crate::custom_elements::ReactionCallbacks>>,
     form: FormControlState,
     internals: Option<Box<crate::custom_internals::CustomInternals>>,
     custom_states: Vec<style::values::AtomIdent>,
@@ -158,6 +162,8 @@ impl ElementSeed {
         Self {
             is: element.custom_element_is.clone(),
             custom: element.custom_element_state,
+            upgrading: element.custom_element_upgrading,
+            callbacks: element.custom_element_callbacks.clone(),
             form: element.form_state.clone(),
             internals: element
                 .custom_internals
@@ -192,6 +198,8 @@ impl ElementSeed {
         Self {
             is: element.custom_element_is.clone(),
             custom,
+            upgrading: false,
+            callbacks: None,
             form,
             internals: None,
             custom_states: Vec::new(),

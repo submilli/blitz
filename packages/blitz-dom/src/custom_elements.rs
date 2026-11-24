@@ -8,6 +8,18 @@
 
 use crate::{BaseDocument, NodeId};
 
+/// The lifecycle callbacks captured from a definition when construction starts.
+#[derive(Debug, Default)]
+pub struct ReactionCallbacks {
+    pub connected: bool,
+    pub disconnected: bool,
+    pub adopted: bool,
+    pub form_associated: bool,
+    pub form_disabled: bool,
+    pub form_reset: bool,
+    pub observed_attributes: std::collections::HashSet<String>,
+}
+
 /// An element's custom element state, per the DOM standard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomElementState {
@@ -52,6 +64,12 @@ pub enum CustomElementReaction {
         element: NodeId,
         form: Option<NodeId>,
     },
+    /// The element moved while a form-association callback was queued.
+    /// The embedder keeps the form identity alive and resolves it on delivery.
+    FormAssociatedFromArena {
+        element: NodeId,
+        form: u64,
+    },
     FormDisabled {
         element: NodeId,
         disabled: bool,
@@ -86,6 +104,7 @@ impl CustomElementReaction {
         match self {
             Self::Connected(id) | Self::Disconnected(id) | Self::FormReset(id) => *id,
             Self::FormAssociated { element, .. }
+            | Self::FormAssociatedFromArena { element, .. }
             | Self::FormDisabled { element, .. }
             | Self::Adopted { element, .. }
             | Self::AdoptedFromArena { element, .. }
@@ -107,6 +126,10 @@ impl CustomElementReaction {
                     Some(form) => Some(map(form)?),
                     None => None,
                 },
+            },
+            Self::FormAssociatedFromArena { element, form } => Self::FormAssociatedFromArena {
+                element: map(element)?,
+                form,
             },
             Self::FormDisabled { element, disabled } => Self::FormDisabled {
                 element: map(element)?,
@@ -185,6 +208,12 @@ pub fn is_valid_custom_element_name(name: &str) -> bool {
         && !RESERVED.contains(&name)
 }
 
+/// Queue position within a script-free batch of native mutations.
+pub struct ReactionMark {
+    pending: usize,
+    observed: usize,
+}
+
 impl BaseDocument {
     /// Start or stop recording custom element reactions. Stopping discards
     /// pending ones.
@@ -196,6 +225,39 @@ impl BaseDocument {
         }
         self.custom_element_reactions =
             on.then(|| self.custom_element_reactions.take().unwrap_or_default());
+    }
+
+    pub fn custom_element_reaction_mark(&self) -> ReactionMark {
+        ReactionMark {
+            pending: self.pending_custom_element_reaction_count(),
+            observed: self.custom_element_enqueued.as_ref().map_or(0, Vec::len),
+        }
+    }
+
+    pub fn pending_custom_element_reaction_count(&self) -> usize {
+        self.custom_element_reactions
+            .as_ref()
+            .map_or(0, |q| q.len())
+    }
+
+    /// Withdraw the new suffix and its corresponding enqueue observations together.
+    /// The embedder merges these reactions with arrivals from other arenas before
+    /// returning to script. Earlier notifications keep their positions.
+    pub fn take_custom_element_reactions_since(
+        &mut self,
+        mark: ReactionMark,
+    ) -> Vec<CustomElementReaction> {
+        if let Some(observed) = &mut self.custom_element_enqueued {
+            observed.truncate(mark.observed);
+        }
+        let Some(queue) = &mut self.custom_element_reactions else {
+            return Vec::new();
+        };
+        let pending: Vec<_> = queue.drain(mark.pending.min(queue.len())..).collect();
+        self.custom_element_reaction_bytes = self
+            .custom_element_reaction_bytes
+            .saturating_sub(pending.iter().map(reaction_bytes).sum());
+        pending
     }
 
     /// Reactions since the last call, oldest first.
@@ -214,6 +276,36 @@ impl BaseDocument {
             .map_or(CustomElementState::Uncustomized, |el| {
                 el.custom_element_state
             })
+    }
+
+    /// Upgrade snapshots stay pending while author construction can move the node.
+    pub fn custom_element_upgrading(&self, id: NodeId) -> bool {
+        self.get_node(id)
+            .and_then(|n| n.element_data())
+            .is_some_and(|e| e.custom_element_upgrading)
+    }
+
+    fn wants_custom_element_reaction(&self, reaction: &CustomElementReaction) -> bool {
+        let Some(callbacks) = self
+            .get_node(reaction.target())
+            .and_then(|n| n.element_data())
+            .and_then(|e| e.custom_element_callbacks.as_deref())
+        else {
+            return true;
+        };
+        match reaction {
+            CustomElementReaction::Connected(_) => callbacks.connected,
+            CustomElementReaction::Disconnected(_) => callbacks.disconnected,
+            CustomElementReaction::Adopted { .. }
+            | CustomElementReaction::AdoptedFromArena { .. } => callbacks.adopted,
+            CustomElementReaction::FormAssociated { .. }
+            | CustomElementReaction::FormAssociatedFromArena { .. } => callbacks.form_associated,
+            CustomElementReaction::FormDisabled { .. } => callbacks.form_disabled,
+            CustomElementReaction::FormReset(_) => callbacks.form_reset,
+            CustomElementReaction::AttributeChanged { name, .. } => {
+                callbacks.observed_attributes.contains(name)
+            }
+        }
     }
 
     /// Set an element's state (the embedder does this when it upgrades or
@@ -246,6 +338,13 @@ impl BaseDocument {
         let mut bytes = 0usize;
         if let Some(element) = self.get_node(id).and_then(|node| node.element_data()) {
             for attr in element.attrs().iter() {
+                if element
+                    .custom_element_callbacks
+                    .as_deref()
+                    .is_some_and(|c| !c.observed_attributes.contains(attr.name.local.as_ref()))
+                {
+                    continue;
+                }
                 let retained =
                     attr.name.local.len() + attr.name.ns.len() + attr.value.retained_bytes();
                 if reactions.len() >= MAX_QUEUED_REACTIONS
@@ -265,7 +364,9 @@ impl BaseDocument {
                 });
             }
         }
-        if self.is_connected(id) {
+        if self.is_connected(id)
+            && self.wants_custom_element_reaction(&CustomElementReaction::Connected(id))
+        {
             if reactions.len() < MAX_QUEUED_REACTIONS {
                 reactions.push(CustomElementReaction::Connected(id));
             } else {
@@ -275,18 +376,20 @@ impl BaseDocument {
         reactions
     }
 
-    /// Queue `reactions`, returning those the bounded queue refused (also
-    /// reported through [`Self::take_custom_element_reaction_overflow`]).
+    /// Return unqueued reactions so the embedder can release their arguments.
+    /// Capacity refusals also set the overflow flag. Absent callbacks do not.
     pub fn enqueue_custom_element_reactions(
         &mut self,
         reactions: Vec<CustomElementReaction>,
     ) -> Vec<CustomElementReaction> {
         let mut refused = Vec::new();
         for reaction in reactions {
-            if self.admits_reaction(&reaction) {
-                self.record_custom_element_reaction(reaction);
-            } else if self.custom_element_reactions.is_some() {
-                self.custom_element_reaction_overflow = true;
+            if !self.wants_custom_element_reaction(&reaction) {
+                refused.push(reaction);
+            } else if self.admits_reaction(&reaction) {
+                self.push_custom_element_reaction(reaction);
+            } else {
+                self.custom_element_reaction_overflow |= self.custom_element_reactions.is_some();
                 refused.push(reaction);
             }
         }
@@ -397,11 +500,51 @@ impl BaseDocument {
         Vec::from(moved)
     }
 
+    /// Keep a queued callback in place when only its form argument changes arena.
+    /// Both representations have zero payload bytes and the same target.
+    pub fn relocate_queued_form_arguments(
+        &mut self,
+        destination: impl Fn(NodeId) -> Option<NodeId>,
+        mut retain: impl FnMut(NodeId) -> Option<u64>,
+    ) {
+        let Some(queue) = &mut self.custom_element_reactions else {
+            return;
+        };
+        queue.retain_mut(|reaction| {
+            let CustomElementReaction::FormAssociated {
+                element,
+                form: Some(form),
+            } = *reaction
+            else {
+                return true;
+            };
+            let Some(new) = destination(form) else {
+                return true;
+            };
+            let Some(token) = retain(new) else {
+                self.custom_element_reaction_overflow = true;
+                return false;
+            };
+            *reaction = CustomElementReaction::FormAssociatedFromArena {
+                element,
+                form: token,
+            };
+            true
+        });
+    }
+
     pub(crate) fn record_custom_element_reaction(&mut self, reaction: CustomElementReaction) {
+        if !self.wants_custom_element_reaction(&reaction) {
+            return;
+        }
         if !self.admits_reaction(&reaction) {
             self.custom_element_reaction_overflow |= self.custom_element_reactions.is_some();
             return;
         }
+        self.push_custom_element_reaction(reaction);
+    }
+
+    fn push_custom_element_reaction(&mut self, reaction: CustomElementReaction) {
         if let Some(reactions) = &mut self.custom_element_reactions {
             self.custom_element_reaction_bytes += reaction_bytes(&reaction);
             if let Some(enqueued) = &mut self.custom_element_enqueued {
@@ -516,6 +659,80 @@ mod bounds_tests {
     }
 
     #[test]
+    fn withdrawing_a_batch_preserves_earlier_enqueue_observations_and_payloads() {
+        use CustomElementReaction as R;
+        let mut doc = BaseDocument::new(Default::default());
+        doc.set_custom_element_reactions(true);
+        doc.observe_custom_element_enqueues();
+        let id = doc.root_node().id;
+        let attribute = R::AttributeChanged {
+            element: id,
+            name: "a".into(),
+            namespace: None,
+            old_value: None,
+            new_value: Some("payload".into()),
+        };
+        doc.enqueue_custom_element_reactions(vec![attribute.clone()]);
+        let bytes = doc.custom_element_reaction_bytes;
+        let mark = doc.custom_element_reaction_mark();
+        doc.enqueue_custom_element_reactions(vec![R::Connected(id), attribute]);
+        let suffix = doc.take_custom_element_reactions_since(mark);
+        assert!(matches!(
+            suffix.as_slice(),
+            [R::Connected(_), R::AttributeChanged { .. }]
+        ));
+        assert_eq!(doc.custom_element_reaction_bytes, bytes);
+        assert_eq!(doc.take_enqueued_custom_element_targets(), vec![id]);
+        assert_eq!(doc.pending_custom_element_reaction_count(), 1);
+    }
+
+    #[test]
+    fn moving_a_form_updates_pending_arguments_without_reordering_the_target() {
+        use CustomElementReaction as R;
+        let mut doc = BaseDocument::new(Default::default());
+        doc.set_custom_element_reactions(true);
+        doc.observe_custom_element_enqueues();
+        let name = || markup5ever::QualName::new(None, markup5ever::ns!(html), "x-a".into());
+        let element = doc.mutate().create_element(name(), vec![]);
+        let form = doc.mutate().create_element(name(), vec![]);
+        let new = doc.root_node().id;
+        doc.enqueue_custom_element_reactions(vec![
+            R::Connected(element),
+            R::FormAssociated {
+                element,
+                form: Some(form),
+            },
+            R::FormAssociated {
+                element,
+                form: Some(form),
+            },
+            R::FormAssociated {
+                element,
+                form: None,
+            },
+        ]);
+        let mut tokens = [42].into_iter();
+        doc.relocate_queued_form_arguments(
+            |id| (id == form).then_some(new),
+            |id| {
+                assert_eq!(id, new);
+                tokens.next()
+            },
+        );
+        assert!(doc.take_custom_element_reaction_overflow());
+        assert_eq!(doc.take_enqueued_custom_element_targets(), vec![element; 4]);
+        let reactions = doc.take_custom_element_reactions();
+        assert!(matches!(
+            reactions.as_slice(),
+            [
+                R::Connected(_),
+                R::FormAssociatedFromArena { form: 42, .. },
+                R::FormAssociated { form: None, .. }
+            ]
+        ));
+    }
+
+    #[test]
     fn observed_element_queues_preserve_unrelated_pending_reactions() {
         let mut doc = BaseDocument::new(crate::DocumentConfig::default());
         doc.set_custom_element_reactions(true);
@@ -619,6 +836,17 @@ mod bounds_tests {
             form: Some(b),
         };
         assert!(foreign_form.remap(map).is_none());
+        let carried_form = CustomElementReaction::FormAssociatedFromArena {
+            element: a,
+            form: 42,
+        }
+        .remap(map)
+        .expect("the element has a destination");
+        assert_eq!(carried_form.referenced_nodes().collect::<Vec<_>>(), [b]);
+        assert!(matches!(
+            carried_form,
+            CustomElementReaction::FormAssociatedFromArena { element, form: 42 } if element == b
+        ));
         let adopted = CustomElementReaction::Adopted {
             element: a,
             old_document: a,

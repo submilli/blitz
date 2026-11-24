@@ -56,6 +56,75 @@ fn source() -> (BaseDocument, NodeId) {
 }
 
 #[test]
+fn transfer_keeps_upgrade_phase_and_registered_connection_callbacks() {
+    use crate::custom_elements::{CustomElementReaction as R, ReactionCallbacks};
+    let (mut source, root) = source();
+    let el = source
+        .get_node_mut(root)
+        .unwrap()
+        .element_data_mut()
+        .unwrap();
+    el.custom_element_upgrading = true;
+    el.custom_element_callbacks = Some(std::sync::Arc::new(ReactionCallbacks {
+        connected: true,
+        disconnected: false,
+        ..Default::default()
+    }));
+    for mode in [ImportMode::Transfer, ImportMode::Copy { deep: false }] {
+        let mut target = BaseDocument::new(Default::default());
+        let doc = target.root_node_id;
+        let new = target
+            .mutate()
+            .try_import_foreign(&source, root, doc, mode)
+            .unwrap()
+            .root();
+        let moved = mode == ImportMode::Transfer;
+        assert_eq!(target.custom_element_upgrading(new), moved);
+        target.set_custom_element_reactions(true);
+        target.observe_custom_element_enqueues();
+        let refused = target.enqueue_custom_element_reactions(vec![
+            R::AdoptedFromArena {
+                element: new,
+                old_document: 1,
+                new_document: 2,
+            },
+            R::Connected(new),
+        ]);
+        if moved {
+            assert!(matches!(
+                refused.as_slice(),
+                [R::AdoptedFromArena {
+                    old_document: 1,
+                    new_document: 2,
+                    ..
+                }]
+            ));
+            assert!(
+                matches!(target.take_custom_element_reactions().as_slice(), [R::Connected(id)] if *id == new)
+            );
+        } else {
+            assert!(refused.is_empty());
+        }
+        assert!(!target.take_custom_element_reaction_overflow());
+        assert_eq!(
+            target.take_enqueued_custom_element_targets().len(),
+            if moved { 1 } else { 2 }
+        );
+        target.set_custom_element_reactions(false);
+        assert!(matches!(
+            target
+                .enqueue_custom_element_reactions(vec![R::FormAssociatedFromArena {
+                    element: new,
+                    form: 7
+                }])
+                .as_slice(),
+            [R::FormAssociatedFromArena { form: 7, .. }]
+        ));
+        assert!(!target.take_custom_element_reaction_overflow());
+    }
+}
+
+#[test]
 fn transfer_rebuilds_shadow_template_slot_and_control_state() {
     let (source, root) = source();
     let before = source.node_count();

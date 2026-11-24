@@ -150,6 +150,8 @@ pub struct ElementData {
 
     /// See [`crate::custom_elements`]; behind `:defined`.
     pub custom_element_is: Option<String>,
+    pub custom_element_upgrading: bool,
+    pub custom_element_callbacks: Option<std::sync::Arc<crate::custom_elements::ReactionCallbacks>>,
     pub custom_element_state: crate::custom_elements::CustomElementState,
     // /// Whether the node is a [HTML integration point] (https://html.spec.whatwg.org/multipage/#html-integration-point)
     // pub mathml_annotation_xml_integration_point: bool,
@@ -400,6 +402,8 @@ impl Clone for ElementData {
             custom_states: Vec::new(),
             script_state: ScriptState::default(),
             // A clone starts undefined; the embedder upgrades it.
+            custom_element_upgrading: false,
+            custom_element_callbacks: None,
             custom_element_is: self.custom_element_is.clone(),
             custom_element_state: if self.custom_element_is.is_some() {
                 crate::custom_elements::CustomElementState::Undefined
@@ -542,6 +546,8 @@ impl ElementData {
             custom_internals: None,
             custom_states: Vec::new(),
             script_state: ScriptState::default(),
+            custom_element_upgrading: false,
+            custom_element_callbacks: None,
             custom_element_is,
             custom_element_state,
             display_constructed_as: StyloDisplay::Block,
