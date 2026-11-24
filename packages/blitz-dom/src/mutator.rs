@@ -55,6 +55,7 @@ pub struct DocumentMutator<'doc> {
     pub doc: &'doc mut BaseDocument,
 
     eager_op_queue: Vec<SpecialOp>,
+    pub(crate) unchanged_textarea_children: Option<NodeId>,
 
     /// An unobservable fragment context must not select its temporary children.
     pub(crate) selection_scratch: Option<NodeId>,
@@ -91,6 +92,7 @@ impl DocumentMutator<'_> {
         DocumentMutator {
             doc,
             eager_op_queue: Vec::new(),
+            unchanged_textarea_children: None,
             selection_scratch: None,
             title_node: None,
             style_nodes: HashSet::new(),
@@ -292,6 +294,7 @@ impl DocumentMutator<'_> {
 
     /// Update rendering and observer records after the caller adjusted ranges.
     pub(crate) fn set_node_text_raw(&mut self, node_id: NodeId, value: crate::DomString) {
+        self.doc.split_text_edited(node_id);
         let node_is_in_document = self.doc.nodes[node_id].flags.is_in_document();
         if let NodeData::Text(text) = &self.doc.nodes[node_id].data {
             let old_value = text.content.clone();

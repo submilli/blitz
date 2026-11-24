@@ -9,7 +9,7 @@ use crate::{BaseDocument, NodeId};
 pub(super) fn native_work(doc: &BaseDocument) -> Vec<NodeId> {
     let mut roots = vec![doc.root_node_id];
     roots.extend(&doc.connected_scripts);
-    roots.extend(&doc.slot_changes);
+    roots.extend(doc.slot_changes.roots());
     roots.extend(doc.pending_resource_nodes());
     roots.extend(
         doc.pending_images

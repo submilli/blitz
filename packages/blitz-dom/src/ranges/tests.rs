@@ -244,3 +244,57 @@ fn rendered_selection_preserves_boundary_spaces_and_text_overlap() {
     assert!(!doc.dom_selection_contains(point(p, 0), point(p, 1), p, false));
     assert!(doc.dom_selection_contains(point(p, 0), point(p, 1), p, true));
 }
+
+#[test]
+fn reversing_a_split_preserves_neighboring_text_ranges_and_pending_records() {
+    let (mut doc, points, parent, prefix) = setup();
+    let neighbor = doc.mutate().create_text_node("neighbor");
+    doc.mutate().append_children(parent, &[neighbor]);
+    *points.0.borrow_mut() = vec![point(prefix, 6), point(parent, 1)];
+    let split = doc.split_text_for_insertion(prefix, 0).unwrap();
+    let tail = split.suffix();
+    doc.set_mutation_recording(true);
+    doc.mutate().set_character_data(neighbor, "changed");
+    assert!(doc.finish_insertion_split(split, true));
+    assert_eq!(doc.character_data(prefix), Some("abcdef"));
+    assert_eq!(doc.character_data(tail), Some("abcdef"));
+    assert_eq!(doc.get_node(tail).unwrap().parent, None);
+    assert_eq!(
+        doc.get_node(parent).unwrap().children.as_slice(),
+        &[prefix, neighbor]
+    );
+    assert_eq!(*points.0.borrow(), [point(prefix, 6), point(parent, 1)]);
+    let records = doc.take_mutation_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].target(), neighbor);
+}
+
+#[test]
+fn replacing_the_same_data_or_moving_the_pair_prevents_automatic_rejoin() {
+    for moved in [false, true] {
+        let (mut doc, _, parent, prefix) = setup();
+        let split = doc.split_text_for_insertion(prefix, 2).unwrap();
+        let suffix = split.suffix();
+        if moved {
+            doc.mutate().append_children(parent, &[prefix]);
+            doc.mutate().append_children(parent, &[suffix]);
+        } else {
+            doc.mutate()
+                .replace_character_data(suffix, 0, 1, &"c".into())
+                .unwrap();
+        }
+        assert!(!doc.finish_insertion_split(split, true));
+        assert_eq!(doc.get_node(prefix).unwrap().forward(1).unwrap().id, suffix);
+        assert_eq!(doc.character_data(suffix), Some("cdef"));
+    }
+}
+
+#[test]
+fn inner_refusal_leaves_the_enclosing_split_reversible() {
+    let (mut doc, _, _, text) = setup();
+    let outer = doc.split_text_for_insertion(text, 4).unwrap();
+    let inner = doc.split_text_for_insertion(text, 2).unwrap();
+    assert!(doc.finish_insertion_split(inner, true));
+    assert!(doc.finish_insertion_split(outer, true));
+    assert_eq!(doc.character_data(text), Some("abcdef"));
+}

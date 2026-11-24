@@ -23,6 +23,7 @@ impl BaseDocument {
     }
 
     pub(crate) fn notify_removing(&mut self, node: NodeId) {
+        self.split_subtree_removing(node);
         self.base_subtree_removing(node);
         self.discard_frame_bases(node);
         if self

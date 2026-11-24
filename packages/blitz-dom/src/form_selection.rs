@@ -231,6 +231,31 @@ mod tests {
     }
 
     #[test]
+    fn provisional_text_split_preserves_pristine_textarea_selection() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        let textarea = doc.mutate().create_element(
+            crate::QualName::new(None, crate::ns!(html), "textarea".into()),
+            vec![],
+        );
+        let text = doc.mutate().create_text_node("abcdef");
+        doc.mutate().append_children(textarea, &[text]);
+        doc.mutate()
+            .set_control_selection(textarea, ControlSelection::caret(1));
+        let split = doc.split_text_for_insertion(text, 2).unwrap();
+        assert_eq!(
+            doc.control_selection(textarea),
+            Some(ControlSelection::caret(1))
+        );
+        doc.mutate()
+            .set_control_selection(textarea, ControlSelection::caret(3));
+        assert!(doc.finish_insertion_split(split, true));
+        assert_eq!(
+            doc.control_selection(textarea),
+            Some(ControlSelection::caret(3))
+        );
+    }
+
+    #[test]
     fn unsupported_controls_do_not_accept_selection_state() {
         let mut doc = BaseDocument::new(crate::DocumentConfig::default());
         let input = doc.mutate().create_element(

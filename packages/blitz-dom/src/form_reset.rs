@@ -42,6 +42,9 @@ impl DocumentMutator<'_> {
 
     /// HTML textarea children-changed steps run after topology has settled.
     pub(crate) fn textarea_children_changed(&mut self, parent: NodeId) {
+        if self.unchanged_textarea_children == Some(parent) {
+            return;
+        }
         let node = &self.doc.nodes[parent];
         if !node.element_data().is_some_and(|e| {
             e.name.ns == ns!(html) && &*e.name.local == "textarea" && !e.form_state.value_dirty

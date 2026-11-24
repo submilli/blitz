@@ -164,3 +164,72 @@ fn delegated_focus_obeys_shadow_ancestors_and_retargets_active_element() {
         .set_attribute(host, QualName::new(None, crate::ns!(), "inert".into()), "");
     assert_eq!(doc.delegated_focus_target(host), None);
 }
+
+#[test]
+fn provisional_split_signals_only_committed_or_independent_slot_changes() {
+    let mut doc = BaseDocument::new(Default::default());
+    let (host, _, slot) = shadow(&mut doc, false);
+    let prefix = doc.mutate().create_text_node("ab");
+    doc.mutate().append_children(host, &[prefix]);
+    assert_eq!(doc.take_slot_changes(), [slot]);
+    for independent in [false, true] {
+        let split = doc.split_text_for_insertion(prefix, 1).unwrap();
+        assert!(doc.assigned_nodes(slot).contains(&split.suffix()));
+        if independent {
+            let sibling = element(&mut doc, "i");
+            doc.mutate().append_children(host, &[sibling]);
+        }
+        assert!(doc.finish_insertion_split(split, true));
+        assert_eq!(
+            doc.take_slot_changes(),
+            if independent { vec![slot] } else { vec![] }
+        );
+    }
+    let split = doc.split_text_for_insertion(prefix, 1).unwrap();
+    assert!(!doc.finish_insertion_split(split, false));
+    assert_eq!(doc.take_slot_changes(), [slot]);
+}
+
+#[test]
+fn committing_split_skips_a_destroyed_slot() {
+    let mut doc = BaseDocument::new(Default::default());
+    let (host, _, slot) = shadow(&mut doc, false);
+    let prefix = doc.mutate().create_text_node("ab");
+    doc.mutate().append_children(host, &[prefix]);
+    doc.take_slot_changes();
+    let split = doc.split_text_for_insertion(prefix, 1).unwrap();
+    doc.mutate().remove_and_drop_node(slot);
+    assert!(!doc.finish_insertion_split(split, false));
+    assert!(!doc.take_slot_changes().contains(&slot));
+}
+
+#[test]
+fn provisional_slot_signals_keep_their_position_through_teardown_and_blur() {
+    for refuse in [true, false] {
+        let mut doc = BaseDocument::new(Default::default());
+        let (a, _, slot_a) = shadow(&mut doc, false);
+        let (b, _, slot_b) = shadow(&mut doc, false);
+        let (c, _, slot_c) = shadow(&mut doc, false);
+        let prefix = doc.mutate().create_text_node("ab");
+        doc.mutate().append_children(b, &[prefix]);
+        doc.take_slot_changes();
+        let first = element(&mut doc, "i");
+        doc.mutate().append_children(a, &[first]);
+        let split = doc.split_text_for_insertion(prefix, 1).unwrap();
+        doc.mutate().remove_and_drop_node(slot_a);
+        assert!(doc.has_slot_changes());
+        let later = element(&mut doc, "i");
+        doc.mutate().append_children(c, &[later]);
+        let independent = element(&mut doc, "i");
+        doc.mutate().append_children(b, &[independent]);
+        assert_eq!(doc.finish_insertion_split(split, refuse), refuse);
+        assert_eq!(
+            doc.take_slot_changes(),
+            if refuse {
+                [slot_c, slot_b]
+            } else {
+                [slot_b, slot_c]
+            }
+        );
+    }
+}

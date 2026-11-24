@@ -6,6 +6,9 @@
 
 use crate::{BaseDocument, NodeId};
 
+mod insertion;
+pub use insertion::InsertionSplit;
+pub(crate) use insertion::SplitWatch;
 mod text;
 
 /// A DOM boundary point, with offsets measured in children or UTF-16 code units.

@@ -19,6 +19,10 @@ use crate::{BaseDocument, NodeId};
 pub struct NodeLease(Arc<NodeId>);
 
 impl NodeLease {
+    pub(crate) fn belongs_to(&self, doc: &BaseDocument) -> bool {
+        Arc::ptr_eq(&self.0, &doc.resource_pin(self.id()))
+    }
+
     pub fn id(&self) -> NodeId {
         *self.0
     }

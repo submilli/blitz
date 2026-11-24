@@ -52,14 +52,11 @@ impl BaseDocument {
         !self.slot_changes.is_empty()
     }
     pub fn take_slot_changes(&mut self) -> Vec<NodeId> {
-        std::mem::take(&mut self.slot_changes)
+        self.slot_changes.take()
     }
 
     fn signal_slot(&mut self, slot: NodeId) {
-        // At most one entry per live node; bounded by the document node limit.
-        if !self.slot_changes.contains(&slot) {
-            self.slot_changes.push(slot);
-        }
+        self.slot_changes.push(slot);
     }
 
     fn refresh_slot_assignment(&mut self, slot: NodeId) {

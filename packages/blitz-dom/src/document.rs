@@ -344,7 +344,8 @@ pub struct BaseDocument {
     pub(crate) connected_scripts: Vec<NodeId>,
     /// Elements with a shadow root attached.
     pub(crate) shadow_hosts: HashSet<NodeId>,
-    pub(crate) slot_changes: Vec<NodeId>,
+    pub(crate) insertion_splits: Vec<std::rc::Weak<crate::ranges::SplitWatch>>,
+    pub(crate) slot_changes: crate::shadow::SlotSignals,
     pub(crate) dirty_slot_roots: Vec<NodeId>,
     pub(crate) removed_slots: Vec<NodeId>,
     /// The embedder loads `<iframe>` documents itself (and runs their
@@ -585,7 +586,8 @@ impl BaseDocument {
             attribute_nodes: Default::default(),
             connected_scripts: Vec::new(),
             shadow_hosts: HashSet::new(),
-            slot_changes: Vec::new(),
+            insertion_splits: Vec::new(),
+            slot_changes: Default::default(),
             dirty_slot_roots: Vec::new(),
             removed_slots: Vec::new(),
             embedder_loads_iframes: false,

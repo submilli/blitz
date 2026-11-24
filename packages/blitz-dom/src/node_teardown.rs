@@ -23,7 +23,7 @@ impl BaseDocument {
             self.parser_forms.remove(id);
             on_drop(id);
             self.shadow_hosts.remove(&id);
-            self.slot_changes.retain(|&slot| slot != id);
+            self.slot_changes.remove(id);
             // Explicit teardown also destroys temporary parser nodes. Their
             // reactions and enqueue observations cannot outlive that identity.
             drop(self.discard_custom_element_reactions(id));

@@ -68,6 +68,16 @@ pub struct LoggedMutation {
     pub ancestors: Vec<NodeId>,
 }
 
+const MAX_LOG_RECORDS: usize = 16_384;
+const MAX_LOG_BYTES: usize = 16 * 1024 * 1024;
+
+fn logged_bytes(record: &MutationRecord, ancestors: usize) -> usize {
+    record
+        .payload_bytes()
+        .saturating_add(std::mem::size_of::<LoggedMutation>())
+        .saturating_add(ancestors.saturating_mul(std::mem::size_of::<NodeId>()))
+}
+
 impl BaseDocument {
     /// Start or stop recording mutations. Stopping discards pending records.
     pub fn set_mutation_recording(&mut self, on: bool) {
@@ -110,6 +120,19 @@ impl BaseDocument {
         }
     }
 
+    /// Check a known batch before starting a reversible edit. Even records that
+    /// match no observer must fit in the native log until the embedder routes it.
+    pub fn can_log_mutations(&self, batch: &[LoggedMutation]) -> bool {
+        let Some(log) = &self.mutation_log else {
+            return true;
+        };
+        !self.mutation_log_overflowed
+            && batch.len() <= MAX_LOG_RECORDS.saturating_sub(log.len())
+            && batch.iter().fold(self.mutation_log_bytes, |bytes, item| {
+                bytes.saturating_add(logged_bytes(&item.record, item.ancestors.len()))
+            }) <= MAX_LOG_BYTES
+    }
+
     pub(crate) fn record_mutation(&mut self, record: MutationRecord) {
         self.update_slots_after_mutation(&record);
         self.log_mutation(record);
@@ -119,16 +142,12 @@ impl BaseDocument {
         if self.mutation_log.is_none() || self.mutation_log_overflowed {
             return;
         }
-        const MAX_RECORDS: usize = 16_384;
-        const MAX_BYTES: usize = 16 * 1024 * 1024;
-        let mut bytes = record
-            .payload_bytes()
-            .saturating_add(std::mem::size_of::<LoggedMutation>());
+        let mut bytes = logged_bytes(&record, 0);
         if self
             .mutation_log
             .as_ref()
-            .is_some_and(|log| log.len() >= MAX_RECORDS)
-            || bytes > MAX_BYTES.saturating_sub(self.mutation_log_bytes)
+            .is_some_and(|log| log.len() >= MAX_LOG_RECORDS)
+            || bytes > MAX_LOG_BYTES.saturating_sub(self.mutation_log_bytes)
         {
             self.fail_mutation_recording();
             return;
@@ -137,7 +156,7 @@ impl BaseDocument {
         let mut current = Some(record.target());
         while let Some(id) = current {
             bytes = bytes.saturating_add(std::mem::size_of::<NodeId>());
-            if bytes > MAX_BYTES.saturating_sub(self.mutation_log_bytes) {
+            if bytes > MAX_LOG_BYTES.saturating_sub(self.mutation_log_bytes) {
                 self.fail_mutation_recording();
                 return;
             }
@@ -200,6 +219,24 @@ mod bounds_tests {
         assert!(doc.mutation_recording_overflowed());
         assert!(doc.take_logged_mutations().is_empty());
     }
+    #[test]
+    fn batch_admission_preserves_pending_records_at_the_native_byte_limit() {
+        let mut doc = BaseDocument::new(Default::default());
+        doc.set_mutation_recording(true);
+        let target = doc.root_node().id;
+        doc.record_mutation(record(target));
+        let batch = [LoggedMutation {
+            record: MutationRecord::CharacterData {
+                target,
+                old_value: "x".repeat(MAX_LOG_BYTES).into(),
+            },
+            ancestors: vec![target],
+        }];
+        assert!(!doc.can_log_mutations(&batch));
+        assert!(!doc.mutation_recording_overflowed());
+        assert_eq!(doc.take_mutation_records(), [record(target)]);
+    }
+
     #[test]
     fn mutation_log_bounds_retained_text() {
         let mut doc = BaseDocument::new(Default::default());
