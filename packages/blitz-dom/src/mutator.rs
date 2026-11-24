@@ -1453,7 +1453,10 @@ impl<'doc> DocumentMutator<'doc> {
         self.doc
             .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
                 if doc.is_recording_custom_element_reactions()
-                    && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
+                    && matches!(
+                        doc.custom_element_state(node_id),
+                        CustomElementState::Custom | CustomElementState::Undefined
+                    )
                 {
                     doc.record_custom_element_reaction(CustomElementReaction::Connected(node_id));
                 }
@@ -1557,7 +1560,7 @@ impl<'doc> DocumentMutator<'doc> {
         self.doc
             .iter_shadow_including_subtree_mut(node_id, |node_id, doc| {
                 if notify_disconnect
-                    && doc.custom_element_state(node_id) != CustomElementState::Uncustomized
+                    && doc.custom_element_state(node_id) == CustomElementState::Custom
                 {
                     doc.record_custom_element_reaction(CustomElementReaction::Disconnected(
                         node_id,

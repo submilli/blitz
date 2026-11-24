@@ -865,6 +865,35 @@ mod bounds_tests {
         ));
     }
     #[test]
+    fn connection_changes_inside_upgrade_do_not_enqueue_lifecycle_callbacks() {
+        let mut doc = BaseDocument::new(crate::DocumentConfig::default());
+        doc.set_custom_element_reactions(true);
+        let parent = doc.root_node().id;
+        let id = doc
+            .mutate()
+            .try_create_element(
+                crate::QualName::new(None, markup5ever::ns!(html), "x-moved".into()),
+                vec![],
+            )
+            .unwrap();
+        for status in [
+            CustomElementState::Failed,
+            CustomElementState::Precustomized,
+        ] {
+            doc.set_custom_element_state(id, status);
+            doc.mutate().append_children(parent, &[id]);
+            doc.mutate().remove_child(parent, id).unwrap();
+            assert!(doc.take_custom_element_reactions().is_empty(), "{status:?}");
+        }
+        doc.set_custom_element_state(id, CustomElementState::Custom);
+        doc.mutate().append_children(parent, &[id]);
+        doc.mutate().remove_child(parent, id).unwrap();
+        assert!(matches!(&doc.take_custom_element_reactions()[..], [
+            CustomElementReaction::Connected(added), CustomElementReaction::Disconnected(removed)
+        ] if *added == id && *removed == id));
+    }
+
+    #[test]
     fn upgrade_snapshot_precedes_constructor_mutations() {
         let mut doc = BaseDocument::new(crate::DocumentConfig::default());
         doc.set_custom_element_reactions(true);
