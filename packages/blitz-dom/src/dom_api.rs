@@ -945,6 +945,14 @@ impl DocumentMutator<'_> {
         if matches!(self.doc.nodes[id].data, NodeData::Document(_)) {
             return id;
         }
+        // Construction of an unpublished copy cannot match a registration.
+        let log = self.doc.mutation_log.take();
+        let copy = self.clone_subtree(id, deep);
+        self.doc.mutation_log = log;
+        copy
+    }
+
+    fn clone_subtree(&mut self, id: NodeId, deep: bool) -> NodeId {
         let copy = self.clone_one(id);
         self.set_node_document(copy, self.doc.node_document(id));
         let mut pending = vec![(id, copy, deep)];

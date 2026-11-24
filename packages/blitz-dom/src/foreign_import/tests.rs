@@ -288,3 +288,44 @@ fn attribute_lookup_with_an_id_from_another_arena_is_none() {
     assert!(doc.get_node(foreign).is_none());
     assert!(doc.attribute_by_name(foreign, "id").is_none());
 }
+
+#[test]
+fn copied_template_contents_preserve_pending_observations() {
+    let mut target = BaseDocument::new(Default::default());
+    let mut foreign = BaseDocument::new(Default::default());
+    let a = target.mutate().create_document_fragment();
+    let b = foreign.mutate().create_document_fragment();
+    let local = element(&mut target, "i");
+    let remote = element(&mut foreign, "b");
+    append(&mut target, a, local);
+    append(&mut foreign, b, remote);
+    let observer_target = element(&mut target, "div");
+    let changed = element(&mut target, "p");
+    target.set_mutation_recording(true);
+    append(&mut target, observer_target, changed);
+    for (source, original, name) in [(None, a, "<i></i>"), (Some(&foreign), b, "<b></b>")] {
+        let template = element(&mut target, "template");
+        let copied = target
+            .mutate()
+            .try_copy_template_contents(template, source, original)
+            .unwrap();
+        let child = target.get_node(copied).unwrap().children[0];
+        assert_eq!(target.host_including_parent(copied), Some(template));
+        assert_eq!(
+            target.node_document(child),
+            target.template_document(template)
+        );
+        assert_eq!(html(&target, child), name);
+        let count = target.node_count();
+        assert_eq!(
+            target
+                .mutate()
+                .try_copy_template_contents(template, source, original),
+            Err(DomError::HierarchyRequest)
+        );
+        assert_eq!(target.node_count(), count);
+    }
+    let records = target.take_mutation_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].target(), observer_target);
+}

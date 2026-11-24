@@ -75,6 +75,47 @@ impl DocumentMutator<'_> {
         Ok(imported)
     }
 
+    /// Install an independent copy of a separately owned contents fragment on
+    /// an unpublished template clone. With no foreign source, the original
+    /// fragment already lives in this arena. The new fragment and its
+    /// descendants are fresh nodes, disjoint from the host.
+    pub fn try_copy_template_contents(
+        &mut self,
+        host: NodeId,
+        source: Option<&BaseDocument>,
+        fragment: NodeId,
+    ) -> Result<NodeId, DomError> {
+        let is_empty_template = self
+            .doc
+            .get_node(host)
+            .and_then(|node| node.element_data())
+            .is_some_and(|element| {
+                element.name.ns == crate::ns!(html)
+                    && element.name.local == crate::local_name!("template")
+                    && element.template_contents.is_none()
+            });
+        let from = source.unwrap_or(self.doc);
+        if !is_empty_template
+            || from.get_node(fragment).is_none_or(|node| {
+                !matches!(node.data, crate::node::NodeData::DocumentFragment)
+                    || node.is_shadow_root()
+            })
+        {
+            return Err(DomError::HierarchyRequest);
+        }
+        let owner = self.doc.template_document(host);
+        let copy = match source {
+            Some(from) => self
+                .try_import_foreign(from, fragment, owner, ImportMode::Copy { deep: true })?
+                .root(),
+            None => self
+                .try_clone_node(fragment, true)
+                .map_err(|_| DomError::QuotaExceeded)?,
+        };
+        self.bind_template_contents(host, copy);
+        Ok(copy)
+    }
+
     /// Drop a detached import that was never inserted, for example after a
     /// hierarchy check failed.
     pub fn discard_import(&mut self, imported: ImportedSubtree) {
