@@ -445,3 +445,32 @@ fn refused_nested_pattern_does_not_commit_an_outer_tile() {
         GraphError::Memory
     );
 }
+
+#[test]
+fn refused_gradient_preserves_independent_solid_paints() {
+    for kind in ["linearGradient", "radialGradient"] {
+        let svg = format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><{kind} id='g'><stop stop-color='red'/><stop offset='1' stop-color='blue'/></{kind}><rect x='1' y='1' width='4' height='4' fill='lime' stroke='url(#g)'/><rect x='6' width='2' height='8' fill='url(#g)'/><rect y='6' width='2' height='2' fill='red'/></svg>"
+        );
+        let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).unwrap();
+        let mut scene = VelloCpuScenePainter::new(8, 8);
+        let mut budget = Budget {
+            gradient_bytes: 1,
+            ..Default::default()
+        };
+        children(
+            &mut scene,
+            tree.root(),
+            &SvgNestedRasters::default(),
+            Affine::IDENTITY,
+            &mut budget,
+            &mut HashSet::new(),
+            0,
+        )
+        .unwrap();
+        let pixels = scene.finish();
+        assert_eq!(pixels.data()[2 * 8 + 2].g, 255);
+        assert_eq!(pixels.data()[7].a, 0);
+        assert_eq!(pixels.data()[7 * 8].r, 255);
+    }
+}

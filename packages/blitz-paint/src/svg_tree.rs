@@ -66,6 +66,7 @@ fn paint_tree(
 struct Budget {
     fixed_image_sampling: bool,
     pixels: usize,
+    gradient_bytes: usize,
     surface_area: usize,
     work: u64,
     visits: usize,
@@ -78,6 +79,7 @@ impl Default for Budget {
         Self {
             fixed_image_sampling: true,
             pixels: MAX_INTERMEDIATE_PIXELS,
+            gradient_bytes: 16 << 20,
             surface_area: 0,
             work: MAX_WORK,
             visits: 65_536,

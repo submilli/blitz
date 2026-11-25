@@ -38,6 +38,7 @@ pub(super) fn path(
         .map(|fill| {
             brush(
                 fill.paint(),
+                false,
                 fill.opacity(),
                 transform,
                 rasters,
@@ -52,6 +53,7 @@ pub(super) fn path(
         .map(|stroke| {
             brush(
                 stroke.paint(),
+                true,
                 stroke.opacity(),
                 transform,
                 rasters,
@@ -147,6 +149,7 @@ fn stroke(
 
 fn brush(
     paint: &usvg::Paint,
+    stroke: bool,
     opacity: usvg::Opacity,
     transform: Affine,
     rasters: &SvgNestedRasters,
@@ -160,5 +163,64 @@ fn brush(
             Err(error) => Err(error),
         };
     }
+    let stops = match paint {
+        usvg::Paint::LinearGradient(gradient) => gradient.stops(),
+        usvg::Paint::RadialGradient(gradient) => gradient.stops(),
+        _ => return Ok(convert::to_brush(paint, opacity)),
+    };
+    let endpoints =
+        matches!(stops, [first, last] if first.offset().get() == 0.0 && last.offset().get() == 1.0);
+    if let Err(error) = reserve_gradient(&mut budget.gradient_bytes, stops.len(), endpoints, stroke)
+    {
+        return if budget.surface_area == 0 {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
     Ok(convert::to_brush(paint, opacity))
+}
+
+/// Each draw retains its own CPU paint encoding until the scene renders.
+/// Include capacity growth, endpoint padding, and the second hairline encoding.
+fn reserve_gradient(
+    remaining: &mut usize,
+    stops: usize,
+    endpoints: bool,
+    stroke: bool,
+) -> Result<(), GraphError> {
+    use vello_common::encode::{EncodedPaint, GradientRange, MAX_GRADIENT_LUT_SIZE};
+    let entries = stops.saturating_add(2);
+    let ranges =
+        entries.saturating_mul(size_of::<GradientRange>() + size_of::<peniko::ColorStop>());
+    let encoded = ranges
+        .saturating_add(size_of::<EncodedPaint>())
+        .saturating_mul(if stroke { 4 } else { 2 });
+    let lut_entries = if endpoints {
+        256
+    } else {
+        MAX_GRADIENT_LUT_SIZE
+    };
+    let bytes = encoded.saturating_add((lut_entries + 1) * size_of::<[f32; 4]>());
+    *remaining = remaining.checked_sub(bytes).ok_or(GraphError::Memory)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reserve_gradient;
+
+    #[test]
+    fn gradient_reservations_accumulate_and_refusal_is_atomic() {
+        let mut measured = usize::MAX;
+        reserve_gradient(&mut measured, 2, true, false).unwrap();
+        let cost = usize::MAX - measured;
+        let mut available = 2 * cost;
+        reserve_gradient(&mut available, 2, true, false).unwrap();
+        assert!(reserve_gradient(&mut available, 2, true, true).is_err());
+        assert_eq!(available, cost);
+        assert!(reserve_gradient(&mut available, 3, false, false).is_err());
+        reserve_gradient(&mut available, 2, true, false).unwrap();
+        assert_eq!(available, 0);
+    }
 }
