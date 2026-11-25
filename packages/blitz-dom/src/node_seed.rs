@@ -203,7 +203,11 @@ impl ElementSeed {
             form,
             internals: None,
             custom_states: Vec::new(),
-            script: ScriptState::default(),
+            // HTML script cloning steps carry preparation history into the copy.
+            script: ScriptState {
+                already_started: element.script_state.already_started,
+                ..Default::default()
+            },
             canvas_revision: 0,
             credential_field: element.credential_field,
         }

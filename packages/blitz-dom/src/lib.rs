@@ -47,7 +47,7 @@ pub use document_title::DocumentTitleEdit;
 mod document_ownership;
 mod document_queries;
 pub use attribute_nodes::{AttributeId, AttributeNode, AttributeNodeError, NodeIdentity};
-mod document_scripts;
+pub mod document_scripts;
 mod element_filter;
 pub use element_filter::{DocumentCollection, ElementFilter};
 #[cfg(test)]
