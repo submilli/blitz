@@ -84,6 +84,9 @@ pub struct ScriptState {
     pub already_started: bool,
     /// Created by the parser, which runs it itself at its end tag.
     pub parser_inserted: bool,
+    /// The loader has received its empty inline module handle. The element
+    /// remains eligible for preparation when it later acquires source.
+    pub(crate) empty_module_reported: bool,
 }
 
 pub struct ElementData {

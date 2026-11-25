@@ -18,8 +18,9 @@ impl BaseDocument {
             .collect()
     }
 
-    /// HTML prepare-the-script-element: empty and unrecognized scripts stay
-    /// unstarted. A recognized classic nomodule script is started but skipped.
+    /// Empty classic scripts and unrecognized types stay unstarted. The module
+    /// loader accepts an empty inline module as a graph root. A recognized
+    /// classic nomodule script is started but skipped.
     pub fn start_script_preparation(&mut self, node: NodeId, parser: bool) -> Option<ScriptType> {
         let element = self.nodes.get_mut(node)?.element_data_mut()?;
         if element.script_state.already_started
@@ -38,19 +39,33 @@ impl BaseDocument {
         let has_source = element.has_attr(crate::local_name!("src")) || native.children.iter().any(|&child| {
             matches!(&self.nodes[child].data, crate::node::NodeData::Text(text) if !text.content.is_empty())
         });
-        if !has_source {
-            return None;
-        }
+        let kind = script_type(element)?;
         if !self.is_connected(node) {
             return None;
         }
-        let kind = script_type(element)?;
+        if !has_source {
+            if kind != ScriptType::Module || element.script_state.empty_module_reported {
+                return None;
+            }
+            self.nodes[node]
+                .element_data_mut()?
+                .script_state
+                .empty_module_reported = true;
+            return Some(kind);
+        }
         let suppressed =
             kind == ScriptType::Classic && element.has_attr(crate::local_name!("nomodule"));
         let flags = &mut self.nodes[node].element_data_mut()?.script_state;
         flags.already_started = true;
         flags.parser_inserted = parser;
         (!suppressed).then_some(kind)
+    }
+
+    /// Inline script source consists of direct Text children in tree order.
+    pub fn script_source(&self, node: NodeId) -> String {
+        self.get_node(node)
+            .map(|node| node.child_text_content().as_str_lossy().to_owned())
+            .unwrap_or_default()
     }
 
     /// Discard queued connected-script notifications when their document retires.
@@ -152,6 +167,31 @@ mod tests {
                 .already_started
         );
     }
+    #[test]
+    fn empty_module_handle_does_not_claim_later_source() {
+        use super::ScriptType;
+        let mut document = BaseDocument::new(Default::default());
+        let root = document.root_node().id;
+        let mut tree = document.mutate();
+        let script = tree.create_element(QualName::new(None, ns!(html), "script".into()), vec![]);
+        tree.set_attribute(script, QualName::new(None, ns!(), "type".into()), "module");
+        tree.append_children(root, &[script]);
+        drop(tree);
+
+        assert_eq!(
+            document.start_script_preparation(script, true),
+            Some(ScriptType::Module)
+        );
+        assert_eq!(document.start_script_preparation(script, false), None);
+        let text = document.mutate().create_text_node("export {}");
+        document.mutate().append_children(script, &[text]);
+        assert_eq!(
+            document.start_script_preparation(script, false),
+            Some(ScriptType::Module)
+        );
+        assert_eq!(document.start_script_preparation(script, false), None);
+    }
+
     #[test]
     fn connection_candidates_start_individually_and_import_preserves_script_history() {
         use crate::foreign_import::ImportMode;
