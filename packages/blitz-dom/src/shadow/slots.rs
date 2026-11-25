@@ -52,7 +52,29 @@ impl BaseDocument {
         !self.slot_changes.is_empty()
     }
     pub fn take_slot_changes(&mut self) -> Vec<NodeId> {
-        self.slot_changes.take()
+        self.slot_changes.take().map(|(_, slot)| slot).collect()
+    }
+
+    /// Snapshot the signal slots with their original positions in DOM-thread
+    /// order, so linked documents can deliver one ordered notification.
+    pub fn take_ordered_slot_changes(&mut self) -> Vec<(u128, NodeId)> {
+        self.slot_changes.take().collect()
+    }
+
+    /// Cancel signals present at retirement and stop generating new ones.
+    /// An active document may still pass an existing signal through this arena.
+    pub fn retire_slot_changes(&mut self) {
+        self.slot_changes.retire();
+    }
+
+    /// At adoption commit, move pending notifications with the logical slot.
+    /// A discarded staged import never changes either document's queue.
+    pub fn transfer_slot_changes(
+        &mut self,
+        target: &mut BaseDocument,
+        ids: &HashMap<NodeId, NodeId>,
+    ) {
+        self.slot_changes.transfer(&mut target.slot_changes, ids);
     }
 
     fn signal_slot(&mut self, slot: NodeId) {

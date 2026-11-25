@@ -19,7 +19,7 @@ pub struct InsertionSplit {
     prefix: NodeLease,
     suffix: NodeLease,
     watch: Rc<SplitWatch>,
-    signals: u64,
+    signals: crate::shadow::Split,
 }
 
 impl InsertionSplit {
@@ -67,7 +67,7 @@ impl BaseDocument {
             .get_node(prefix)
             .and_then(|n| n.parent)
             .ok_or(DomError::NotFound)?;
-        let signals = self.slot_changes.begin_split()?;
+        let signals = self.slot_changes.begin_split();
         let suffix = {
             let mut edit = self.mutate();
             // The final child text is unchanged. Ignore the intermediate
@@ -118,7 +118,7 @@ impl BaseDocument {
             let mut joined = head.clone();
             joined.push_dom(tail);
             let pending = self.mutation_log.take();
-            self.slot_changes.during_split(Some(split.signals));
+            self.slot_changes.during_split(Some(split.signals.clone()));
             {
                 let mut edit = self.mutate();
                 edit.unchanged_textarea_children = Some(parent);

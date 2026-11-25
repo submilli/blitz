@@ -233,3 +233,60 @@ fn provisional_slot_signals_keep_their_position_through_teardown_and_blur() {
         );
     }
 }
+
+#[test]
+fn transferred_split_signals_follow_the_original_split_outcome() {
+    for refused in [false, true] {
+        let mut source = BaseDocument::new(Default::default());
+        let (host, _, slot) = shadow(&mut source, false);
+        let prefix = source.mutate().create_text_node("ab");
+        source.mutate().append_children(host, &[prefix]);
+        source.take_slot_changes();
+
+        let mut target = BaseDocument::new(Default::default());
+        let (first_host, _, first) = shadow(&mut target, false);
+        let (_, _, moved) = shadow(&mut target, false);
+        let (last_host, _, last) = shadow(&mut target, false);
+        let child = element(&mut target, "b");
+        target.mutate().append_children(first_host, &[child]);
+        let split = source.split_text_for_insertion(prefix, 1).unwrap();
+        let child = element(&mut target, "b");
+        target.mutate().append_children(last_host, &[child]);
+        source.transfer_slot_changes(&mut target, &[(slot, moved)].into());
+        let fallback = target.mutate().create_text_node("fallback");
+        target.mutate().append_children(moved, &[fallback]);
+
+        assert_eq!(source.finish_insertion_split(split, refused), refused);
+        assert!(source.take_slot_changes().is_empty());
+        assert_eq!(
+            target.take_slot_changes(),
+            if refused {
+                [first, last, moved]
+            } else {
+                [first, moved, last]
+            }
+        );
+    }
+}
+
+#[test]
+fn retired_slot_drops_local_edits_but_preserves_an_incoming_signal_on_return() {
+    let mut source = BaseDocument::new(Default::default());
+    let (_, _, slot) = shadow(&mut source, false);
+    let mut retired = BaseDocument::new(Default::default());
+    let (_, _, parked) = shadow(&mut retired, false);
+    let fallback = retired.mutate().create_text_node("retired");
+    retired.mutate().append_children(parked, &[fallback]);
+    retired.retire_slot_changes();
+    assert!(retired.take_slot_changes().is_empty());
+    retired.mutate().remove_node(fallback);
+    assert!(retired.take_slot_changes().is_empty());
+
+    let live = source.mutate().create_text_node("live");
+    source.mutate().append_children(slot, &[live]);
+    source.transfer_slot_changes(&mut retired, &[(slot, parked)].into());
+    retired.retire_slot_changes();
+    retired.transfer_slot_changes(&mut source, &[(parked, slot)].into());
+    assert_eq!(source.take_slot_changes(), [slot]);
+    assert!(retired.take_slot_changes().is_empty());
+}

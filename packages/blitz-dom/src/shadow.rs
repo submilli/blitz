@@ -15,7 +15,7 @@
 //! [`ElementData::shadow_root`]: crate::node::ElementData::shadow_root
 
 mod signals;
-pub(crate) use signals::SlotSignals;
+pub(crate) use signals::{SlotSignals, Split};
 mod slots;
 #[cfg(test)]
 mod tests;
