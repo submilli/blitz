@@ -196,8 +196,8 @@ pub struct Node {
     /// The template associated with this inert contents fragment.
     pub(crate) template_host: Option<NodeId>,
     /// Weak manual slot references; generation IDs cannot alias reclaimed nodes.
-    pub(crate) manual_slot: Option<NodeId>,
-    pub(crate) manual_slottables: Vec<NodeId>,
+    pub(crate) manual_slot: Option<(Arc<crate::shadow::ManualMember>, NodeId)>,
+    pub(crate) manual_assignment: Option<Arc<crate::shadow::ManualAssignment>>,
     pub(crate) slot_assignment: Vec<NodeId>,
     /// For a shadow root: the stylesheets in its tree and their cascade data.
     pub shadow_styles: Option<Box<crate::shadow::ShadowStyles>>,
@@ -513,7 +513,7 @@ impl Node {
             shadow_root_data: None,
             template_host: None,
             manual_slot: None,
-            manual_slottables: Vec::new(),
+            manual_assignment: None,
             slot_assignment: Vec::new(),
             shadow_styles: None,
             composed_children: None,

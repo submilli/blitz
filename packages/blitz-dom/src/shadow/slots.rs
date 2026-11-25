@@ -1,51 +1,7 @@
 //! Manual assignments and the coalesced signal-slot list (DOM slotting algorithms).
 use crate::mutations::MutationRecord;
-use crate::{BaseDocument, DocumentMutator, NodeId};
+use crate::{BaseDocument, NodeId};
 use std::collections::{HashMap, HashSet};
-
-impl DocumentMutator<'_> {
-    /// Assign an ordered set of slottables. References are weak, as in the DOM standard.
-    pub fn assign_slot(&mut self, slot: NodeId, nodes: &[NodeId]) {
-        let mut affected = Vec::new();
-        let old = std::mem::take(&mut self.doc.nodes[slot].manual_slottables);
-        for id in old {
-            if let Some(node) = self.doc.nodes.get_mut(id) {
-                node.manual_slot = None;
-            }
-        }
-        let mut unique = HashSet::new();
-        for &id in nodes {
-            if !unique.insert(id) {
-                continue;
-            }
-            if let Some(previous) = self.doc.nodes[id].manual_slot {
-                if let Some(previous_node) = self.doc.nodes.get_mut(previous) {
-                    previous_node.manual_slottables.retain(|&n| n != id);
-                    if !affected.contains(&previous) {
-                        affected.push(previous);
-                    }
-                }
-            }
-            self.doc.nodes[id].manual_slot = Some(slot);
-            self.doc.nodes[slot].manual_slottables.push(id);
-        }
-        if !affected.contains(&slot) {
-            affected.push(slot);
-        }
-        // The tree algorithm signals changed slots in tree order.
-        let mut roots = Vec::new();
-        for slot in affected {
-            if let Some(root) = self.doc.containing_shadow_root(slot)
-                && !roots.contains(&root)
-            {
-                roots.push(root);
-            }
-        }
-        for root in roots {
-            self.doc.refresh_root_slots(root);
-        }
-    }
-}
 
 impl BaseDocument {
     pub fn has_slot_changes(&self) -> bool {
@@ -82,11 +38,33 @@ impl BaseDocument {
     }
 
     fn refresh_slot_assignment(&mut self, slot: NodeId) {
-        let assigned = self.assigned_nodes(slot);
-        if self.nodes[slot].slot_assignment != assigned {
-            self.nodes[slot].slot_assignment = assigned;
-            self.signal_slot(slot);
+        let assigned = self.current_slot_members(slot);
+        self.update_slot_list(slot, assigned);
+    }
+
+    // A mutation batch may query fallback or removed slots before its root's
+    // settled list has been rebuilt.
+    fn current_slot_members(&self, slot: NodeId) -> Vec<NodeId> {
+        if let Some(root) = self.containing_shadow_root(slot)
+            && self.nodes[root]
+                .shadow_root_data
+                .as_ref()
+                .is_some_and(|data| data.manual_slots)
+            && let Some(host) = self.shadow_host_of(root)
+        {
+            if !self.nodes[slot]
+                .manual_assignment
+                .as_ref()
+                .is_some_and(|g| g.has_members())
+            {
+                return Vec::new();
+            }
+            return self
+                .manual_slot_lists(host, &[slot])
+                .pop()
+                .unwrap_or_default();
         }
+        self.assigned_nodes(slot)
     }
 
     pub(crate) fn refresh_dirty_slots(&mut self) {
@@ -104,19 +82,20 @@ impl BaseDocument {
 
     fn refresh_root_slots(&mut self, root: NodeId) {
         let slots = self.slots_in(root);
+        let Some(host) = self.shadow_host_of(root) else {
+            return;
+        };
         if self.nodes[root]
             .shadow_root_data
             .as_ref()
             .is_some_and(|data| data.manual_slots)
         {
-            for slot in slots {
-                self.refresh_slot_assignment(slot);
+            let assigned = self.manual_slot_lists(host, &slots);
+            for (slot, members) in slots.into_iter().zip(assigned) {
+                self.update_slot_list(slot, members);
             }
             return;
         }
-        let Some(host) = self.shadow_host_of(root) else {
-            return;
-        };
         let mut first = HashMap::new();
         for &slot in &slots {
             first.entry(self.slot_own_name(slot)).or_insert(slot);
@@ -129,11 +108,77 @@ impl BaseDocument {
         }
         for slot in slots {
             let nodes = assigned.remove(&slot).unwrap_or_default();
-            if self.nodes[slot].slot_assignment != nodes {
-                self.nodes[slot].slot_assignment = nodes;
+            self.update_slot_list(slot, nodes);
+        }
+    }
+
+    pub(super) fn refresh_manual_assignment(
+        &mut self,
+        root: NodeId,
+        affected: &HashSet<(usize, NodeId)>,
+    ) {
+        let Some(host) = self.shadow_host_of(root) else {
+            return;
+        };
+        let slots = self.slots_in(root);
+        // Named distribution is independent of manual membership, but an
+        // explicit membership change still signals each affected shadow slot.
+        if !self.nodes[root]
+            .shadow_root_data
+            .as_ref()
+            .is_some_and(|r| r.manual_slots)
+        {
+            for slot in slots {
+                if affected.contains(&(self.id(), slot)) {
+                    self.signal_slot(slot);
+                }
+            }
+            return;
+        }
+        let assigned = self.manual_slot_lists(host, &slots);
+        for (slot, list) in slots.into_iter().zip(assigned) {
+            if affected.contains(&(self.id(), slot)) {
                 self.signal_slot(slot);
             }
+            self.update_slot_list(slot, list);
         }
+    }
+
+    fn update_slot_list(&mut self, slot: NodeId, nodes: Vec<NodeId>) {
+        if self.nodes[slot].slot_assignment != nodes {
+            self.nodes[slot].slot_assignment = nodes;
+            self.signal_slot(slot);
+        }
+    }
+
+    /// Resolve all generations in one pass over the host, preserving assignment
+    /// order even if separately transferred children have changed tree order.
+    pub(super) fn manual_slot_lists(&self, host: NodeId, slots: &[NodeId]) -> Vec<Vec<NodeId>> {
+        let positions: HashMap<_, _> = slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &slot)| {
+                self.nodes[slot]
+                    .manual_assignment
+                    .as_ref()
+                    .map(|group| (std::sync::Arc::as_ptr(group), index))
+            })
+            .collect();
+        let mut lists = vec![Vec::new(); slots.len()];
+        for child in self.slottables(host) {
+            if let Some((member, _)) = &self.nodes[child].manual_slot
+                && let Some(&index) = positions.get(&member.group.as_ptr())
+            {
+                lists[index].push((member.rank, child));
+            }
+        }
+        lists
+            .into_iter()
+            .map(|mut list| {
+                list.sort_unstable_by_key(|&(rank, _)| rank);
+                list.into_iter().map(|(_, node)| node).collect()
+            })
+            .collect()
     }
 
     pub(crate) fn update_slots_after_mutation(&mut self, record: &MutationRecord) {
@@ -146,7 +191,7 @@ impl BaseDocument {
             } => {
                 self.signal_removed_slots(*target, removed);
                 if self.is_html_slot(*target)
-                    && self.assigned_nodes(*target).is_empty()
+                    && self.current_slot_members(*target).is_empty()
                     && self.containing_shadow_root(*target).is_some()
                 {
                     self.signal_slot(*target);
@@ -164,11 +209,14 @@ impl BaseDocument {
         let Some(node) = self.nodes.get(target) else {
             return;
         };
-        let root = self
-            .shadow_root_of(target)
-            .or_else(|| node.parent.and_then(|parent| self.shadow_root_of(parent)))
-            .or_else(|| self.containing_shadow_root(target));
-        if let Some(root) = root {
+        // A nested host's light tree is also part of its enclosing shadow tree.
+        // Inserting a slot there can change both roots' settled projections.
+        let roots = [
+            self.shadow_root_of(target),
+            node.parent.and_then(|parent| self.shadow_root_of(parent)),
+            self.containing_shadow_root(target),
+        ];
+        for root in roots.into_iter().flatten() {
             if !self.dirty_slot_roots.contains(&root) {
                 self.dirty_slot_roots.push(root);
             }
@@ -192,11 +240,21 @@ impl BaseDocument {
         }
         // Removed slots also lose their assignments, even when their former
         // shadow tree is no longer reachable through the slot's ancestors.
+        let manual = self
+            .containing_shadow_root(target)
+            .and_then(|root| self.nodes[root].shadow_root_data.as_ref())
+            .is_some_and(|r| r.manual_slots);
         let mut pending = removed.to_vec();
         while let Some(id) = pending.pop() {
             if let Some(node) = self.nodes.get(id) {
                 pending.extend(node.children.iter().copied());
-                if !node.slot_assignment.is_empty() {
+                if !node.slot_assignment.is_empty()
+                    || (manual
+                        && node
+                            .manual_assignment
+                            .as_ref()
+                            .is_some_and(|group| group.has_members()))
+                {
                     if !self.removed_slots.contains(&id) {
                         self.removed_slots.push(id);
                     }
@@ -206,7 +264,7 @@ impl BaseDocument {
         }
     }
 
-    fn is_html_slot(&self, id: NodeId) -> bool {
+    pub(super) fn is_html_slot(&self, id: NodeId) -> bool {
         self.nodes
             .get(id)
             .and_then(|node| node.element_data())

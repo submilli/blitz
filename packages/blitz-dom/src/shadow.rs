@@ -16,7 +16,10 @@
 
 mod signals;
 pub(crate) use signals::{SlotSignals, Split};
+mod manual;
 mod slots;
+pub use manual::assign_manual_slot;
+pub(crate) use manual::{ManualAssignment, ManualMember};
 #[cfg(test)]
 mod tests;
 
@@ -234,9 +237,7 @@ impl BaseDocument {
         let host = slottable.parent?;
         let root = self.shadow_root_of(host)?;
         if self.nodes[root].shadow_root_data.as_ref()?.manual_slots {
-            let slot = slottable.manual_slot?;
-            self.nodes.get(slot)?;
-            return (self.containing_shadow_root(slot) == Some(root)).then_some(slot);
+            return self.manual_slot_in_root(node, root);
         }
         let name = self.slot_name(node);
         self.slots_in(root)
@@ -263,16 +264,7 @@ impl BaseDocument {
             .as_ref()
             .is_some_and(|data| data.manual_slots)
         {
-            return self.nodes[slot]
-                .manual_slottables
-                .iter()
-                .copied()
-                .filter(|&id| {
-                    self.nodes.get(id).is_some_and(|node| {
-                        node.parent == Some(host) && node.manual_slot == Some(slot)
-                    })
-                })
-                .collect();
+            return self.nodes[slot].slot_assignment.clone();
         }
         let name = self.slot_own_name(slot);
         // Only the first slot of a name receives nodes.
@@ -304,27 +296,31 @@ impl BaseDocument {
                 self.set_flat_parent(child, FlatParent::Node(host));
             }
             let slots = self.slots_in(root);
-            let assigned: Vec<_> = slots
+            let assigned = if self.nodes[root]
+                .shadow_root_data
+                .as_ref()
+                .is_some_and(|data| data.manual_slots)
+            {
+                self.manual_slot_lists(host, &slots)
+            } else {
+                slots
+                    .iter()
+                    .map(|&slot| self.assigned_nodes(slot))
+                    .collect()
+            };
+            let parents: std::collections::HashMap<_, _> = slots
                 .iter()
-                .map(|&slot| (slot, self.assigned_nodes(slot)))
+                .zip(&assigned)
+                .flat_map(|(&slot, nodes)| nodes.iter().map(move |&child| (child, slot)))
                 .collect();
-            for child in self.slottables(host).collect::<Vec<_>>() {
-                let parent = self
-                    .assigned_slot(child)
+            for child in self.nodes[host].children.clone() {
+                let parent = parents
+                    .get(&child)
+                    .copied()
                     .map_or(FlatParent::None, FlatParent::Node);
                 self.set_flat_parent(child, parent);
             }
-            // Comments and the like under a host are never rendered.
-            let host_children = self.nodes[host].children.clone();
-            for child in host_children {
-                if !matches!(
-                    self.nodes[child].data,
-                    NodeData::Element(_) | NodeData::Text(_)
-                ) {
-                    self.set_flat_parent(child, FlatParent::None);
-                }
-            }
-            for (slot, nodes) in assigned {
+            for (slot, nodes) in slots.into_iter().zip(assigned) {
                 // A slot with nothing assigned shows its own children.
                 self.set_composed_children(slot, (!nodes.is_empty()).then_some(nodes));
             }

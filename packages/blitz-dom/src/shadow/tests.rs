@@ -135,7 +135,7 @@ fn flatten_preserves_a_light_tree_slot_and_manual_references_are_weak() {
     doc.mutate().assign_slot(slot, &[foreign]);
     doc.reclaim_detached_nodes(&[host]);
     assert!(doc.get_node(foreign).is_none());
-    assert!(doc.nodes[slot].manual_slottables.is_empty());
+    assert_eq!(doc.assigned_nodes(slot), vec![light]);
 }
 #[test]
 fn delegated_focus_obeys_shadow_ancestors_and_retargets_active_element() {
@@ -289,4 +289,67 @@ fn retired_slot_drops_local_edits_but_preserves_an_incoming_signal_on_return() {
     retired.transfer_slot_changes(&mut source, &[(parked, slot)].into());
     assert_eq!(source.take_slot_changes(), [slot]);
     assert!(retired.take_slot_changes().is_empty());
+}
+
+#[test]
+fn detached_manual_members_signal_in_tree_order_and_do_not_survive_collection() {
+    let mut doc = BaseDocument::new(Default::default());
+    let (host, root, first) = shadow(&mut doc, true);
+    let second = element(&mut doc, "slot");
+    doc.mutate().append_children(root, &[second]);
+    let a = element(&mut doc, "i");
+    let b = element(&mut doc, "b");
+    doc.mutate().assign_slot(first, &[a, b]);
+    assert_eq!(doc.take_slot_changes(), [first]);
+    doc.mutate().assign_slot(first, &[a, a, b]);
+    assert!(doc.take_slot_changes().is_empty());
+    doc.mutate().assign_slot(first, &[b, a]);
+    assert_eq!(doc.take_slot_changes(), [first]);
+    doc.mutate().assign_slot(second, &[a]);
+    assert_eq!(doc.take_slot_changes(), [first, second]);
+    doc.mutate().assign_slot(first, &[b]);
+    assert!(doc.take_slot_changes().is_empty());
+    doc.reclaim_detached_nodes(&[host]);
+    assert!(doc.get_node(a).is_none() && doc.get_node(b).is_none());
+    doc.mutate().assign_slot(first, &[]);
+    doc.mutate().assign_slot(second, &[]);
+    assert!(doc.take_slot_changes().is_empty());
+}
+
+#[test]
+fn off_host_manual_members_signal_named_roots_and_manual_removal() {
+    for manual in [true, false] {
+        let mut doc = BaseDocument::new(Default::default());
+        let (_, root, slot) = shadow(&mut doc, manual);
+        let member = element(&mut doc, "span");
+        doc.mutate().assign_slot(slot, &[member]);
+        assert_eq!(doc.take_slot_changes(), [slot]);
+        assert!(doc.assigned_nodes(slot).is_empty());
+        doc.mutate().remove_node(slot);
+        assert_eq!(
+            doc.take_slot_changes(),
+            if manual { vec![slot] } else { vec![] }
+        );
+        doc.mutate().append_children(root, &[slot]);
+        assert!(doc.take_slot_changes().is_empty());
+        doc.mutate().assign_slot(slot, &[]);
+        assert_eq!(doc.take_slot_changes(), [slot]);
+    }
+}
+
+#[test]
+fn nested_hosts_refresh_the_enclosing_manual_slots() {
+    let mut doc = BaseDocument::new(Default::default());
+    let (host, root, slot) = shadow(&mut doc, true);
+    let (nested, _, _) = shadow(&mut doc, false);
+    doc.mutate().append_children(root, &[nested]);
+    let child = element(&mut doc, "b");
+    doc.mutate().append_children(host, &[child]);
+    doc.mutate().remove_node(slot);
+    doc.mutate().assign_slot(slot, &[child]);
+    doc.mutate().append_children(nested, &[slot]);
+    assert_eq!(doc.assigned_slot(child), Some(slot));
+    assert_eq!(doc.assigned_nodes(slot), [child]);
+    doc.mutate().remove_node(slot);
+    assert!(doc.assigned_nodes(slot).is_empty());
 }

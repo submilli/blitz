@@ -355,3 +355,83 @@ fn copied_template_contents_preserve_pending_observations() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].target(), observer_target);
 }
+
+#[test]
+fn manual_assignment_survives_independent_transfer_and_discarded_staging() {
+    let (mut home, host) = source();
+    let slot = home.nodes[home.shadow_root_of(host).unwrap()].children[0];
+    let first = home.nodes[host].children[0];
+    let second = element(&mut home, "b");
+    append(&mut home, host, second);
+    home.mutate().assign_slot(slot, &[second, first]);
+
+    let mut away = BaseDocument::new(Default::default());
+    let away_doc = away.root_node_id;
+    let staged = away
+        .mutate()
+        .try_import_foreign(&home, first, away_doc, ImportMode::Transfer)
+        .unwrap();
+    away.mutate().discard_import(staged);
+    assert_eq!(home.assigned_nodes(slot), [second, first]);
+
+    let moved = away
+        .mutate()
+        .try_import_foreign(&home, first, away_doc, ImportMode::Transfer)
+        .unwrap()
+        .root();
+    home.mutate().remove_node(first);
+    home.transfer_manual_slots(&away, [(first, moved)]);
+    home.reclaim_detached_nodes(&[host]);
+    let home_doc = home.root_node_id;
+    let returned = home
+        .mutate()
+        .try_import_foreign(&away, moved, home_doc, ImportMode::Transfer)
+        .unwrap()
+        .root();
+    away.transfer_manual_slots(&home, [(moved, returned)]);
+    home.mutate().insert_nodes_before(second, &[returned]);
+    assert_eq!(home.assigned_slot(returned), Some(slot));
+    assert_eq!(home.assigned_nodes(slot), [second, returned]);
+
+    let staged = away
+        .mutate()
+        .try_import_foreign(&home, slot, away_doc, ImportMode::Transfer)
+        .unwrap();
+    away.mutate().discard_import(staged);
+    assert_eq!(home.manual_slot_document(returned), Some(home.id()));
+    let moved_slot = away
+        .mutate()
+        .try_import_foreign(&home, slot, away_doc, ImportMode::Transfer)
+        .unwrap()
+        .root();
+    home.mutate().remove_node(slot);
+    home.transfer_manual_slots(&away, [(slot, moved_slot)]);
+    assert_eq!(home.manual_slot_document(returned), Some(away.id()));
+    assert_eq!(home.assigned_slot(returned), None);
+    let returned_slot = home
+        .mutate()
+        .try_import_foreign(&away, moved_slot, home_doc, ImportMode::Transfer)
+        .unwrap()
+        .root();
+    away.transfer_manual_slots(&home, [(moved_slot, returned_slot)]);
+    let shadow = home.shadow_root_of(host).unwrap();
+    append(&mut home, shadow, returned_slot);
+    let staged = away
+        .mutate()
+        .try_import_foreign(&home, host, away_doc, ImportMode::Transfer)
+        .unwrap();
+    let ids: std::collections::HashMap<_, _> = staged.pairs().iter().copied().collect();
+    assert_eq!(
+        away.assigned_slot(ids[&returned]),
+        Some(ids[&returned_slot])
+    );
+    assert_eq!(
+        away.assigned_nodes(ids[&returned_slot]),
+        [ids[&second], ids[&returned]]
+    );
+    home.mutate().assign_slot(returned_slot, &[]);
+    assert_eq!(home.assigned_slot(returned), None);
+    assert!(home.assigned_nodes(returned_slot).is_empty());
+    away.mutate().discard_import(staged);
+    assert_eq!(home.assigned_slot(returned), None);
+}

@@ -212,12 +212,6 @@ impl DocumentMutator<'_> {
         let map: HashMap<NodeId, NodeId> = imported.pairs().iter().copied().collect();
         for &(from, to) in imported.pairs() {
             let node = &source.nodes[from];
-            let manual_slot = node.manual_slot.and_then(|slot| map.get(&slot).copied());
-            let manual_slottables = node
-                .manual_slottables
-                .iter()
-                .filter_map(|id| map.get(id).copied())
-                .collect();
             let anchor = node
                 .element_data()
                 .and_then(|element| element.custom_internals.as_ref())
@@ -229,8 +223,11 @@ impl DocumentMutator<'_> {
                 .iter()
                 .filter_map(|id| map.get(id).copied())
                 .collect();
-            target.manual_slot = manual_slot;
-            target.manual_slottables = manual_slottables;
+            target.manual_slot = node.manual_slot.as_ref().map(|(member, hint)| {
+                let local = member.local_slot(source.id(), *hint);
+                (member.clone(), map.get(&local).copied().unwrap_or(local))
+            });
+            target.manual_assignment.clone_from(&node.manual_assignment);
             if let Some(internals) = target
                 .element_data_mut()
                 .and_then(|element| element.custom_internals.as_mut())
