@@ -124,9 +124,17 @@ impl DocAccess for SharedDocument {
     }
 }
 
+/// Route raw text for one open script through the target arena's normal
+/// text merge, mutation logging, and allocation limits.
+pub(crate) struct ScriptTextTarget {
+    pub original: NodeId,
+    pub append: Box<dyn Fn(StrTendril) -> bool>,
+}
+
 /// An html5ever tree sink building a Blitz document.
 pub struct HtmlSink<A: DocAccess> {
     access: A,
+    pub(crate) script_text_target: Option<ScriptTextTarget>,
 
     /// Errors that occurred during parsing.
     pub errors: RefCell<Vec<Cow<'static, str>>>,
@@ -164,6 +172,7 @@ impl<A: DocAccess> HtmlSink<A> {
     pub fn with_access(access: A) -> Self {
         HtmlSink {
             access,
+            script_text_target: None,
             errors: RefCell::new(Vec::new()),
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
             is_xml: false,
@@ -199,6 +208,15 @@ impl<A: DocAccess> HtmlSink<A> {
 
     /// Append `child` to `parent`, merging text into a last text child.
     fn append_to(&self, parent: NodeId, child: NodeOrText<ParserHandle>) {
+        if let Some(target) = &self.script_text_target
+            && target.original == parent
+            && let NodeOrText::AppendText(text) = child
+        {
+            if !(target.append)(text) {
+                self.exhausted.set(true);
+            }
+            return;
+        }
         match child {
             NodeOrText::AppendNode(child) => {
                 if let Some(id) = child.node_id() {
@@ -225,6 +243,22 @@ impl<A: DocAccess> HtmlSink<A> {
                 }
             }
         }
+    }
+
+    pub(crate) fn redirect_script_text(
+        &mut self,
+        original: NodeId,
+        document: Rc<RefCell<BaseDocument>>,
+        target: NodeId,
+    ) {
+        let sink = HtmlSink::with_access(SharedDocument(document));
+        self.script_text_target = Some(ScriptTextTarget {
+            original,
+            append: Box::new(move |text| {
+                sink.append_to(target, NodeOrText::AppendText(text));
+                !sink.node_limit_exceeded()
+            }),
+        });
     }
 
     /// Insert `child` before `sibling`, merging text into a previous text

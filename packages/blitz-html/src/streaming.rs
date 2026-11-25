@@ -121,6 +121,45 @@ impl<A: DocAccess> StreamingParser<A> {
         }
     }
 
+    /// Script awaiting its end tag, identified in the parser's original arena.
+    pub fn open_script(&self) -> Option<NodeId> {
+        let handle = self.tokenizer.as_ref()?.sink.0.current_open_element()?;
+        let name = handle.node_name();
+        if name.ns == html5ever::ns!(html) && name.local == html5ever::local_name!("script") {
+            handle.node_id()
+        } else {
+            None
+        }
+    }
+
+    /// Resume after the open script moved into another arena. Only raw text
+    /// inserted into that script follows it. Later tokens use the parser document.
+    pub fn run_after_script_adoption(
+        &mut self,
+        document: Rc<RefCell<BaseDocument>>,
+        target: NodeId,
+        written: bool,
+    ) -> ParseStep {
+        if let Some(original) = self.open_script()
+            && let Some(tokenizer) = &mut self.tokenizer
+        {
+            tokenizer
+                .sink
+                .0
+                .sink
+                .redirect_script_text(original, document, target);
+        }
+        let step = if written {
+            self.run_written()
+        } else {
+            self.run()
+        };
+        if let Some(tokenizer) = &mut self.tokenizer {
+            tokenizer.sink.0.sink.script_text_target = None;
+        }
+        step
+    }
+
     /// Stop before creating elements whose name `lookup` reports defined.
     pub fn set_definition_lookup(&mut self, lookup: DefinitionLookup) {
         if let Some(tokenizer) = &mut self.tokenizer {

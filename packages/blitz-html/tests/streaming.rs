@@ -276,3 +276,40 @@ fn only_a_live_frame_target_yields_an_executable_parser_script() {
         );
     }
 }
+
+#[test]
+fn an_open_script_keeps_its_original_handle_until_the_end_tag() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    let target = doc.borrow_mut().mutate().create_document_node();
+    let mut parser = StreamingParser::for_frame_document(doc, target);
+    parser.write("<script>1");
+    assert!(matches!(parser.run_written(), ParseStep::Done));
+    let script = parser.open_script().expect("script awaiting its end tag");
+    parser.write("</script>");
+    assert!(matches!(parser.run_written(), ParseStep::Script(node) if node == script));
+    assert_eq!(parser.open_script(), None);
+}
+
+#[test]
+fn text_after_adoption_follows_the_open_script_only() {
+    use blitz_dom::{QualName, ns};
+    let source = Rc::new(RefCell::new(BaseDocument::new(Default::default())));
+    let mut parser = StreamingParser::new(source.clone());
+    parser.write("<body><script>");
+    assert!(matches!(parser.run_written(), ParseStep::Done));
+    let original = parser.open_script().unwrap();
+    let target = Rc::new(RefCell::new(BaseDocument::new(Default::default())));
+    let moved = target
+        .borrow_mut()
+        .mutate()
+        .create_element(QualName::new(None, ns!(html), "script".into()), vec![]);
+    parser.write("1</script><p>after</p>");
+    assert!(
+        matches!(parser.run_after_script_adoption(target.clone(), moved, true),
+        ParseStep::Script(id) if id == original)
+    );
+    assert_eq!(target.borrow().script_source(moved), "1");
+    assert!(source.borrow().script_source(original).is_empty());
+    assert!(matches!(parser.run_written(), ParseStep::Done));
+    assert!(body_html(&source).ends_with("<p>after</p>"));
+}

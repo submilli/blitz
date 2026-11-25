@@ -799,6 +799,11 @@ where
     }
     //§ END
 
+    /// The innermost open element while incremental input is suspended.
+    pub fn current_open_element(&self) -> Option<Handle> {
+        self.open_elems.borrow().last().cloned()
+    }
+
     fn current_node(&self) -> Ref<'_, Handle> {
         Ref::map(self.open_elems.borrow(), |elems| {
             elems.last().expect("no current element")
