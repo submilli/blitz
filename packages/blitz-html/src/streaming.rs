@@ -66,6 +66,14 @@ impl StreamingParser<SharedDocument> {
         Self::with_target(doc, Some(document))
     }
 
+    /// Parse a live frame Document hosted in the embedding document's arena.
+    /// Its scripts pause for preparation and its tree has a browsing context.
+    pub fn for_frame_document(doc: Rc<RefCell<BaseDocument>>, document: NodeId) -> Self {
+        let mut sink = HtmlSink::with_access(SharedDocument(doc));
+        sink.document_node = Some(document);
+        Self::from_sink(sink, true)
+    }
+
     fn with_target(doc: Rc<RefCell<BaseDocument>>, document: Option<NodeId>) -> Self {
         Self::with_access(SharedDocument(doc), document)
     }
@@ -87,11 +95,15 @@ impl<A: DocAccess> StreamingParser<A> {
         let mut sink = HtmlSink::with_access(access);
         sink.document_node = document;
         sink.fragment = document.is_some();
+        Self::from_sink(sink, document.is_none() && scripting_enabled)
+    }
+
+    fn from_sink(sink: HtmlSink<A>, scripting_enabled: bool) -> Self {
         let tree_builder = TreeBuilder::new(
             sink,
             TreeBuilderOpts {
                 exact_errors: false,
-                scripting_enabled: document.is_none() && scripting_enabled,
+                scripting_enabled,
                 iframe_srcdoc: false,
                 drop_doctype: false,
                 quirks_mode: QuirksMode::NoQuirks,

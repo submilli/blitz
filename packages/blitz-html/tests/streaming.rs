@@ -252,3 +252,27 @@ fn detached_document_chunks_preserve_nodes_mutations_and_partial_tokens() {
     assert!(parser.is_finished());
     assert!(doc.borrow().root_node().children.is_empty());
 }
+
+#[test]
+fn only_a_live_frame_target_yields_an_executable_parser_script() {
+    let doc = Rc::new(RefCell::new(BaseDocument::new(DocumentConfig::default())));
+    for live in [false, true] {
+        let target = doc.borrow_mut().mutate().create_document_node();
+        let mut parser = if live {
+            StreamingParser::for_frame_document(doc.clone(), target)
+        } else {
+            StreamingParser::for_document_node(doc.clone(), target)
+        };
+        parser.feed("<script src='a.js'></script>");
+        let ParseStep::Script(script) = parser.run() else {
+            panic!("expected the parser to pause at the closing script tag");
+        };
+        assert_eq!(doc.borrow().node_document(script), target);
+        assert_eq!(
+            doc.borrow_mut()
+                .start_script_preparation(script, true)
+                .is_some(),
+            live
+        );
+    }
+}
