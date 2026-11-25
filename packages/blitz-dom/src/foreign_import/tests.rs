@@ -190,6 +190,32 @@ fn transfer_rebuilds_shadow_template_slot_and_control_state() {
 }
 
 #[test]
+fn transferring_a_settled_slot_does_not_signal_reconstruction() {
+    let (mut source, host) = source();
+    let shadow = source.shadow_root_of(host).unwrap();
+    let slot = source.nodes[shadow].children[0];
+    let fallback = source.mutate().create_text_node("fallback");
+    append(&mut source, slot, fallback);
+    assert_eq!(source.take_slot_changes(), [slot]);
+
+    let (mut target, other_host) = self::source();
+    let other_root = target.shadow_root_of(other_host).unwrap();
+    let pending = target.nodes[other_root].children[0];
+    let owner = target.root_node_id;
+    let moved = target
+        .mutate()
+        .try_import_foreign(&source, host, owner, ImportMode::Transfer)
+        .unwrap();
+    assert_eq!(target.take_slot_changes(), [pending]);
+    let shadow = target.shadow_root_of(moved.root()).unwrap();
+    let slot = target.nodes[shadow].children[0];
+    let light = target.nodes[moved.root()].children[0];
+    assert_eq!(target.assigned_nodes(slot), [light]);
+    target.mutate().remove_node(light);
+    assert_eq!(target.take_slot_changes(), [slot]);
+}
+
+#[test]
 fn copy_follows_clone_steps() {
     let (source, root) = source();
     let mut target = BaseDocument::new(DocumentConfig::default());

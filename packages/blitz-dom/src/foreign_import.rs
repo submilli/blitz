@@ -67,7 +67,14 @@ impl DocumentMutator<'_> {
             .map_err(|_| DomError::QuotaExceeded)?;
         // Building a detached tree is not an observable mutation.
         let log = self.doc.mutation_log.take();
+        // Appending fallback children to an unpublished transfer can signal its
+        // new slot. Only observable edits to the logical slot should notify.
+        let signals =
+            (mode == ImportMode::Transfer).then(|| std::mem::take(&mut self.doc.slot_changes));
         let imported = self.build(source, root, document, mode);
+        if let Some(signals) = signals {
+            self.doc.slot_changes = signals;
+        }
         self.doc.mutation_log = log;
         if mode == ImportMode::Transfer {
             self.link_transferred(source, &imported);
@@ -217,6 +224,11 @@ impl DocumentMutator<'_> {
                 .and_then(|internals| internals.anchor)
                 .and_then(|anchor| map.get(&anchor).copied());
             let target = &mut self.doc.nodes[to];
+            target.slot_assignment = node
+                .slot_assignment
+                .iter()
+                .filter_map(|id| map.get(id).copied())
+                .collect();
             target.manual_slot = manual_slot;
             target.manual_slottables = manual_slottables;
             if let Some(internals) = target
