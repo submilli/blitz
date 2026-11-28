@@ -56,7 +56,7 @@ impl Node {
         let mut path = smallvec::SmallVec::<[&Node; 16]>::new();
         let mut current = self;
         let mut flags = loop {
-            let cached = current.editing_cache.load(Ordering::Relaxed);
+            let cached = current.editing_cache().load(Ordering::Relaxed);
             if cached & !FLAGS == generation {
                 break cached & FLAGS;
             }
@@ -86,7 +86,7 @@ impl Node {
                     flags &= !ATTRIBUTE
                 }
             }
-            node.editing_cache
+            node.editing_cache()
                 .store(generation | flags, Ordering::Relaxed);
         }
         flags != 0

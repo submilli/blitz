@@ -89,7 +89,7 @@ impl NodeTree {
             .checked_add(GENERATION_STEP)
             .unwrap_or_else(|| {
                 for node in self.map.values_mut() {
-                    *node.editing_cache.get_mut() = 0;
+                    node.editing_cache().store(0, Ordering::Relaxed);
                 }
                 GENERATION_STEP
             });

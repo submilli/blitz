@@ -147,7 +147,7 @@ pub struct Node {
     pub id: NodeId,
     /// Stylo needs a stable address even when arena storage moves. Its allocation
     /// also holds the inherited editing cache, keeping that word out of every slot.
-    pub(crate) editing_cache: Box<AtomicU64>,
+    editing_cache: Box<AtomicU64>,
     /// Persistent node document; Document nodes point to themselves.
     pub(crate) owner_document: NodeId,
     /// Appropriate inert template document (Document nodes only).
@@ -1107,6 +1107,10 @@ impl TextNodeData {
 // }
 
 impl Node {
+    pub(crate) fn editing_cache(&self) -> &AtomicU64 {
+        &self.editing_cache
+    }
+
     pub(crate) fn style_identity(&self) -> std::ptr::NonNull<()> {
         std::ptr::NonNull::from(self.editing_cache.as_ref()).cast()
     }
