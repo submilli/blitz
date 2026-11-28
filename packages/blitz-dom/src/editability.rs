@@ -153,3 +153,8 @@ mod tests {
         assert!(doc.nodes[element].is_content_editable());
     }
 }
+
+// The Wasm guest budgets DOM arena slots across the full document capacity.
+// Editability shares the existing stable identity allocation to preserve this bound.
+#[cfg(target_arch = "wasm32")]
+const _: () = assert!(std::mem::size_of::<Node>() <= 360);

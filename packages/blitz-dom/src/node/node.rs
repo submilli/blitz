@@ -145,8 +145,9 @@ pub struct Node {
 
     /// Our Id
     pub id: NodeId,
-    /// Stable pointer-sized identity for Stylo, including on wasm32.
-    style_identity: Box<u8>,
+    /// Stylo needs a stable address even when arena storage moves. Its allocation
+    /// also holds the inherited editing cache, keeping that word out of every slot.
+    pub(crate) editing_cache: Box<AtomicU64>,
     /// Persistent node document; Document nodes point to themselves.
     pub(crate) owner_document: NodeId,
     /// Appropriate inert template document (Document nodes only).
@@ -190,7 +191,6 @@ pub struct Node {
     /// containers, including documents and shadow-root fragments.
     selector_flags: Cell<ElementSelectorFlags>,
 
-    pub(crate) editing_cache: AtomicU64,
     /// For a shadow root (a fragment attached to a host element): its host
     /// and options. `None` for every other node.
     pub shadow_root_data: Option<Box<ShadowRootData>>,
@@ -494,7 +494,7 @@ impl Node {
             tree,
 
             id,
-            style_identity: Box::new(0),
+            editing_cache: Box::default(),
             owner_document: id,
             template_document: None,
             parent: None,
@@ -511,7 +511,6 @@ impl Node {
 
             flags: NodeFlags::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
-            editing_cache: AtomicU64::new(0),
             shadow_root_data: None,
             template_host: None,
             manual_slot: None,
@@ -1109,7 +1108,7 @@ impl TextNodeData {
 
 impl Node {
     pub(crate) fn style_identity(&self) -> std::ptr::NonNull<()> {
-        std::ptr::NonNull::from(self.style_identity.as_ref()).cast()
+        std::ptr::NonNull::from(self.editing_cache.as_ref()).cast()
     }
 
     pub fn tree(&self) -> &crate::NodeTree {
