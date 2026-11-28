@@ -17,7 +17,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt::Write;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use style::computed_values::isolation::T as Isolation;
 use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
 use style::invalidation::element::restyle_hints::RestyleHint;
@@ -190,6 +190,7 @@ pub struct Node {
     /// containers, including documents and shadow-root fragments.
     selector_flags: Cell<ElementSelectorFlags>,
 
+    pub(crate) editing_cache: AtomicU64,
     /// For a shadow root (a fragment attached to a host element): its host
     /// and options. `None` for every other node.
     pub shadow_root_data: Option<Box<ShadowRootData>>,
@@ -510,6 +511,7 @@ impl Node {
 
             flags: NodeFlags::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
+            editing_cache: AtomicU64::new(0),
             shadow_root_data: None,
             template_host: None,
             manual_slot: None,

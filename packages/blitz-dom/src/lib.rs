@@ -134,6 +134,7 @@ pub use click_activation::{Activated, ClickActivation};
 mod placement;
 pub use placement::Placement;
 mod disabled;
+mod editability;
 mod focus;
 mod geometry;
 pub use geometry::{BoxMetrics, IntersectionGeometry, ResizeGeometry, VisibilityBudget};

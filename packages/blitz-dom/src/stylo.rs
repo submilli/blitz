@@ -530,9 +530,7 @@ impl selectors::Element for BlitzNode<'_> {
                 .element_data()
                 .is_some_and(|el| el.custom_element_state.is_defined()),
             NonTSPseudoClass::Disabled => self.is_disabled(),
-            NonTSPseudoClass::Enabled => self
-                .effective_element_state()
-                .contains(ElementState::ENABLED),
+            NonTSPseudoClass::Enabled => self.control_state().contains(ElementState::ENABLED),
             NonTSPseudoClass::Focus => self.element_state().contains(ElementState::FOCUS),
             NonTSPseudoClass::FocusWithin => false,
             NonTSPseudoClass::FocusVisible => false,
@@ -545,8 +543,12 @@ impl selectors::Element for BlitzNode<'_> {
                 .is_some_and(|e| e.custom_states.contains(&name.0)),
             NonTSPseudoClass::Link => self.element_state().contains(ElementState::UNVISITED),
             NonTSPseudoClass::PlaceholderShown => false,
-            NonTSPseudoClass::ReadWrite => false,
-            NonTSPseudoClass::ReadOnly => false,
+            NonTSPseudoClass::ReadWrite => self
+                .effective_element_state()
+                .contains(ElementState::READWRITE),
+            NonTSPseudoClass::ReadOnly => self
+                .effective_element_state()
+                .contains(ElementState::READONLY),
             NonTSPseudoClass::ServoNonZeroBorder => false,
             NonTSPseudoClass::Target => false,
             NonTSPseudoClass::Visited => false,

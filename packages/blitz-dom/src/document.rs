@@ -1719,7 +1719,7 @@ impl BaseDocument {
     }
 
     fn snapshot_node_impl(&mut self, node_id: NodeId, capture_attrs: bool) {
-        let node = &mut self.nodes[node_id];
+        let node = &self.nodes[node_id];
 
         // Do not snapshot nodes that have never been styled. A snapshot records an element's
         // pre-mutation state so a restyle can diff selector matches then-vs-now. An element
@@ -1730,10 +1730,8 @@ impl BaseDocument {
             return;
         }
 
-        let opaque_node_id = TNode::opaque(&&*node);
-        node.set_has_snapshot(true);
-        node.snapshot_handled()
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let opaque_node_id = TNode::opaque(&node);
+        self.nodes.mark_pending_snapshot(node_id);
 
         // A snapshot records the element's state/attributes as they were *before the first
         // mutation* since the last style flush (matching Gecko's ServoElementSnapshot
@@ -1834,6 +1832,13 @@ impl BaseDocument {
             self.snapshot_node_state_only(node_id);
         }
         cb(&mut self.nodes[node_id]);
+    }
+
+    fn set_pointer_state(&mut self, id: NodeId, state: ElementState, enabled: bool) {
+        if self.style_depends_on_state(state) {
+            self.snapshot_node_state_only(id);
+        }
+        self.nodes.set_pointer_state(id, state, enabled);
     }
 
     // Takes (x, y) co-ordinates (relative to the )
@@ -2015,7 +2020,7 @@ impl BaseDocument {
 
         let node_path = self.maybe_node_layout_ancestors(active_node_id);
         for &id in node_path.iter() {
-            self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.active());
+            self.set_pointer_state(id, ElementState::ACTIVE, true);
         }
 
         self.active_node_id = active_node_id;
@@ -2030,7 +2035,7 @@ impl BaseDocument {
 
         let node_path = self.maybe_node_layout_ancestors(Some(active_node_id));
         for &id in node_path.iter() {
-            self.snapshot_node_and(id, ElementState::ACTIVE, |node| node.unactive());
+            self.set_pointer_state(id, ElementState::ACTIVE, false);
         }
 
         true
@@ -2181,10 +2186,10 @@ impl BaseDocument {
             .take_while(|(o, n)| o == n)
             .count();
         for &id in old_node_path.iter().skip(same_count) {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.unhover());
+            self.set_pointer_state(id, ElementState::HOVER, false);
         }
         for &id in new_node_path.iter().skip(same_count) {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.hover());
+            self.set_pointer_state(id, ElementState::HOVER, true);
         }
 
         self.hover_node_id = hover_node_id;
@@ -2210,7 +2215,7 @@ impl BaseDocument {
 
         let old_node_path = self.maybe_node_layout_ancestors(Some(hover_node_id));
         for &id in old_node_path.iter() {
-            self.snapshot_node_and(id, ElementState::HOVER, |node| node.unhover());
+            self.set_pointer_state(id, ElementState::HOVER, false);
         }
 
         self.hover_node_id = None;

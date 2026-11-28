@@ -35,7 +35,7 @@ impl Node {
     }
 
     /// Project ancestry-dependent state without caching it across tree mutations.
-    pub(crate) fn effective_element_state(&self) -> ElementState {
+    pub(crate) fn control_state(&self) -> ElementState {
         let mut state = *self.element_state();
         if self.element_data().is_some_and(|e| e.can_be_disabled()) {
             let disabled = self.is_disabled();

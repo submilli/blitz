@@ -268,6 +268,7 @@ impl DocumentData {
 /// carries the same style/layout fields that were previously stored directly on
 /// [`Node`](super::Node).
 pub struct DocumentData {
+    pub(crate) design_mode: bool,
     pub metadata: crate::DocumentMetadata,
     pub(crate) base: crate::document_base::DocumentBase,
     pub stylo_element_data: StyloData,
@@ -307,6 +308,7 @@ impl std::fmt::Debug for DocumentData {
 impl DocumentData {
     pub fn new() -> Self {
         Self {
+            design_mode: false,
             metadata: Default::default(),
             base: Default::default(),
             stylo_element_data: Default::default(),

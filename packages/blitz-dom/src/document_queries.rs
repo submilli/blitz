@@ -47,7 +47,7 @@ impl BaseDocument {
         self.html_child_named(root, &["body", "frameset"])
     }
 
-    fn document_element_node(&self, document: NodeId) -> Option<&crate::Node> {
+    pub(crate) fn document_element_node(&self, document: NodeId) -> Option<&crate::Node> {
         let document = self.get_node(document)?;
         if !matches!(document.data, crate::NodeData::Document(_)) {
             return None;

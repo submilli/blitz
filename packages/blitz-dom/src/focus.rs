@@ -43,13 +43,7 @@ impl Node {
                     .is_some_and(|e| e.name.ns == ns!(html) && &*e.name.local == "details")
                     && parent.children.first_summary(self.tree()) == Some(self.id)
             }),
-            _ => element
-                .attr(local_name!("contenteditable"))
-                .is_some_and(|v| {
-                    v.is_empty()
-                        || v.eq_ignore_ascii_case("true")
-                        || v.eq_ignore_ascii_case("plaintext-only")
-                }),
+            _ => element.content_editable_keyword() == Some(true),
         }
     }
 

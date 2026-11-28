@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use blitz_traits::node_id::NodeId;
 use slotmap::{Key as _, KeyData, SlotMap};
 
-use crate::Node;
+use crate::{Node, editability::GENERATION_STEP};
 
 slotmap::new_key_type! {
     /// The internal [`slotmap`] key for node storage. Only used at the
@@ -35,6 +35,7 @@ fn to_id(key: NodeKey) -> NodeId {
 pub struct NodeTree {
     map: SlotMap<NodeKey, Node>,
     style_ids: HashMap<usize, NodeId>,
+    pub(crate) editing_generation: u64,
     // Prepared before style traversal, immutable across its worker threads.
     // Every mutable node access invalidates it, including direct embedder edits.
     style_roots: Option<HashMap<NodeId, NodeId>>,
@@ -54,6 +55,7 @@ impl NodeTree {
             map: SlotMap::with_key(),
             style_ids: HashMap::new(),
             style_roots: None,
+            editing_generation: GENERATION_STEP,
             geometry_generation: AtomicU64::new(1),
             viewport_scroll: crate::Point::ZERO,
         }
@@ -77,6 +79,20 @@ impl NodeTree {
 
     pub(crate) fn bump_geometry_generation(&self) {
         self.geometry_generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn invalidate_ancestry(&mut self) {
+        self.style_roots = None;
+        // Editing cache entries use the low two bits for inherited state.
+        self.editing_generation = self
+            .editing_generation
+            .checked_add(GENERATION_STEP)
+            .unwrap_or_else(|| {
+                for node in self.map.values_mut() {
+                    *node.editing_cache.get_mut() = 0;
+                }
+                GENERATION_STEP
+            });
     }
 
     /// Cache DOM roots once for style matching, which queries each element's
@@ -139,8 +155,28 @@ impl NodeTree {
 
     /// Get a mutable reference to the node with the given id, if it is still live.
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut Node> {
-        self.style_roots = None;
+        self.invalidate_ancestry();
         self.map.get_mut(to_key(id))
+    }
+
+    // These style-only writes preserve ancestry, attributes and document editing mode.
+    pub(crate) fn mark_pending_snapshot(&mut self, id: NodeId) {
+        let node = &mut self.map[to_key(id)];
+        node.set_has_snapshot(true);
+        node.snapshot_handled().store(false, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_pointer_state(
+        &mut self,
+        id: NodeId,
+        state: style_dom::ElementState,
+        enabled: bool,
+    ) {
+        let node = &mut self.map[to_key(id)];
+        if let Some(element) = node.element_data_mut() {
+            element.element_state.set(state, enabled);
+        }
+        node.mark_ancestors_dirty();
     }
 
     /// Resolve an opaque Stylo identity without dereferencing page-influenced data.
@@ -150,7 +186,7 @@ impl NodeTree {
 
     /// Insert a node constructed with knowledge of its own id.
     pub(crate) fn insert_with_key(&mut self, f: impl FnOnce(NodeId) -> Node) -> NodeId {
-        self.style_roots = None;
+        self.invalidate_ancestry();
         let id = to_id(self.map.insert_with_key(|key| f(to_id(key))));
         self.style_ids
             .insert(self[id].style_identity().as_ptr() as usize, id);
@@ -159,7 +195,7 @@ impl NodeTree {
 
     /// Remove the node with the given id, returning it if it was still live.
     pub(crate) fn remove(&mut self, id: NodeId) -> Option<Node> {
-        self.style_roots = None;
+        self.invalidate_ancestry();
         let node = self.map.remove(to_key(id))?;
         self.style_ids
             .remove(&(node.style_identity().as_ptr() as usize));
@@ -173,7 +209,7 @@ impl NodeTree {
 
     /// Iterate over all live `(NodeId, &mut Node)` pairs.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (NodeId, &mut Node)> {
-        self.style_roots = None;
+        self.invalidate_ancestry();
         self.map.iter_mut().map(|(key, node)| (to_id(key), node))
     }
 }
@@ -192,7 +228,7 @@ impl IndexMut<NodeId> for NodeTree {
     #[track_caller]
     #[inline]
     fn index_mut(&mut self, id: NodeId) -> &mut Node {
-        self.style_roots = None;
+        self.invalidate_ancestry();
         &mut self.map[to_key(id)]
     }
 }
